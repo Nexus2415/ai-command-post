@@ -116,7 +116,7 @@ textarea{width:100%;min-height:84px;resize:vertical;border:1px solid var(--line)
 <div class="wrap">
   <div class="bar">
     <h1>AI Command Post</h1>
-    <span id="engineChip" class="chip off"><span class="dot"></span>Engine offline</span>
+    <span id="engineChip" class="chip ok"><span class="dot"></span>Engine live</span>
     <span class="grow"></span>
     <label class="eyebrow" for="teamSel">Workspace</label>
     <select id="teamSel" class="sel" aria-label="Linear team"><option>Loading…</option></select>
@@ -141,13 +141,13 @@ textarea{width:100%;min-height:84px;resize:vertical;border:1px solid var(--line)
     <aside class="right" aria-label="Engine and budget">
       <span class="eyebrow">Engine &amp; budget</span>
       <dl class="kv">
-        <dt>Status</dt><dd id="engStatus">Not connected</dd>
+        <dt>Status</dt><dd id="engStatus">Live on GitHub, every 15 min</dd>
         <dt>Monthly cap</dt><dd>$0.00</dd>
         <dt>Spent this month</dt><dd>$0.00</dd>
-        <dt>Mode</dt><dd>Free tiers only</dd>
+        <dt>Mode</dt><dd>Free tiers only (Gemini)</dd>
       </dl>
       <div class="meter" aria-hidden="true"><i></i></div>
-      <p class="note">No AI runs on its own until the engine is deployed. Merges, purchases and customer-facing actions always wait for your approval.</p>
+      <p class="note">The engine checks Linear every 15 minutes and picks up new commands. Merges, purchases and customer-facing actions always wait for your approval.</p>
     </aside>
   </section>
 
