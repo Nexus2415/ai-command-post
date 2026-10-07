@@ -67,3 +67,7 @@ src/cli.ts           status | tick | run
 dashboard/           claude.ai dashboard page
 test/                node:test suites (fake models, fake fetch; no network)
 ```
+
+## Website (Vercel)
+
+The dashboard also runs as a website: `vercel.json` serves `dashboard/` and `api/linear.js` talks to Linear for it. Import the repo in Vercel and set two environment variables: `LINEAR_API_KEY` and `ACP_SITE_PASSWORD` (anyone with the password can see your Linear team and issue commands). Without both, the site refuses every request. It can list teams and issues and create new command issues, nothing else.
