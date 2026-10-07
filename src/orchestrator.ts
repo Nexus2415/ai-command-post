@@ -78,7 +78,7 @@ async function plan(d: Deps, cmd: Issue, report: TickReport): Promise<void> {
   const messages: ChatMessage[] = [
     {
       role: "system",
-      content: `You are ${AGENTS[lead].name}, the lead AI with command authority for this request. Break the owner's command into at most ${MAX_SUBTASKS} concrete sub-tasks and assign each to the best agent on the roster. Prefer fewer, well-scoped tasks. Include one independent review or challenge task when the stakes justify it.\n\nRoster (only these agents can work right now):\n${roster}\n\n${RULES}\n\nReply with JSON only:\n{"summary":"one paragraph plan","tasks":[{"agent":"claude|chatgpt|gemini|perplexity","title":"short imperative title","description":"what to do, inputs, and what a finished result looks like"}]}`,
+      content: `You are ${AGENTS[lead].name}, the lead AI with command authority for this request. Break the owner's command into at most ${MAX_SUBTASKS} concrete sub-tasks and assign each to the best agent on the roster. Prefer fewer, well-scoped tasks. Include one independent review or challenge task when the stakes justify it. Keep the plan compact enough to finish as valid JSON: use at most 4 tasks unless the command truly requires more, keep summary under 500 characters, keep each description under 600 characters, and keep the entire JSON response under 6,000 characters.\n\nRoster (only these agents can work right now):\n${roster}\n\n${RULES}\n\nReply with JSON only:\n{"summary":"one paragraph plan","tasks":[{"agent":"claude|chatgpt|gemini|perplexity","title":"short imperative title","description":"what to do, inputs, and what a finished result looks like"}]}`,
     },
     { role: "user", content: `Command ${cmd.identifier}: ${cmd.title}\n\n${cmd.description}` },
   ];
