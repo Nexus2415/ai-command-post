@@ -1,0 +1,20 @@
+{
+  "name": "ai-command-post",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Command one AI team (Claude, ChatGPT, Gemini, Perplexity) from one place, with Linear as the shared task queue.",
+  "type": "module",
+  "engines": { "node": ">=22.18" },
+  "scripts": {
+    "status": "node src/cli.ts status",
+    "tick": "node src/cli.ts tick",
+    "start": "node src/cli.ts run",
+    "test": "node --test test/*.test.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "validate": "npm test && npm run typecheck"
+  },
+  "devDependencies": {
+    "@types/node": "^22.18.0",
+    "typescript": "^5.9.0"
+  }
+}

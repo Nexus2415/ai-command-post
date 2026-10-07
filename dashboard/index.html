@@ -1,0 +1,347 @@
+<title>AI Command Post</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: operations-room board. Command console up top, SITREP strip, agent roster, then a three-lane tasking board (in progress / queued / accomplished). */
+:root{
+  --bg:#eef1f4; --panel:#ffffff; --panel-2:#f6f8fa; --line:#d5dbe2; --fg:#16202b; --muted:#5b6876;
+  --accent:#1d5c86; --accent-fg:#ffffff; --accent-soft:#dbe9f3;
+  --good:#2f7a4a; --good-soft:#dcefe3; --warn:#9a6a10; --warn-soft:#f6ebd2; --bad:#a43b32; --bad-soft:#f6dedb;
+  --a-claude:#b4552d; --a-chatgpt:#2a7a62; --a-gemini:#4a5fc1; --a-perplexity:#1f8293; --a-none:#7a8590;
+  --display:"Barlow Condensed","Arial Narrow",system-ui,sans-serif;
+  --body:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0f151c; --panel:#161e27; --panel-2:#1b2530; --line:#2a3644; --fg:#e3e9ef; --muted:#93a1b0;
+  --accent:#6eb2e0; --accent-fg:#0b1824; --accent-soft:#1c3446;
+  --good:#6cc28d; --good-soft:#18301f; --warn:#e2b25a; --warn-soft:#33280f; --bad:#ec8a80; --bad-soft:#3a1d1a;
+  --a-claude:#e08a62; --a-chatgpt:#5cc4a3; --a-gemini:#8e9cf0; --a-perplexity:#5cc3d3; --a-none:#8995a1;
+  color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0f151c; --panel:#161e27; --panel-2:#1b2530; --line:#2a3644; --fg:#e3e9ef; --muted:#93a1b0;
+  --accent:#6eb2e0; --accent-fg:#0b1824; --accent-soft:#1c3446;
+  --good:#6cc28d; --good-soft:#18301f; --warn:#e2b25a; --warn-soft:#33280f; --bad:#ec8a80; --bad-soft:#3a1d1a;
+  --a-claude:#e08a62; --a-chatgpt:#5cc4a3; --a-gemini:#8e9cf0; --a-perplexity:#5cc3d3; --a-none:#8995a1;
+  color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);font:14px/1.5 var(--body)}
+.wrap{max-width:1240px;margin:0 auto;padding-inline:16px;padding-block:16px 40px;display:grid;gap:16px}
+h1,h2,h3{font-family:var(--display);font-weight:600;letter-spacing:.02em;margin:0;text-wrap:balance}
+.eyebrow{font:500 11px/1 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+button,select,textarea{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+/* top bar */
+.bar{display:flex;flex-wrap:wrap;align-items:center;gap:12px 20px;padding-block:4px}
+.bar h1{font-size:30px;line-height:1;text-transform:uppercase}
+.bar .grow{flex:1 1 auto}
+.clock{display:flex;gap:14px;font:500 13px var(--mono);color:var(--muted)}
+.clock b{color:var(--fg);font-weight:500}
+.chip{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:999px;font:500 11px/1.4 var(--mono);letter-spacing:.04em;text-transform:uppercase;border:1px solid var(--line);background:var(--panel)}
+.dot{width:7px;height:7px;border-radius:50%;background:currentColor;flex:none}
+.chip.off{color:var(--warn);background:var(--warn-soft);border-color:transparent}
+.chip.ok{color:var(--good);background:var(--good-soft);border-color:transparent}
+.sel{border:1px solid var(--line);background:var(--panel);border-radius:6px;padding:5px 8px}
+
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px}
+
+/* command console */
+.console{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:0}
+.console .left{padding:18px;display:grid;gap:12px;min-width:0}
+.console .right{padding:18px;border-left:1px solid var(--line);background:var(--panel-2);border-radius:0 8px 8px 0;display:grid;gap:10px;align-content:start}
+.leadrow{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.seg{display:flex;flex-wrap:wrap;gap:6px}
+.seg button{border:1px solid var(--line);background:var(--panel);border-radius:6px;padding:6px 12px;cursor:pointer;display:inline-flex;gap:7px;align-items:center;font-weight:500}
+.seg button[aria-pressed="true"]{border-color:var(--ag);background:color-mix(in srgb,var(--ag) 14%,var(--panel));color:var(--fg);box-shadow:inset 0 0 0 1px var(--ag)}
+.seg .dot{color:var(--ag)}
+textarea{width:100%;min-height:84px;resize:vertical;border:1px solid var(--line);border-radius:6px;background:var(--panel-2);padding:10px 12px;line-height:1.5}
+.actions{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.btn{border:1px solid var(--accent);background:var(--accent);color:var(--accent-fg);border-radius:6px;padding:8px 14px;font-weight:600;cursor:pointer}
+.btn.ghost{background:transparent;color:var(--accent)}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.note{font-size:12.5px;color:var(--muted)}
+.msg{font-size:13px;padding:8px 10px;border-radius:6px}
+.msg.ok{background:var(--good-soft);color:var(--good)}
+.msg.err{background:var(--bad-soft);color:var(--bad)}
+.msg.warn{background:var(--warn-soft);color:var(--warn)}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:13px}
+.kv dt{color:var(--muted)} .kv dd{margin:0;font-family:var(--mono);text-align:right}
+.meter{height:6px;border-radius:3px;background:var(--line);overflow:hidden}
+.meter i{display:block;height:100%;width:0;background:var(--good)}
+
+/* sitrep */
+.sitrep{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:0}
+.sitrep > div{padding:14px 18px;border-left:1px solid var(--line);display:grid;gap:4px}
+.sitrep > div:first-child{border-left:0}
+.sitrep .n{font:600 34px/1 var(--display)}
+.sitrep .s{font-size:12.5px;color:var(--muted)}
+
+/* roster */
+.roster{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}
+.agent{padding:14px;display:grid;gap:8px;border-top:3px solid var(--ag)}
+.agent h3{font-size:20px;min-height:26px;display:flex;align-items:center;justify-content:space-between;gap:8px}
+.agent .role{font-size:12.5px;color:var(--muted);min-height:2.8em}
+.agent .stats{display:flex;gap:14px;font:500 12px var(--mono);color:var(--muted)}
+.agent .stats b{color:var(--fg);font-size:15px;display:block}
+.lead-tag{font:600 10px/1 var(--mono);letter-spacing:.1em;padding:4px 6px;border-radius:4px;background:var(--ag);color:var(--panel)}
+
+/* board */
+.board{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;align-items:start}
+.lane{padding:0;min-width:0}
+.lane header{display:flex;justify-content:space-between;align-items:baseline;padding:12px 14px;border-bottom:1px solid var(--line)}
+.lane header h2{font-size:19px;text-transform:uppercase}
+.lane ol{list-style:none;margin:0;padding:6px;display:grid;gap:4px;max-height:560px;overflow:auto}
+.task{display:grid;grid-template-columns:4px minmax(0,1fr);gap:10px;padding:9px 10px 9px 0;border-radius:6px}
+.task:hover{background:var(--panel-2)}
+.task .stripe{border-radius:2px;background:var(--ag)}
+.task a{color:var(--fg);text-decoration:none;font-weight:500;overflow-wrap:anywhere}
+.task a:hover{text-decoration:underline}
+.task .meta{display:flex;flex-wrap:wrap;gap:4px 10px;font:12px var(--mono);color:var(--muted);margin-top:3px}
+.task .ag{color:var(--ag);font-weight:500}
+.prio-1{color:var(--bad)} .prio-2{color:var(--warn)}
+.empty{padding:18px 14px;color:var(--muted);font-size:13px}
+.foot{display:flex;flex-wrap:wrap;gap:8px 18px;justify-content:space-between;font-size:12.5px;color:var(--muted)}
+.state{padding:14px 18px}
+
+[data-ag="claude"]{--ag:var(--a-claude)} [data-ag="chatgpt"]{--ag:var(--a-chatgpt)} [data-ag="gemini"]{--ag:var(--a-gemini)} [data-ag="perplexity"]{--ag:var(--a-perplexity)} [data-ag="none"]{--ag:var(--a-none)}
+
+@media (max-width:1000px){.roster{grid-template-columns:repeat(3,minmax(0,1fr))}.board{grid-template-columns:minmax(0,1fr)}.console{grid-template-columns:minmax(0,1fr)}.console .right{border-left:0;border-top:1px solid var(--line);border-radius:0 0 8px 8px}}
+@media (max-width:640px){.roster{grid-template-columns:repeat(2,minmax(0,1fr))}.sitrep{grid-template-columns:repeat(2,minmax(0,1fr))}.sitrep > div:nth-child(3){border-left:0}.sitrep > div:nth-child(n+3){border-top:1px solid var(--line)}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+
+<div class="wrap">
+  <div class="bar">
+    <h1>AI Command Post</h1>
+    <span id="engineChip" class="chip off"><span class="dot"></span>Engine offline</span>
+    <span class="grow"></span>
+    <label class="eyebrow" for="teamSel">Workspace</label>
+    <select id="teamSel" class="sel" aria-label="Linear team"><option>Loading…</option></select>
+    <div class="clock" aria-live="off"><span>LOCAL <b id="clkL">--:--</b></span><span>ZULU <b id="clkZ">--:--Z</b></span></div>
+  </div>
+
+  <section class="panel console" aria-labelledby="cmdH">
+    <div class="left">
+      <div class="leadrow"><span class="eyebrow" id="cmdH">Command authority</span></div>
+      <div class="seg" id="leadSeg" role="group" aria-label="Lead AI"></div>
+      <label class="eyebrow" for="cmdText">Command</label>
+      <textarea id="cmdText" placeholder="e.g. Research the top 5 FSM tools used by specialty subcontractors in South Florida and draft a connector shortlist"></textarea>
+      <div class="actions">
+        <label class="eyebrow" for="prioSel">Priority</label>
+        <select id="prioSel" class="sel"><option value="1">Urgent</option><option value="2">High</option><option value="3" selected>Medium</option><option value="4">Low</option></select>
+        <button class="btn" id="issueBtn" type="button">Issue command</button>
+        <span id="confirmBox" hidden><button class="btn" id="confirmBtn" type="button">Confirm — create tasking</button> <button class="btn ghost" id="cancelBtn" type="button">Cancel</button></span>
+      </div>
+      <div id="cmdMsg" class="msg" hidden></div>
+      <p class="note">Each command becomes a Linear issue titled with the lead AI's name. The lead breaks it into sub-tasks and hands them to the other AIs once the engine is connected.</p>
+    </div>
+    <aside class="right" aria-label="Engine and budget">
+      <span class="eyebrow">Engine &amp; budget</span>
+      <dl class="kv">
+        <dt>Status</dt><dd id="engStatus">Not connected</dd>
+        <dt>Monthly cap</dt><dd>$0.00</dd>
+        <dt>Spent this month</dt><dd>$0.00</dd>
+        <dt>Mode</dt><dd>Free tiers only</dd>
+      </dl>
+      <div class="meter" aria-hidden="true"><i></i></div>
+      <p class="note">No AI runs on its own until the engine is deployed. Merges, purchases and customer-facing actions always wait for your approval.</p>
+    </aside>
+  </section>
+
+  <section class="panel sitrep" aria-label="Situation report">
+    <div><span class="eyebrow">In progress</span><span class="n mono" id="nProg">—</span><span class="s">Being worked now</span></div>
+    <div><span class="eyebrow">Queued</span><span class="n mono" id="nQueue">—</span><span class="s">Future taskings</span></div>
+    <div><span class="eyebrow">Accomplished · 7 days</span><span class="n mono" id="nDone">—</span><span class="s" id="nDoneAll">Completed</span></div>
+    <div><span class="eyebrow">Unclaimed</span><span class="n mono" id="nUncl">—</span><span class="s">Open, no AI owner</span></div>
+  </section>
+
+  <section aria-labelledby="rosterH" style="display:grid;gap:10px">
+    <h2 id="rosterH" class="eyebrow" style="font-family:var(--mono);font-size:11px">Agent roster</h2>
+    <div class="roster" id="roster"></div>
+  </section>
+
+  <div id="pageState" class="panel state" hidden></div>
+
+  <section class="board" aria-label="Taskings">
+    <div class="panel lane"><header><h2>In progress</h2><span class="mono note" id="cProg"></span></header><ol id="lProg"><li class="empty">Loading taskings from Linear…</li></ol></div>
+    <div class="panel lane"><header><h2>Queued</h2><span class="mono note" id="cQueue"></span></header><ol id="lQueue"><li class="empty">Loading taskings from Linear…</li></ol></div>
+    <div class="panel lane"><header><h2>Accomplished</h2><span class="mono note" id="cDone"></span></header><ol id="lDone"><li class="empty">Loading taskings from Linear…</li></ol></div>
+  </section>
+
+  <div class="foot"><span id="fresh">Waiting for Linear…</span><span>Ownership: an AI's name in [brackets] at the start of a title, a label, or the assignee.</span></div>
+</div>
+
+<script>
+(function(){
+const AGENTS=[
+  {key:"claude",name:"Claude",role:"Engineering, architecture and code review",re:/\bclaude\b|anthropic/i},
+  {key:"chatgpt",name:"ChatGPT",role:"Coordination, planning and reconciliation",re:/chat\s*gpt|openai|\bgpt\b/i},
+  {key:"gemini",name:"Gemini",role:"Google ecosystem and independent challenge",re:/gemini/i},
+  {key:"perplexity",name:"Perplexity",role:"Live web research and evidence",re:/perplexity|sonar/i},
+];
+const $=id=>document.getElementById(id);
+let mcp=null, db=null, issues=[], team=null, lead="claude", unwatch=null, pending=false;
+
+function tick(){const d=new Date();const p=n=>String(n).padStart(2,"0");
+  $("clkL").textContent=p(d.getHours())+":"+p(d.getMinutes());
+  $("clkZ").textContent=p(d.getUTCHours())+p(d.getUTCMinutes())+"Z";}
+tick(); setInterval(tick,15000);
+
+function lsGet(k){try{return localStorage.getItem(k)}catch(e){return null}}
+function lsSet(k,v){try{localStorage.setItem(k,v)}catch(e){}}
+
+function labelNames(l){return (Array.isArray(l)?l:[]).map(x=>typeof x==="string"?x:(x&&x.name)||"")}
+function personName(p){if(!p)return "";if(typeof p==="string")return p;return p.name||p.displayName||""}
+function agentOf(it){
+  const m=/^\s*\[([^\]]+)\]/.exec(it.title||"");
+  const hay=[m?m[1]:"",...labelNames(it.labels),personName(it.assignee),personName(it.delegate)].join(" | ");
+  const a=AGENTS.find(a=>a.re.test(hay)); return a?a.key:"none";
+}
+function lane(it){const t=(it.statusType||"").toLowerCase();
+  if(t==="started")return "prog"; if(t==="completed")return "done"; if(t==="canceled"||t==="cancelled"||t==="duplicate")return null; return "queue";}
+function rel(iso){if(!iso)return "";const s=(Date.now()-Date.parse(iso))/1000;
+  if(s<60)return "just now"; if(s<3600)return Math.round(s/60)+"m ago"; if(s<86400)return Math.round(s/3600)+"h ago"; return Math.round(s/86400)+"d ago";}
+function esc(s){const d=document.createElement("div");d.textContent=s==null?"":String(s);return d.innerHTML}
+
+function renderLead(){
+  const seg=$("leadSeg"); seg.innerHTML="";
+  AGENTS.forEach(a=>{const b=document.createElement("button");b.type="button";b.dataset.ag=a.key;b.setAttribute("aria-pressed",String(a.key===lead));
+    b.innerHTML='<span class="dot"></span>'+esc(a.name)+(a.key===lead?' <span class="mono note">LEAD</span>':"");
+    b.onclick=()=>setLead(a.key); seg.appendChild(b);});
+}
+async function setLead(k){lead=k;renderLead();renderRoster();lsSet("acp.lead",k);
+  if(db){try{await db.doc("settings/lead").set({agent:k})}catch(e){}}}
+
+function renderRoster(){
+  const r=$("roster"); r.innerHTML="";
+  const cols=[...AGENTS,{key:"none",name:"Unclaimed",role:"Open taskings with no AI owner yet"}];
+  cols.forEach(a=>{const mine=issues.filter(i=>agentOf(i)===a.key);
+    const c=k=>mine.filter(i=>lane(i)===k).length;
+    const el=document.createElement("div");el.className="panel agent";el.dataset.ag=a.key;
+    el.innerHTML='<h3>'+esc(a.name)+(a.key===lead?'<span class="lead-tag">LEAD</span>':"")+'</h3><div class="role">'+esc(a.role)+'</div>'+
+      '<div class="stats"><span><b>'+c("prog")+'</b>active</span><span><b>'+c("queue")+'</b>queued</span><span><b>'+c("done")+'</b>done</span></div>';
+    r.appendChild(el);});
+}
+
+function taskLi(it){const ag=agentOf(it);const a=AGENTS.find(x=>x.key===ag);
+  const pr=it.priority&&typeof it.priority==="object"?it.priority:{value:it.priority,name:""};
+  const when=lane(it)==="done"?rel(it.completedAt||it.updatedAt):rel(it.updatedAt);
+  const li=document.createElement("li");li.className="task";li.dataset.ag=ag;
+  li.innerHTML='<span class="stripe"></span><div><a href="'+esc(it.url||"#")+'" target="_blank" rel="noopener">'+esc(it.title)+'</a>'+
+    '<div class="meta"><span>'+esc(it.id)+'</span><span class="ag">'+esc(a?a.name:"Unclaimed")+'</span>'+
+    (pr.value&&pr.value<=2?'<span class="prio-'+pr.value+'">'+esc(pr.name||("P"+pr.value))+'</span>':"")+
+    (it.status?'<span>'+esc(it.status)+'</span>':"")+'<span>'+esc(when)+'</span></div></div>';
+  return li;}
+
+function fill(id,list,emptyText){const ol=$(id);ol.innerHTML="";
+  if(!list.length){ol.innerHTML='<li class="empty">'+esc(emptyText)+'</li>';return}
+  list.forEach(i=>ol.appendChild(taskLi(i)));}
+
+function renderBoard(){
+  const by=k=>issues.filter(i=>lane(i)===k);
+  const prog=by("prog").sort((a,b)=>Date.parse(b.updatedAt||0)-Date.parse(a.updatedAt||0));
+  const queue=by("queue").sort((a,b)=>((a.priority&&a.priority.value)||9)-((b.priority&&b.priority.value)||9)||Date.parse(b.createdAt||0)-Date.parse(a.createdAt||0));
+  const done=by("done").sort((a,b)=>Date.parse(b.completedAt||b.updatedAt||0)-Date.parse(a.completedAt||a.updatedAt||0));
+  const wk=Date.now()-7*864e5;
+  $("nProg").textContent=prog.length; $("nQueue").textContent=queue.length;
+  $("nDone").textContent=done.filter(i=>Date.parse(i.completedAt||i.updatedAt||0)>=wk).length;
+  $("nDoneAll").textContent=done.length+" completed all-time";
+  $("nUncl").textContent=[...prog,...queue].filter(i=>agentOf(i)==="none").length;
+  $("cProg").textContent=prog.length; $("cQueue").textContent=queue.length; $("cDone").textContent=done.length;
+  fill("lProg",prog,"Nothing in progress. Issue a command to put an AI to work.");
+  fill("lQueue",queue,"No queued taskings.");
+  fill("lDone",done.slice(0,25),"Nothing completed yet.");
+  renderRoster();
+}
+
+function showPage(html,cls){const p=$("pageState");p.hidden=!html;p.className="panel state"+(cls?" msg "+cls:"");p.innerHTML=html||"";}
+function errText(e){const s=e&&e.server||"Linear";switch(e&&e.code){
+  case "needs_reauth":return "Your "+s+" connection expired. Reconnect "+s+" in claude.ai Settings → Connectors, then reload.";
+  case "server_not_connected":case "selection_required":return "Add the "+s+" connector in claude.ai Settings → Connectors to see your taskings here.";
+  case "not_in_manifest":case "not_granted":case "capability_disabled":case "capability_removed":return "This view isn't allowed to read "+s+". Allow it from the page's Permissions menu.";
+  case "blocked_by_policy":return "Your organization's policy blocks "+s+" for this page.";
+  case "approval_required":return s+" needs your approval for this page.";
+  case "server_unavailable":return s+" isn't responding right now. Showing the last data received.";
+  case "tool_error":return s+" reported a problem: "+(e.message||"unknown error");
+  default:return "Couldn't reach "+s+": "+((e&&e.message)||"unknown error");}}
+const DENY=["needs_reauth","server_not_connected","selection_required","blocked_by_policy","approval_required","not_in_manifest","not_granted","capability_disabled","capability_removed"];
+
+function watchIssues(){
+  if(unwatch){unwatch();unwatch=null}
+  if(!mcp||!team)return;
+  unwatch=mcp.watchTool("Linear","list_issues",{team:team,limit:250,orderBy:"updatedAt",
+    fields:["id","title","status","statusType","priority","labels","assignee","delegate","project","url","updatedAt","completedAt","createdAt"]},
+    ev=>{
+      if(ev.type==="data"){const p=ev.result.payload||{};issues=Array.isArray(p.issues)?p.issues:[];showPage("");renderBoard();
+        const at=ev.result.cache?ev.result.cache.storedAt:Date.now();
+        $("fresh").textContent="Linear · "+team+" · updated "+new Date(at).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"})+(p.hasNextPage?" · showing latest 250":"");}
+      else{const e=ev.error||{};
+        if(e.code==="approval_required"){showPage(esc(errText(e))+' <button class="btn" type="button" id="approveBtn">Allow and load</button>',"warn");
+          $("approveBtn").onclick=async()=>{try{const r=await mcp.callTool("Linear","list_issues",{team:team,limit:250});const p=r.payload||{};issues=p.issues||[];showPage("");renderBoard();}catch(x){showPage(esc(errText(x)),"err")}};return}
+        if(DENY.includes(e.code)){issues=[];renderBoard();}
+        showPage(esc(errText(e)),DENY.includes(e.code)?"err":"warn");}
+    },{refetchInterval:60000});
+}
+
+function loadTeams(){
+  mcp.watchTool("Linear","list_teams",{},ev=>{
+    if(ev.type!=="data"){showPage(esc(errText(ev.error)),"err");return}
+    const ts=(ev.result.payload&&ev.result.payload.teams)||[];
+    const sel=$("teamSel");sel.innerHTML="";
+    ts.forEach(t=>{const o=document.createElement("option");o.value=t.name;o.textContent=t.name+(t.key?" ("+t.key+")":"");sel.appendChild(o)});
+    if(!ts.length){sel.innerHTML="<option>No teams</option>";return}
+    const saved=lsGet("acp.team");const pick=ts.find(t=>t.name===saved)||ts[0];
+    if(team!==pick.name){team=pick.name;sel.value=team;watchIssues();}
+  });
+  $("teamSel").onchange=e=>{team=e.target.value;lsSet("acp.team",team);issues=[];renderBoard();watchIssues();};
+}
+
+function say(text,cls){const m=$("cmdMsg");m.hidden=!text;m.className="msg "+(cls||"");m.innerHTML=text||"";}
+$("issueBtn").onclick=()=>{
+  const t=$("cmdText").value.trim();
+  if(!t){say("Write a command first.","warn");return}
+  if(!mcp){say("Linear isn't available in this view, so commands can't be sent from here.","err");return}
+  if(!team){say("Pick a workspace first.","warn");return}
+  const a=AGENTS.find(x=>x.key===lead);
+  say("This creates a new issue in <b>"+esc(team)+"</b> titled <span class='mono'>["+esc(a.name)+"] "+esc(t.slice(0,80))+(t.length>80?"…":"")+"</span>.","");
+  $("issueBtn").hidden=true;$("confirmBox").hidden=false;
+};
+$("cancelBtn").onclick=()=>{$("issueBtn").hidden=false;$("confirmBox").hidden=true;say("")};
+$("confirmBtn").onclick=async()=>{
+  if(pending)return; pending=true; $("confirmBtn").disabled=true;
+  const t=$("cmdText").value.trim(); const a=AGENTS.find(x=>x.key===lead);
+  const title="["+a.name+"] "+(t.split("\n")[0].slice(0,120));
+  const description="**Command issued from AI Command Post**\n\n- Lead AI: "+a.name+"\n- Issued: "+new Date().toISOString()+"\n\n## Command\n\n"+t+
+    "\n\n## Rules\n\n- The lead breaks this into sub-issues and assigns each to an AI by putting its name in [brackets] at the start of the title.\n- No merges to main, purchases, credential changes or customer-facing actions without owner approval.\n- Record evidence and handoff notes as comments on this issue.";
+  try{
+    const r=await mcp.callTool("Linear","save_issue",{team:team,title:title,description:description,priority:Number($("prioSel").value)});
+    const p=r.payload||{};const id=p.identifier||p.id||(p.issue&&(p.issue.identifier||p.issue.id))||"";
+    say("Command issued"+(id?" as <b class='mono'>"+esc(id)+"</b>":"")+". It's in the Queued lane.","ok");
+    $("cmdText").value="";
+    try{await mcp.invalidate("Linear","list_issues")}catch(e){}
+  }catch(e){
+    const ambiguous=e&&(e.code==="server_unavailable"||e.code==="upstream_error"||e.code==="cancelled");
+    say(esc(errText(e))+(ambiguous?" Check the Queued lane before trying again; the issue may have been created.":""),"err");
+  }finally{pending=false;$("confirmBtn").disabled=false;$("issueBtn").hidden=false;$("confirmBox").hidden=true;}
+};
+
+lead=lsGet("acp.lead")||"claude"; if(!AGENTS.find(a=>a.key===lead))lead="claude";
+renderLead(); renderRoster();
+
+const cl=window.claude;
+if(!cl||!cl.use){showPage("Open this page in Claude to connect it to Linear.","warn");
+  ["lProg","lQueue","lDone"].forEach(id=>$(id).innerHTML='<li class="empty">Not connected to Linear.</li>');return}
+cl.use("db").then(d=>{db=d;if(!db)return;
+  try{db.doc("settings/lead").onSnapshot(s=>{const v=s&&(typeof s.data==="function"?s.data():s.data);const k=v&&v.agent;
+    if(k&&k!==lead&&AGENTS.find(a=>a.key===k)){lead=k;lsSet("acp.lead",k);renderLead();renderRoster();}})}catch(e){}
+}).catch(()=>{});
+cl.use("mcp").then(m=>{mcp=m;
+  if(!mcp){showPage("Linear isn't available in this view. Open the page signed in to Claude with the Linear connector added.","warn");
+    ["lProg","lQueue","lDone"].forEach(id=>$(id).innerHTML='<li class="empty">Not connected to Linear.</li>');return}
+  loadTeams();
+}).catch(()=>{});
+})();
+</script>

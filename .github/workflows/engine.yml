@@ -1,0 +1,51 @@
+# Runs one engine cycle on a schedule using GitHub Actions minutes (free tier) — no server needed.
+# Off until you set the repository variable ACP_ACTIVE=true (Settings → Secrets and variables → Actions → Variables).
+name: Engine tick
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: acp-engine
+  cancel-in-progress: false
+jobs:
+  tick:
+    if: vars.ACP_ACTIVE == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Restore spend ledger
+        uses: actions/cache/restore@v4
+        with:
+          path: .acp
+          key: acp-ledger-${{ github.run_id }}
+          restore-keys: acp-ledger-
+      - name: Run one cycle
+        run: node src/cli.ts tick
+        env:
+          ACP_ACTIVE: ${{ vars.ACP_ACTIVE }}
+          ACP_DRY_RUN: ${{ vars.ACP_DRY_RUN || 'true' }}
+          ACP_MONTHLY_BUDGET_USD: ${{ vars.ACP_MONTHLY_BUDGET_USD || '0' }}
+          ACP_ALLOW_PULL_REQUESTS: ${{ vars.ACP_ALLOW_PULL_REQUESTS || 'false' }}
+          ACP_LINEAR_TEAM_KEY: ${{ vars.ACP_LINEAR_TEAM_KEY || 'ARN' }}
+          ACP_DEFAULT_LEAD: ${{ vars.ACP_DEFAULT_LEAD || 'claude' }}
+          ACP_GITHUB_REPOS: ${{ vars.ACP_GITHUB_REPOS }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.ACP_GITHUB_TOKEN }}
+          FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}
+      - name: Save spend ledger
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .acp
+          key: acp-ledger-${{ github.run_id }}
