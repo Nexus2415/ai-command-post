@@ -219,6 +219,18 @@ test("full loop: lead plans, workers execute with a tool, lead reconciles", asyn
   assert.ok((store.comments.get(cmd.id) ?? []).some((c) => c.body.startsWith(RECONCILED_MARKER)));
 });
 
+test("a command reconciles when its sub-tasks are completed, canceled or marked duplicate", async () => {
+  const store = new MemoryStore();
+  const cmd = store.add({ title: "[Claude] Tidy backlog", description: `**${COMMAND_MARKER}**`, stateType: "started" });
+  store.add({ title: "[Gemini] A", parentId: cmd.id, stateType: "completed" });
+  store.add({ title: "[Gemini] B", parentId: cmd.id, stateType: "canceled" });
+  store.add({ title: "[Gemini] C", parentId: cmd.id, stateType: "duplicate" });
+  const d = deps(store, { claude: scripted(["## Final\nDone."]) });
+  d.budget.rates.claude = freeRates.claude;
+  const r = await tick(d);
+  assert.deepEqual(r.reconciled, ["T-1"]);
+});
+
 test("$0 cap: paid lead cannot plan and the command stays untouched", async () => {
   const store = new MemoryStore();
   const cmd = store.add({ title: "[Claude] Anything", description: COMMAND_MARKER });

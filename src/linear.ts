@@ -2,7 +2,7 @@
 
 type Fetch = typeof fetch;
 
-export type StateType = "triage" | "backlog" | "unstarted" | "started" | "completed" | "canceled";
+export type StateType = "triage" | "backlog" | "unstarted" | "started" | "completed" | "canceled" | "duplicate";
 
 export interface Issue {
   id: string;
@@ -102,7 +102,8 @@ export class LinearStore implements TaskStore {
       `query($key:String!,$since:DateTimeOrDuration!){
         issues(first:250, orderBy:updatedAt, filter:{ team:{ key:{ eq:$key } }, or:[
           { state:{ type:{ in:["triage","backlog","unstarted","started"] } } },
-          { completedAt:{ gte:$since } } ] }){ nodes { ${ISSUE_FIELDS} } } }`,
+          { completedAt:{ gte:$since } },
+          { canceledAt:{ gte:$since } } ] }){ nodes { ${ISSUE_FIELDS} } } }`,
       { key: teamKey, since },
     );
     return d.issues.nodes.map(toIssue);
