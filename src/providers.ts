@@ -27,14 +27,28 @@ export class ProviderError extends Error {
   }
 }
 
+// Free tiers often answer "busy" (429/5xx) for a few seconds; retry those before giving up on the tick.
+const RETRYABLE = new Set([429, 500, 502, 503, 504]);
+let retryDelaysMs = [5_000, 15_000];
+export function setRetryDelays(ms: number[]): void {
+  retryDelaysMs = ms;
+}
+
 async function postJson(f: Fetch, provider: string, url: string, headers: Record<string, string>, body: unknown): Promise<any> {
-  const res = await f(url, {
-    method: "POST",
-    headers: { "content-type": "application/json", ...headers },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(120_000),
-  });
-  const text = await res.text();
+  let res: Response;
+  let text: string;
+  for (let attempt = 0; ; attempt++) {
+    res = await f(url, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...headers },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(120_000),
+    });
+    text = await res.text();
+    const wait = retryDelaysMs[attempt];
+    if (res.ok || !RETRYABLE.has(res.status) || wait === undefined) break;
+    await new Promise((r) => setTimeout(r, wait));
+  }
   if (!res.ok) throw new ProviderError(provider, res.status, text.slice(0, 500));
   try {
     return JSON.parse(text);
