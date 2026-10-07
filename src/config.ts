@@ -22,6 +22,7 @@ export interface Config {
     linear?: string;
     github?: string;
     firecrawl?: string;
+    vercel?: string;
     openai?: string;
     anthropic?: string;
     gemini?: string;
@@ -71,6 +72,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
       linear: opt("LINEAR_API_KEY"),
       github: opt("GITHUB_TOKEN"),
       firecrawl: opt("FIRECRAWL_API_KEY"),
+      vercel: opt("VERCEL_API_KEY"),
       openai: opt("OPENAI_API_KEY"),
       anthropic: opt("ANTHROPIC_API_KEY"),
       gemini: opt("GEMINI_API_KEY"),

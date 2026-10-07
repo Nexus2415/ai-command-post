@@ -30,6 +30,7 @@ async function main() {
     toolEnv: (issue) => ({
       githubToken: cfg.keys.github,
       firecrawlKey: cfg.keys.firecrawl,
+      vercelToken: cfg.keys.vercel,
       dryRun: cfg.dryRun,
       policy: { allowPullRequests: cfg.allowPullRequests, allowedRepos: cfg.githubRepos },
       comment: (body) => store.comment(issue.id, body),

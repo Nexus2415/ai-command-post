@@ -15,6 +15,8 @@ export const TOOL_TIERS: Record<string, Tier> = {
   "firecrawl.search": "green",
   "firecrawl.scrape": "green",
   "linear.comment": "green",
+  "vercel.list_deployments": "green",
+  "vercel.deployment_status": "green",
   "linear.create_subtask": "yellow",
   "github.open_pull_request": "yellow",
 };

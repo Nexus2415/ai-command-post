@@ -243,6 +243,21 @@ test("workers are only offered tools whose keys are configured", async () => {
   assert.ok(!system.includes("firecrawl.") && !system.includes("github."));
 });
 
+test("vercel tools are green, read-only, and need a key", async () => {
+  assert.equal(decide("vercel.list_deployments", {}, { allowPullRequests: false, allowedRepos: [] }).allow, true);
+  const calls: string[] = [];
+  const f = (async (url: string, init: RequestInit) => {
+    calls.push(`${init.method ?? "GET"} ${url}`);
+    return new Response(JSON.stringify({ deployments: [{ uid: "dpl_1", name: "site", state: "READY", url: "site.vercel.app", created: 0 }] }), { status: 200 });
+  }) as unknown as typeof fetch;
+  const env = { vercelToken: "t", dryRun: true, policy: { allowPullRequests: false, allowedRepos: [] }, comment: async () => {}, requestApproval: async () => {}, f };
+  const r = await runTool({ tool: "vercel.list_deployments", input: { project: "site" } }, ["vercel.list_deployments"], env);
+  assert.ok(r.ok && r.output.includes("dpl_1 site READY"));
+  assert.ok(calls[0]!.startsWith("GET https://api.vercel.com/v6/deployments?"));
+  const none = await runTool({ tool: "vercel.list_deployments", input: {} }, ["vercel.list_deployments"], { ...env, vercelToken: undefined });
+  assert.ok(!none.ok && none.output.includes("VERCEL_API_KEY"));
+});
+
 test("$0 cap: paid lead cannot plan and the command stays untouched", async () => {
   const store = new MemoryStore();
   const cmd = store.add({ title: "[Claude] Anything", description: COMMAND_MARKER });
