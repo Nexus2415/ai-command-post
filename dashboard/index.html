@@ -183,7 +183,7 @@ const AGENTS=[
   {key:"perplexity",name:"Perplexity",role:"Live web research and evidence",re:/perplexity|sonar/i},
 ];
 const $=id=>document.getElementById(id);
-let mcp=null, db=null, issues=[], team=null, lead="claude", unwatch=null, pending=false;
+let mcp=null, db=null, issues=[], team=null, lead="gemini", unwatch=null, pending=false;
 
 function tick(){const d=new Date();const p=n=>String(n).padStart(2,"0");
   $("clkL").textContent=p(d.getHours())+":"+p(d.getMinutes());
@@ -328,10 +328,31 @@ $("confirmBtn").onclick=async()=>{
   }finally{pending=false;$("confirmBtn").disabled=false;$("issueBtn").hidden=false;$("confirmBox").hidden=true;}
 };
 
-lead=lsGet("acp.lead")||"claude"; if(!AGENTS.find(a=>a.key===lead))lead="claude";
+lead=lsGet("acp.lead")||"gemini"; if(!AGENTS.find(a=>a.key===lead))lead="gemini";
 renderLead(); renderRoster();
 
+// Website mode: outside Claude, the page talks to Linear through its own /api/linear backend, locked by a password.
+function webMcp(){
+  async function call(tool,args,retry){
+    const r=await fetch("/api/linear",{method:"POST",headers:{"content-type":"application/json","x-acp-password":lsGet("acp.pw")||""},body:JSON.stringify({tool:tool,args:args})});
+    const j=await r.json().catch(()=>({}));
+    if(r.status===401&&retry!==false){const pw=window.prompt("Password for AI Command Post");if(pw){lsSet("acp.pw",pw);return call(tool,args,false)}}
+    if(!r.ok)throw {code:r.status>=500&&r.status!==502?"server_unavailable":"tool_error",server:"Linear",message:j.error||("HTTP "+r.status)};
+    return {payload:j};
+  }
+  const watchers=new Set();
+  return {
+    callTool:(_s,tool,args)=>call(tool,args),
+    watchTool(_s,tool,args,cb,opts){let stop=false;
+      const w={tool:tool,run:()=>call(tool,args).then(res=>{if(!stop)cb({type:"data",result:{payload:res.payload,cache:{storedAt:Date.now()}}})},e=>{if(!stop)cb({type:"error",error:e})})};
+      watchers.add(w);w.run();const t=opts&&opts.refetchInterval?setInterval(w.run,opts.refetchInterval):null;
+      return ()=>{stop=true;watchers.delete(w);if(t)clearInterval(t)}},
+    invalidate:async(_s,tool)=>{watchers.forEach(w=>{if(w.tool===tool)w.run()})},
+  };
+}
+
 const cl=window.claude;
+if((!cl||!cl.use)&&/^https?:$/.test(location.protocol)){mcp=webMcp();loadTeams();return}
 if(!cl||!cl.use){showPage("Open this page in Claude to connect it to Linear.","warn");
   ["lProg","lQueue","lDone"].forEach(id=>$(id).innerHTML='<li class="empty">Not connected to Linear.</li>');return}
 cl.use("db").then(d=>{db=d;if(!db)return;
