@@ -33,6 +33,8 @@ export interface TickReport {
 }
 
 const OPEN: Issue["stateType"][] = ["triage", "backlog", "unstarted"];
+/** Closed for reconciliation. Linear teams have a separate "duplicate" state type. */
+const DONE: Issue["stateType"][] = ["completed", "canceled", "duplicate"];
 
 export function isCommand(i: Issue): boolean {
   return i.parentId === null && i.description.includes(COMMAND_MARKER);
@@ -226,7 +228,7 @@ export async function tick(d: Deps): Promise<TickReport> {
     const kids = cmd.childIds.map((id) => byId.get(id));
     if (kids.some((k) => !k)) continue; // a child fell outside the window; skip rather than guess
     const children = kids as Issue[];
-    if (children.every((c) => c.stateType === "completed" || c.stateType === "canceled")) {
+    if (children.every((c) => DONE.includes(c.stateType))) {
       try {
         await reconcile(d, cmd, children, report);
       } catch (e) {
