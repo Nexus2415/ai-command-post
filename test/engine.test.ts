@@ -174,6 +174,23 @@ test("engine off: reports waiting work and calls no model", async () => {
   assert.match(r.waiting[0]!, /Engine is off/);
 });
 
+test("planner prompt constrains plan size so JSON can close within its output budget", async () => {
+  const store = new MemoryStore();
+  store.add({ title: "[Gemini] Plan compactly", description: COMMAND_MARKER });
+  const seen: ChatMessage[][] = [];
+  const gemini = scripted([
+    JSON.stringify({ summary: "Compact.", tasks: [{ agent: "gemini", title: "Inspect", description: "Check the evidence." }] }),
+  ], seen);
+
+  const r = await tick(deps(store, { gemini }));
+  assert.equal(r.planned.length, 1);
+  const system = seen[0]![0]!.content;
+  assert.match(system, /at most 4 tasks/);
+  assert.match(system, /summary under 500 characters/);
+  assert.match(system, /description under 600 characters/);
+  assert.match(system, /entire JSON response under 6,000 characters/);
+});
+
 test("full loop: lead plans, workers execute with a tool, lead reconciles", async () => {
   const store = new MemoryStore();
   const cmd = store.add({ title: "[Claude] Shortlist FSM connectors", description: `**${COMMAND_MARKER}**\n\nFind options.` });
