@@ -111,7 +111,7 @@ export async function work(d: Deps, task: Issue, agent: AgentKey, report: TickRe
   const env = d.toolEnv(task);
   // Only offer tools whose credentials are configured, so a worker never plans around a tool that can't run.
   const tools = profile.tools.filter(
-    (t) => TOOL_DOCS[t] && !(t.startsWith("firecrawl.") && !env.firecrawlKey) && !(t.startsWith("github.") && !env.githubToken),
+    (t) => TOOL_DOCS[t] && !(t.startsWith("firecrawl.") && !env.firecrawlKey) && !(t.startsWith("github.") && !env.githubToken) && !(t.startsWith("vercel.") && !env.vercelToken),
   );
   const messages: ChatMessage[] = [
     {

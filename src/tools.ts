@@ -15,6 +15,7 @@ export interface ToolResult {
 export interface ToolEnv {
   githubToken?: string;
   firecrawlKey?: string;
+  vercelToken?: string;
   dryRun: boolean;
   policy: PolicyContext;
   /** Posts a comment on the task being worked (linear.comment). */
@@ -132,6 +133,31 @@ const HANDLERS: Record<string, (input: Record<string, unknown>, env: ToolEnv) =>
   },
 };
 
+async function vercel(env: ToolEnv, path: string): Promise<any> {
+  if (!env.vercelToken) throw new Error("VERCEL_API_KEY is not set");
+  const res = await (env.f ?? fetch)(`https://api.vercel.com${path}`, {
+    headers: { authorization: `Bearer ${env.vercelToken}` },
+    signal: AbortSignal.timeout(30_000),
+  });
+  const j: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(`Vercel ${res.status}: ${JSON.stringify(j.error ?? j).slice(0, 300)}`);
+  return j;
+}
+
+HANDLERS["vercel.list_deployments"] = async (input, env) => {
+  const q = new URLSearchParams({ limit: String(Math.min(Number(input["limit"] ?? 10), 20)) });
+  if (typeof input["project"] === "string") q.set("projectId", input["project"]);
+  if (typeof input["teamId"] === "string") q.set("teamId", input["teamId"]);
+  const j = await vercel(env, `/v6/deployments?${q}`);
+  return (j.deployments ?? []).map((d: any) => `- ${d.uid} ${d.name} ${d.state ?? d.readyState} ${d.target ?? "preview"} https://${d.url} ${new Date(d.created).toISOString()}`).join("\n") || "No deployments";
+};
+HANDLERS["vercel.deployment_status"] = async (input, env) => {
+  const id = str(input, "id");
+  const q = typeof input["teamId"] === "string" ? `?teamId=${encodeURIComponent(input["teamId"])}` : "";
+  const d = await vercel(env, `/v13/deployments/${encodeURIComponent(id)}${q}`);
+  return `${d.name} ${d.readyState} ${d.target ?? "preview"} https://${d.url}${d.errorMessage ? `\nError: ${d.errorMessage}` : ""}`;
+};
+
 export const TOOL_DOCS: Record<string, string> = {
   "github.read_file": '{"repo":"owner/name","path":"src/x.ts","ref?":"branch"} — read a file or list a directory',
   "github.list_tree": '{"repo":"owner/name","ref?":"branch"} — list every file path',
@@ -141,6 +167,8 @@ export const TOOL_DOCS: Record<string, string> = {
   "firecrawl.search": '{"query":"text","limit?":5} — web search',
   "firecrawl.scrape": '{"url":"https://..."} — fetch one page as markdown',
   "linear.comment": '{"body":"markdown"} — post a progress note on your task',
+  "vercel.list_deployments": '{"project?":"name or id","teamId?":"team_...","limit?":10} — list recent Vercel deployments (read-only)',
+  "vercel.deployment_status": '{"id":"dpl_... or url","teamId?":"team_..."} — state and error of one deployment (read-only)',
 };
 
 export async function runTool(call: ToolCall, allowed: string[], env: ToolEnv): Promise<ToolResult> {
