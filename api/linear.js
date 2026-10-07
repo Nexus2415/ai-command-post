@@ -12,7 +12,7 @@ function sameSecret(a, b) {
 async function gql(env, f, query, variables) {
   const res = await f(LINEAR, {
     method: "POST",
-    headers: { "content-type": "application/json", authorization: env.LINEAR_API_KEY },
+    headers: { "content-type": "application/json", authorization: String(env.LINEAR_API_KEY).trim().replace(/^Bearer\s+/i, "") },
     body: JSON.stringify({ query, variables }),
     signal: AbortSignal.timeout(20_000),
   });
