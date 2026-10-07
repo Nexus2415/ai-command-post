@@ -38,7 +38,7 @@ Requires Node 22.18+ (runs TypeScript directly, no build step).
 
 ```sh
 cp .env.example .env        # fill in LINEAR_API_KEY at minimum
-npm install                 # dev tools only (typescript, @types/node)
+npm ci                      # dev tools only (typescript, @types/node)
 npm run validate            # tests + typecheck
 set -a; . ./.env; set +a
 npm run status              # what's waiting; calls no models

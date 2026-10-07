@@ -15,7 +15,7 @@ Owner: Darius. Built 2026-10-07 in a Claude session that couldn't reach GitHub o
 |---|---|
 | Dashboard (claude.ai artifact "AI Command Post") | Published and live. Reads Linear through the viewer's connector; creates command issues. The lead choice is saved in the artifact's db (`settings/lead`). Source: `dashboard/index.html` |
 | Engine: plan → work → reconcile | Built; 21 tests pass (`npm test`) with fake models and fake fetch |
-| Typecheck | Passes offline with a stand-in for `@types/node` (`tsconfig.offline.json`). **Run `npm install && npm run typecheck` for the real check** |
+| Typecheck | Passes with real `@types/node` and `typescript` (pinned in `package-lock.json`); CI runs `npm ci && npm run validate` |
 | Linear GraphQL queries | **Unverified** against the live API: `issues` filter shape, `DateTimeOrDuration` var type, `commentCreate`, `issueUpdate` |
 | Provider clients | **Unverified** live. Model ids in `.env.example` must be checked against current provider docs |
 | Firecrawl `/v2/search` and `/v2/scrape` | **Unverified**; confirm the endpoint version and response shape |
@@ -24,7 +24,7 @@ Owner: Darius. Built 2026-10-07 in a Claude session that couldn't reach GitHub o
 
 ## First tasks, in order
 
-1. **Create the repo** (suggest `Nexus2415/ai-command-post`, private), push this tree, and confirm CI is green with real `@types/node`. Delete `types/` and `tsconfig.offline.json` once that passes.
+1. ~~**Create the repo**, push this tree, and confirm CI is green with real `@types/node`. Delete `types/` and `tsconfig.offline.json`.~~ Done.
 2. **Verify live reads, no writes:** with only `LINEAR_API_KEY` set, run `npm run status` and fix any GraphQL shape errors in `src/linear.ts`.
 3. **Free-tier end-to-end in dry run:** add `GEMINI_API_KEY`, set `ACP_ACTIVE=true`, keep `ACP_DRY_RUN=true`. Create a test command from the dashboard with **Gemini** as lead, run `npm run tick`, and read the dry-run log.
 4. **Turn on writes** (`ACP_DRY_RUN=false`) for one synthetic command. Confirm sub-issues, the claim comment, `## Result` comments and the `## Command summary` all appear in Linear and on the dashboard.
