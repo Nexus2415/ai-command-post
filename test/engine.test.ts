@@ -231,6 +231,26 @@ test("a command reconciles when its sub-tasks are completed, canceled or marked 
   assert.deepEqual(r.reconciled, ["T-1"]);
 });
 
+test("an offline lead falls back to the default lead, and its tasks go to agents that are online", async () => {
+  const store = new MemoryStore();
+  const cmd = store.add({ title: "[Claude] Research tools", description: `**${COMMAND_MARKER}**` });
+  const gemini = scripted([JSON.stringify({ summary: "Plan.", tasks: [{ agent: "claude", title: "Review", description: "x" }] })]);
+  const r = await tick(deps(store, { gemini }, { ACP_DEFAULT_LEAD: "gemini" }));
+  assert.deepEqual(r.planned, ["T-1 → 1 sub-tasks"]);
+  assert.deepEqual(store.issues.filter((i) => i.parentId === cmd.id).map((k) => k.title), ["[Gemini] Review"]);
+  assert.ok((store.comments.get(cmd.id) ?? []).some((c) => c.body.includes("Claude isn't connected, so Gemini led instead")));
+});
+
+test("a blocked task is closed so its command can still be summarized", async () => {
+  const store = new MemoryStore();
+  const cmd = store.add({ title: "[Gemini] Cmd", description: `**${COMMAND_MARKER}**`, stateType: "started" });
+  const task = store.add({ title: "[Gemini] Research", parentId: cmd.id });
+  const d = deps(store, { gemini: scripted([JSON.stringify({ final: "No access.", status: "blocked" }), "## Summary\nBlocked."]) });
+  await tick(d);
+  assert.equal(store.issues.find((i) => i.id === task.id)!.stateType, "canceled");
+  assert.deepEqual((await tick(d)).reconciled, ["T-1"]);
+});
+
 test("workers are only offered tools whose keys are configured", async () => {
   const store = new MemoryStore();
   const cmd = store.add({ title: "[Gemini] Cmd", description: `**${COMMAND_MARKER}**`, stateType: "started" });
