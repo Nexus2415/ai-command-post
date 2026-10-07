@@ -3,7 +3,8 @@
 name: Engine tick
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    # Off-peak minutes: GitHub often delays or drops schedules on the busy :00/:15/:30/:45 marks.
+    - cron: "7,22,37,52 * * * *"
   workflow_dispatch:
 permissions:
   contents: read
