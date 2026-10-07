@@ -109,7 +109,10 @@ async function plan(d: Deps, cmd: Issue, report: TickReport): Promise<void> {
 export async function work(d: Deps, task: Issue, agent: AgentKey, report: TickReport): Promise<void> {
   const profile = AGENTS[agent];
   const env = d.toolEnv(task);
-  const tools = profile.tools.filter((t) => TOOL_DOCS[t]);
+  // Only offer tools whose credentials are configured, so a worker never plans around a tool that can't run.
+  const tools = profile.tools.filter(
+    (t) => TOOL_DOCS[t] && !(t.startsWith("firecrawl.") && !env.firecrawlKey) && !(t.startsWith("github.") && !env.githubToken),
+  );
   const messages: ChatMessage[] = [
     {
       role: "system",

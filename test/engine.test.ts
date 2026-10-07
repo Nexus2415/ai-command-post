@@ -231,6 +231,18 @@ test("a command reconciles when its sub-tasks are completed, canceled or marked 
   assert.deepEqual(r.reconciled, ["T-1"]);
 });
 
+test("workers are only offered tools whose keys are configured", async () => {
+  const store = new MemoryStore();
+  const cmd = store.add({ title: "[Gemini] Cmd", description: `**${COMMAND_MARKER}**`, stateType: "started" });
+  store.add({ title: "[Gemini] Research", parentId: cmd.id });
+  const seen: ChatMessage[][] = [];
+  const d = deps(store, { gemini: scripted([JSON.stringify({ final: "Done.", status: "done" })], seen) });
+  await tick(d);
+  const system = seen[0]![0]!.content;
+  assert.ok(system.includes("linear.comment"));
+  assert.ok(!system.includes("firecrawl.") && !system.includes("github."));
+});
+
 test("$0 cap: paid lead cannot plan and the command stays untouched", async () => {
   const store = new MemoryStore();
   const cmd = store.add({ title: "[Claude] Anything", description: COMMAND_MARKER });
