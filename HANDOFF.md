@@ -19,7 +19,7 @@ Owner: Darius. Built 2026-10-07 in a Claude session that couldn't reach GitHub o
 | Linear GraphQL reads | **Verified live** 2026-10-07: `issues` filter (incl. `DateTimeOrDuration`), team/states lookup, comments; `npm run status` runs clean against team ARN |
 | Linear GraphQL writes | **Unverified** live: `issueCreate`, `commentCreate`, `issueUpdate` (step 4) |
 | Provider clients | **Unverified** live. Model ids in `.env.example` must be checked against current provider docs |
-| Firecrawl `/v2/search` and `/v2/scrape` | **Unverified**; confirm the endpoint version and response shape |
+| Firecrawl `/v2/search` and `/v2/scrape` | Verified live 2026-10-07 |
 | GitHub tools | **Unverified** live. `open_pull_request` writes files through the contents API, which is fine for small changes |
 | Scheduler | `.github/workflows/engine.yml`, off until repo variable `ACP_ACTIVE=true` |
 
@@ -29,7 +29,7 @@ Owner: Darius. Built 2026-10-07 in a Claude session that couldn't reach GitHub o
 2. ~~**Verify live reads, no writes:** with only `LINEAR_API_KEY` set, run `npm run status` and fix any GraphQL shape errors in `src/linear.ts`.~~ Done. Queries were valid; fixed canceled/duplicate sub-tasks blocking reconciliation.
 3. ~~**Free-tier end-to-end in dry run:** add `GEMINI_API_KEY`, set `ACP_ACTIVE=true`, keep `ACP_DRY_RUN=true`. Create a test command from the dashboard with **Gemini** as lead, run `npm run tick`, and read the dry-run log.~~ Done 2026-10-07: Gemini (`gemini-2.5-flash`, free tier, $0) planned test command ARN-13 into 1 sub-task; dry run logged the create, plan comment and state move with no writes. Workers can't be exercised in dry run because sub-tasks aren't really created; that's step 4.
 4. ~~**Turn on writes** (`ACP_DRY_RUN=false`) for one synthetic command. Confirm sub-issues, the claim comment, `## Result` comments and the `## Command summary` all appear in Linear and on the dashboard.~~ Done 2026-10-07 on ARN-13/ARN-14 with Gemini only, $0. Fixed: workers were offered Firecrawl/GitHub tools without keys and blocked. Open gap: a task a worker marks blocked stays In Progress, so its command never reconciles until someone moves it back to Todo.
-5. Verify Firecrawl and the GitHub read tools on a public repo, then on an allow-listed private repo.
+5. ~~Verify Firecrawl and the GitHub read tools on a public repo, then on an allow-listed private repo.~~ Done 2026-10-07: `/v2/search` and `/v2/scrape` work live; `github.read_file` and `github.list_tree` work on Nexus2415/ai-command-post. `github.search_issues` (`/search/issues`) couldn't be reached from a Claude cloud session (proxy blocks search endpoints); first check it in Actions.
 6. Enable the scheduled workflow only after steps 2–5 pass.
 
 ## Running in a Claude Code cloud session
