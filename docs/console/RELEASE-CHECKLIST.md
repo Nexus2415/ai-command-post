@@ -2,21 +2,26 @@
 
 Owner: Darius. Scope: ARN-43 only; documentation and evidence tracking, not permission to merge/deploy.
 
-## Current evidence snapshot (2026-10-08)
+## Current evidence snapshot (2026-10-08, independent of production)
 
-| Work item | Owner | Evidence | Current status | Next gate |
-| --- | --- | --- | --- | --- |
-| ARN-44 acceptance contract | ChatGPT | ai-command-post PR #16, head 05d8461 | Perplexity independent review PASS per ARN-45; draft, not merged | CI and owner merge decision |
-| ARN-54 scoped overview/thread API | Perplexity | ai-command-post PR #15, reported head 8e45cd4 | Draft; Perplexity reports 46/46 tests. Codex review clean on earlier f3bde96; ARN-56 blocked pending Codex cloud environment | Review exact new head, approved synthetic integration |
-| ARN-35 CI protection | Claude | opsdesk-harmony PR #174, head 3fc54d4 | Draft; review not established by this snapshot | CI/reviewer/owner merge decision |
-| ARN-49 UI | Claude | ai-command-post PR #18 | Perplexity CHANGES_REQUIRED: Canceled tab, charset, question count, Codex card | Fix on same branch, re-review, UI acceptance |
-| ARN-50 intake | Claude | ai-command-post PR #17 | Perplexity PASS with follow-ups; not proof of deployment | Follow-up fixes, tests, owner merge gate |
-| ARN-51 adapter (PR #21 changes requested); ARN-52..53 routing/tests | Claude | Linear under ARN-43 | Await PR-specific evidence | Focused implementation and review |
-| ARN-56 Codex follow-up | Codex | ai-command-post PR #15 | Blocked pending Codex cloud environment; distinct agent from ChatGPT chat | Review new code and preserve signed identity |
-| ARN-45 integration checklist | ChatGPT | This document | Draft PR pending | Independent review |
-| ARN-46 handoff truthfulness | ChatGPT | Linear ARN-46 | Not yet verified complete | Separate bounded task |
-| ARN-47 acceptance/accessibility | ChatGPT | Linear ARN-47 | Not yet verified complete | Run against deployed preview, not mocks alone |
-| ARN-48 owner guide | ChatGPT | Linear ARN-48 | Not yet verified complete | Document verified workflow only |
+| Issue / PR | Exact reviewed status | Dependency and next gate |
+| --- | --- | --- |
+| ARN-42 / #14 | Operating runbook, open and review-ready, head `7c6cb98` | Owner merge only with verified integration |
+| ARN-54 / #15 | API head `8e45cd4`, draft; Codex reviewed current head (review verdict/inline notes must be reconciled) | API contract and ARN-56 guard |
+| ARN-44 / #16 | Contract head `05d8461`; Perplexity PASS; now review-ready | Owner merge after dependency order |
+| ARN-50 / #17 | Intake head `c061f21`; earlier Perplexity PASS; review-ready | Question-guard proof before command engine integration |
+| ARN-49 / #18 | UI head `c6264d3`; Perplexity PASS on synthetic desktop/mobile integration; review-ready | #15 + #17, then real auth/browser acceptance |
+| ARN-45 / #19 | Release checklist head updated by this change; GitHub Validate previously PASS for `6de6a32`; review-ready | Independent re-review of updated document |
+| Agent identity / #20 | Draft `036ae95`, title lacks ARN issue reference | Identify canonical ARN owner/issue before merge |
+| ARN-51 / #21 | Eve adapter `e8c401c`; fail-closed dispatch, strict health; Perplexity PASS on previous `7ef8bab` with later narrow strictness fix | Actual authenticated Eve protocol, budget reservation, ownership; unsupported dispatch must remain off |
+| ARN-52 / #22 | Claim head `6d6c4ee`, Validate run 37809750949 PASS; Codex independent review requested | Non-atomic Linear claim race explicitly remains a limitation |
+| ARN-53 / #23 | UI regression head `4b868bc`, Validate run 37811764930 PASS; ChatGPT independent source/CI review PASS; stacked on #18 | Merge only after #18 and approved synthetic/live acceptance |
+| ARN-46 / #24 | Handoff contract head `c4a443f`, Validate run 37826120465 PASS; review-ready | Independent review and owner merge decision |
+| ARN-48 / #25 | Owner guide head `e56c227`, Validate run 37826122532 PASS; review-ready | Independent review; deployed URL and live auth remain unverified |
+| ARN-56 | Blocked Codex implementation transferred to Claude with single GitHub `@claude` request | Require dedicated ARN-56 PR and tests before accepting labeled owner questions |
+| ARN-47 | ChatGPT independent acceptance still blocked on approved live protected-preview access | Do not claim production or accessibility certification based on synthetic tests |
+
+All test counts and review claims are scoped to the cited heads. A new head invalidates earlier review unless the delta is explicitly reconciled. No merge, production deployment, flag changes, customer data or paid API calls authorized by this table.
 
 ## Integration order and gates
 
