@@ -151,3 +151,20 @@ test("upstream errors and malformed replies are sanitized; no false empty succes
     assert.equal(JSON.stringify(result.body).includes("secret"), false);
   }
 });
+
+test("Codex is a separate owner from ChatGPT, and questions are marked as questions", async () => {
+  const { ownerOf, projectIssue, overviewOf } = await import("../api/lib/console-state.js");
+  assert.equal(ownerOf("[Codex] fix CI"), "codex");
+  assert.equal(ownerOf("  [codex] review"), "codex");
+  assert.equal(ownerOf("[ChatGPT] plan"), "chatgpt");
+  assert.equal(ownerOf({ title: "untitled", labels: { nodes: [{ name: "OpenAI Codex" }] } }), "codex");
+  assert.equal(ownerOf({ title: "untitled", labels: { nodes: [{ name: "OpenAI" }] } }), "chatgpt");
+  assert.equal(ownerOf({ title: "[Claude] build", labels: { nodes: [{ name: "codex" }] } }), "claude");
+  const base = { id: "u", identifier: "ARN-7", url: "https://linear.app/x", state: { name: "Todo", type: "unstarted" } };
+  assert.equal(projectIssue({ ...base, title: "[Question] What is blocked?" }).kind, "question");
+  assert.equal(projectIssue({ ...base, title: "[Codex] fix" }).kind, "task");
+  const ov = overviewOf([{ ...base, title: "[Codex] fix" }], "2026-10-08T00:00:00Z");
+  const codex: any = ov.agents.find((a: any) => a.key === "codex");
+  assert.deepEqual([codex.connection, codex.nextTask], ["not_verified", "ARN-7"]);
+  assert.equal((ov.agents.find((a: any) => a.key === "chatgpt") as any).queued.length, 0);
+});

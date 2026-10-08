@@ -2,7 +2,9 @@
 import { agentFor } from "../../src/agents.ts";
 export const TEAM_ID = "faa75915-076f-479a-a3fb-92af2369e6c3";
 export const PROJECT_ID = "e8cf8cda-3347-4310-aea5-e6b7c7b95b4f";
-export const AGENTS = ["chatgpt", "claude", "gemini", "perplexity"];
+// Codex is tracked separately from ChatGPT chat. The engine has no Codex client, so [Codex] work is never run by it.
+export const AGENTS = ["chatgpt", "codex", "claude", "gemini", "perplexity"];
+const CODEX = /\bcodex\b/i;
 export const LANES = ["active", "queued", "review", "blocked", "done", "canceled"];
 
 export function safeLinearUrl(value) {
@@ -15,6 +17,11 @@ export function safeLinearUrl(value) {
 
 export function ownerOf(issueOrTitle) {
   const issue = typeof issueOrTitle === "string" ? { title: issueOrTitle } : issueOrTitle;
+  const prefix = /^\s*\[([^\]]+)\]/.exec(issue?.title || "")?.[1];
+  if (prefix && CODEX.test(prefix)) return "codex";
+  const labels = (issue?.labels?.nodes || []).map(x => String(x.name));
+  // A Codex label/assignee wins over the broader ChatGPT/OpenAI match, unless another agent owns the title prefix.
+  if (!prefix && [...labels, issue?.assignee?.name || ""].some(v => CODEX.test(v))) return "codex";
   return agentFor({
     title: issue?.title || "",
     labels: (issue?.labels?.nodes || []).map(x => x.name),
@@ -41,7 +48,10 @@ export function projectIssue(issue) {
     id: issue.identifier, uuid: issue.id, title: issue.title || "",
     url: safeLinearUrl(issue.url), owner: ownerOf(issue),
     status: issue.state?.name || "Unknown", statusType: issue.state?.type || "unknown",
-    lane: laneOf(issue), priority: Number.isInteger(issue.priority) ? issue.priority : 0,
+    lane: laneOf(issue),
+    // Owner questions are recorded for an answer, never queued as executable work.
+    kind: /^\s*\[question\]/i.test(issue.title || "") ? "question" : "task",
+    priority: Number.isInteger(issue.priority) ? issue.priority : 0,
     updatedAt: issue.updatedAt || null, completedAt: issue.completedAt || null,
     parent: issue.parent?.identifier || null,
     labels: (issue.labels?.nodes || []).map(x => x.name),
