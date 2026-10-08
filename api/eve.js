@@ -1,12 +1,13 @@
 // Narrow server-side adapter to the Eve execution service (opsdesk-harmony internal/ai-command).
 // Fails closed: off unless ACP_EVE_ACTIVE=true and ACP_EVE_BUDGET_USD > 0. The Eve origin and token come only
 // from server env vars (EVE_BASE_URL, EVE_TOKEN); the browser never supplies a URL and never sees the token.
-// An ambiguous outcome (timeout, network error, 5xx) is reported as unknown and never retried automatically.
+// Dispatch is unsupported until its contract, budget reservation and ownership claim exist (see DISPATCH_UNSUPPORTED).
+// An ambiguous health answer (malformed 2xx) is reported as unknown, never as ready.
 // Turning this on in a preview is not production activation, and this file never mints or requests tokens.
 import { timingSafeEqual } from "node:crypto";
 
 export const HEALTH_PATH = "/eve/v1/health"; // documented in HYBRID-ARCHITECTURE.md
-export const SESSION_PATH = "/eve/v1/sessions"; // ASSUMPTION: not verified against the eve package source
+export const DISPATCH_UNSUPPORTED = "Eve dispatch is not implemented: its route, auth and payload are unverified, there is no budget reservation, and no ownership claim yet (ARN-52).";
 export const TIMEOUT_MS = 15_000;
 const KEY_RE = /^[A-Za-z0-9_-]{16,64}$/;
 const MAX_TEXT = 4000;
@@ -46,14 +47,12 @@ export function gate(env) {
   return null;
 }
 
-async function call(env, f, method, path, key, payload) {
+async function call(env, f, method, path) {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), TIMEOUT_MS);
   const headers = { authorization: `Bearer ${String(env.EVE_TOKEN).trim()}` };
-  if (key) headers["idempotency-key"] = key;
-  if (payload) headers["content-type"] = "application/json";
   try {
-    const res = await f(eveOrigin(env) + path, { method, headers, body: payload ? JSON.stringify(payload) : undefined, signal: ctl.signal, redirect: "error" });
+    const res = await f(eveOrigin(env) + path, { method, headers, signal: ctl.signal, redirect: "error" });
     return { res };
   } catch {
     return { failed: true };
@@ -75,7 +74,13 @@ export async function handle(req, env, f = fetch) {
   if (body.action === "health") {
     const r = await call(env, f, "GET", HEALTH_PATH);
     if (r.failed) return out(502, { status: "unreachable", reason: "Eve health check did not answer." });
-    return out(200, { status: r.res.ok ? "ready" : "not_ready", httpStatus: r.res.status });
+    if (!r.res.ok) return out(200, { status: "not_ready", httpStatus: r.res.status, executionReady: false });
+    // Only an explicit JSON {"ok": true} or {"ready": true} counts as reachable. Anything else is unknown.
+    // Reachable is transport only: execution readiness is never claimed while dispatch is unsupported.
+    const j = await r.res.json().catch(() => null);
+    const healthy = j && typeof j === "object" && (j.ok === true || j.ready === true);
+    if (!healthy) return out(502, { status: "unknown", retry: false, reason: "Eve health answered with an unrecognised body.", executionReady: false });
+    return out(200, { status: "reachable", httpStatus: r.res.status, executionReady: false });
   }
 
   if (body.action !== "dispatch") return out(400, { error: "Unknown action" });
@@ -84,18 +89,10 @@ export async function handle(req, env, f = fetch) {
   if (intent !== "command") return out(400, { error: "intent must be \"command\"" });
   const key = body.idempotencyKey;
   if (typeof key !== "string" || !KEY_RE.test(key)) return out(400, { error: "idempotencyKey is required (16-64 of A-Z a-z 0-9 _ -)" });
-  const text = typeof body.text === "string" ? body.text.trim() : "";
-  if (!text || text.length > MAX_TEXT) return out(400, { error: `text is required (max ${MAX_TEXT} characters)` });
-  const issue = typeof body.issue === "string" && /^ARN-\d{1,6}$/.test(body.issue) ? body.issue : undefined;
-
-  const r = await call(env, f, "POST", SESSION_PATH, key, { intent: "command", text, issue, idempotencyKey: key, source: "ai-command-post" });
-  const unknown = { status: "unknown", retry: false, idempotencyKey: key, reason: "Eve may or may not have run this. Check Eve/Linear before resubmitting with the same key." };
-  if (r.failed || r.res.status >= 500) return out(502, unknown);
-  if (r.res.status === 401 || r.res.status === 403) return out(502, { status: "blocked", retry: false, reason: "Eve refused the credential or the kill switch ARNEXYIA_MULTI_AI_ACTIVE is off.", nextStep: "The owner checks EVE_TOKEN scope and the Eve kill switch." });
-  if (!r.res.ok) return out(502, { status: "rejected", retry: false, httpStatus: r.res.status, reason: "Eve rejected the request." });
-  const j = await r.res.json().catch(() => ({}));
-  const sessionId = typeof j?.id === "string" ? j.id.slice(0, 200) : typeof j?.sessionId === "string" ? j.sessionId.slice(0, 200) : null;
-  return out(202, { status: "accepted", sessionId, idempotencyKey: key });
+  // Dispatch stays off whatever the env flags say, and no request is sent. Turning it on needs all of:
+  // a verified, version-pinned Eve dispatch contract; a server-side budget reservation and ledger;
+  // and an ownership claim so ACP and Eve can't both run one command (ARN-52).
+  return out(503, { status: "unsupported", retry: false, reason: DISPATCH_UNSUPPORTED, nextStep: "Wait for ARN-52 and a verified Eve contract; no flag or credential change enables this." });
 }
 
 export default async function handler(req, res) {

@@ -42,18 +42,16 @@ test("password and same-origin are required", async () => {
   assert.equal(calls.length, 0);
 });
 
-test("dispatch goes to the fixed origin with bearer token and idempotency key, ignoring caller URLs", async () => {
+test("dispatch is unsupported even when fully configured, and sends nothing", async () => {
   const { f, calls } = fake(ok);
-  const r = await handle(cmd({ url: "https://evil.test", baseUrl: "https://evil.test" }), env, f);
-  assert.equal(r.status, 202);
-  assert.deepEqual(r.body, { status: "accepted", sessionId: "s1", idempotencyKey: KEY });
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0]!.url, "https://eve.test/eve/v1/sessions");
-  assert.equal(calls[0]!.init.headers.authorization, "Bearer secret-tok");
-  assert.equal(calls[0]!.init.headers["idempotency-key"], KEY);
-  assert.ok(calls[0]!.init.signal instanceof AbortSignal);
-  assert.ok(!JSON.stringify(r.body).includes("secret-tok"));
-  assert.ok(TIMEOUT_MS > 0);
+  for (const budget of ["5", "0.001"]) {
+    const r = await handle(cmd({ url: "https://evil.test" }), { ...env, ACP_EVE_BUDGET_USD: budget }, f);
+    assert.equal(r.status, 503);
+    assert.equal((r.body as any).status, "unsupported");
+    assert.equal((r.body as any).retry, false);
+    assert.ok(!JSON.stringify(r.body).includes("secret-tok"));
+  }
+  assert.equal(calls.length, 0);
 });
 
 test("idempotency key is required and questions are never dispatched", async () => {
@@ -65,34 +63,33 @@ test("idempotency key is required and questions are never dispatched", async () 
   assert.equal(calls.length, 0);
 });
 
-test("ambiguous outcomes return unknown, retry false, one call only", async () => {
-  for (const reply of [
-    () => new Response("upstream secret stack trace", { status: 500 }),
-    () => { throw new Error("ECONNRESET secret detail"); },
-    () => { throw new DOMException("aborted", "AbortError"); },
-  ]) {
-    const { f, calls } = fake(reply as any);
-    const r = await handle(cmd(), env, f);
+test("health uses only the fixed route with bearer auth and never claims execution readiness", async () => {
+  const { f, calls } = fake(() => new Response(JSON.stringify({ ok: true }), { status: 200 }));
+  const r = await handle(req({ action: "health", url: "https://evil.test" }), env, f);
+  assert.deepEqual(r.body, { status: "reachable", httpStatus: 200, executionReady: false });
+  assert.equal(calls[0]!.url, "https://eve.test/eve/v1/health");
+  assert.equal(calls[0]!.init.method, "GET");
+  assert.equal(calls[0]!.init.headers.authorization, "Bearer secret-tok");
+  assert.ok(calls[0]!.init.signal instanceof AbortSignal);
+  assert.ok(TIMEOUT_MS > 0);
+});
+
+test("malformed or unrecognised 2xx health is unknown, not ready", async () => {
+  for (const body of ["not json", "{}", JSON.stringify({ ok: "yes" }), "null"]) {
+    const { f } = fake(() => new Response(body, { status: 200 }));
+    const r = await handle(req({ action: "health" }), env, f);
     assert.equal((r.body as any).status, "unknown");
     assert.equal((r.body as any).retry, false);
-    assert.equal(calls.length, 1);
-    assert.ok(!JSON.stringify(r.body).includes("secret"));
   }
 });
 
-test("4xx is rejected without relaying upstream text; 401 reports blocked", async () => {
-  const { f } = fake(() => new Response("bad thing secret", { status: 422 }));
-  const r = await handle(cmd(), env, f);
-  assert.equal((r.body as any).status, "rejected");
-  assert.ok(!JSON.stringify(r.body).includes("secret"));
-  const { f: f2 } = fake(() => new Response("{}", { status: 401 }));
-  assert.equal(((await handle(cmd(), env, f2)).body as any).status, "blocked");
-});
-
-test("health hits only the fixed health route", async () => {
-  const { f, calls } = fake(() => new Response("{}", { status: 200 }));
+test("health failures are unreachable or not_ready without upstream text", async () => {
+  const { f } = fake(() => { throw new Error("ECONNRESET secret"); });
   const r = await handle(req({ action: "health" }), env, f);
-  assert.deepEqual(r.body, { status: "ready", httpStatus: 200 });
-  assert.equal(calls[0]!.url, "https://eve.test/eve/v1/health");
-  assert.equal(calls[0]!.init.method, "GET");
+  assert.equal((r.body as any).status, "unreachable");
+  assert.ok(!JSON.stringify(r.body).includes("secret"));
+  const { f: f2 } = fake(() => new Response("secret trace", { status: 500 }));
+  const r2 = await handle(req({ action: "health" }), env, f2);
+  assert.equal((r2.body as any).status, "not_ready");
+  assert.ok(!JSON.stringify(r2.body).includes("secret"));
 });

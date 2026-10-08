@@ -74,4 +74,4 @@ The dashboard also runs as a website: `vercel.json` serves `dashboard/` and `api
 
 ### Eve adapter (`api/eve.js`, off by default)
 
-Server-only env vars: `ACP_EVE_ACTIVE` (must be `true`), `ACP_EVE_BUDGET_USD` (must be > 0; default 0 blocks), `EVE_BASE_URL` (bare https origin), `EVE_TOKEN` (scoped Eve credential, never sent to the browser). Missing any of these returns `disabled`/`blocked` with a next step. Timeouts, network errors and 5xx return `unknown` with `retry:false` and are never retried. Enabling it in a preview is not production activation.
+**Dispatch is unsupported for now.** `/api/eve` returns `unsupported` for every command and sends nothing, whatever the env vars say, until a verified Eve contract, a budget reservation and an ARN-52 ownership claim exist. Only `health` calls Eve: it reports `reachable` on an explicit `{"ok":true}` or `{"ready":true}`, `unknown` on any other 2xx, and never claims execution readiness. Server-only env vars: `ACP_EVE_ACTIVE`, `ACP_EVE_BUDGET_USD` (default 0 blocks), `EVE_BASE_URL` (bare https origin), `EVE_TOKEN` (never sent to the browser).
