@@ -207,7 +207,7 @@ test("no fake engine-live or online claims once the console starts", async () =>
   const roster = t.$("cRoster").textContent;
   assert.match(roster, /Connection not verified/, "server saying 'online' is not trusted");
   assert.doesNotMatch(roster, /online|live|spend/i);
-  assert.match(t.$("cIntentNote").textContent, /runs for real/, "the honest live-run notice is shown for commands");
+  assert.match(t.$("cIntentNote").textContent, /filed in Linear as a new command.*can't confirm/, "commands are described as filed, never as guaranteed to run");
 });
 
 test("stale thread responses don't overwrite a closed or newer thread", async () => {
