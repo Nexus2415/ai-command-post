@@ -1,36 +1,31 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { makePerplexityHandoff, startPerplexityComputer, PERPLEXITY_CONNECTION } from "../src/perplexity-computer-connector.mjs";
-
-test("packages a public/synthetic research task without executing it", () => {
-  const result = makePerplexityHandoff({ issue: "ARN-63", text: "Research safe triggers", dataClassification: "synthetic-or-public" });
-  assert.equal(result.ok, true);
-  assert.equal(result.status, "awaiting-native-automation-setup");
-  assert.equal(result.issueUrl, "https://linear.app/arnexyia/issue/arn-63");
-  assert.equal(result.remoteExecutionReady, false);
-  assert.equal(result.triggerTransport, "perplexity-native-linear-event-automation");
-  assert.deepEqual(result.requiredVerification, ["owner-configured automation", "scoped Linear authorization", "real event-delivery test", "usage limits"]);
-  assert.match(result.instruction, /Sign — Perplexity Computer/);
+const input = {issue:"ARN-64",taskText:"Research safe triggers",workspaceId:"workspace-1",projectId:"project-1",originCommentId:"comment-1",assignmentRevision:1,acceptanceCriteria:"Return official sources",dataClassification:"synthetic-or-public"};
+test("preserves question, metadata and honest pre-admission status",()=>{
+ const a=makePerplexityHandoff(input),b=makePerplexityHandoff({...input,taskText:"Another question",assignmentRevision:2});
+ assert.equal(a.ok,true);assert.equal(a.schemaVersion,1);
+ assert.equal(a.taskText,input.taskText);assert.equal(a.acceptanceCriteria,input.acceptanceCriteria);
+ assert.equal(a.status,"payload-packaged-not-admitted");assert.equal(a.admitted,false);assert.equal(a.claimed,false);
+ assert.equal(a.issueUrl,"https://linear.app/arnexyia/issue/arn-64");
+ assert.notEqual(a.assignmentKey,b.assignmentKey);assert.notEqual(a.taskText,b.taskText);
+ assert.equal(a.outputDestination,"same-linear-issue");assert.equal(a.eventReceiptId,null);
 });
-
-test("refuses client/unknown data and malformed issue ids", () => {
-  for (const dataClassification of ["client", "unknown", undefined]) {
-    assert.equal(makePerplexityHandoff({ issue: "ARN-63", text: "Research", dataClassification }).ok, false);
-  }
-  for (const issue of ["", "OTHER-11", "ARN-0", "ARN-63; rm -rf x"]) {
-    assert.equal(makePerplexityHandoff({ issue, text: "Research", dataClassification: "synthetic-or-public" }).ok, false);
-  }
-  assert.equal(makePerplexityHandoff({ issue: "ARN-63", text: "x".repeat(4001), dataClassification: "synthetic-or-public" }).ok, false);
+test("repeated delivery preserves canonical assignment but distinct receipts",()=>{
+ const a=makePerplexityHandoff({...input,eventReceiptId:"event-1"});
+ const b=makePerplexityHandoff({...input,eventReceiptId:"event-2"});
+ assert.equal(a.assignmentKey,b.assignmentKey);assert.notEqual(a.eventReceiptId,b.eventReceiptId);
+ assert.equal(a.claimed,false);
 });
-
-test("remote execution always fails closed, independent of supplied options", async () => {
-  for (const options of [{}, { enabled: true, apiKey: "synthetic" }, { paidApproved: true }]) {
-    const result = await startPerplexityComputer({ issue: "ARN-63" }, options);
-    assert.deepEqual(result, {
-      ok: false, status: "unsupported", retry: false, remoteExecutionReady: false,
-      reason: "No supported, authenticated remote Perplexity Computer execution trigger has been verified.",
-    });
-  }
-  assert.equal(PERPLEXITY_CONNECTION.paidApiAuthorized, false);
-  assert.equal(PERPLEXITY_CONNECTION.remoteExecutionReady, false);
+test("rejects coerced ids, client classifications and unsupported controls",()=>{
+ const bad=[{issue:{toString:()=>"ARN-64"}},{issue:"OTHER-7"},{issue:"ARN-0"},{issue:0},{taskText:""},{taskText:"x".repeat(4001)},{projectId:null},{originCommentId:"bad/value"},{assignmentRevision:0},{assignmentRevision:1.2},{acceptanceCriteria:""},{eventReceiptId:[]},{authorityOverride:true},{dataClassification:"client"}];
+ for(const item of bad) assert.equal(makePerplexityHandoff({...input,...item}).ok,false,Object.keys(item)[0]);
+});
+test("never remotely executes even with supplied activation hints",async()=>{
+ for(const opts of [{},{enabled:true,apiKey:"synthetic"},{paidApproved:true},{nativeAutomationReady:true}]) {
+  const a=await startPerplexityComputer(makePerplexityHandoff(input),opts);
+  assert.equal(a.status,"unsupported");assert.equal(a.retry,false);assert.equal(a.remoteExecutionReady,false);
+ }
+ assert.equal(PERPLEXITY_CONNECTION.paidApiAuthorized,false);
+ assert.equal(PERPLEXITY_CONNECTION.remoteExecutionReady,false);
 });
