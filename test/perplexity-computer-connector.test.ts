@@ -5,9 +5,11 @@ import { makePerplexityHandoff, startPerplexityComputer, PERPLEXITY_CONNECTION }
 test("packages a public/synthetic research task without executing it", () => {
   const result = makePerplexityHandoff({ issue: "ARN-63", text: "Research safe triggers", dataClassification: "synthetic-or-public" });
   assert.equal(result.ok, true);
-  assert.equal(result.status, "awaiting-manual-start");
+  assert.equal(result.status, "awaiting-native-automation-setup");
   assert.equal(result.issueUrl, "https://linear.app/arnexyia/issue/arn-63");
   assert.equal(result.remoteExecutionReady, false);
+  assert.equal(result.triggerTransport, "perplexity-native-linear-event-automation");
+  assert.deepEqual(result.requiredVerification, ["owner-configured automation", "scoped Linear authorization", "real event-delivery test", "usage limits"]);
   assert.match(result.instruction, /Sign — Perplexity Computer/);
 });
 
