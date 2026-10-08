@@ -64,7 +64,7 @@ test("idempotency key is required and questions are never dispatched", async () 
 });
 
 test("health uses only the fixed route with bearer auth and never claims execution readiness", async () => {
-  const { f, calls } = fake(() => new Response(JSON.stringify({ ok: true }), { status: 200 }));
+  const { f, calls } = fake(() => new Response(JSON.stringify({ ok: true, status: "ready", workflowId: "wf_1" }), { status: 200 }));
   const r = await handle(req({ action: "health", url: "https://evil.test" }), env, f);
   assert.deepEqual(r.body, { status: "reachable", httpStatus: 200, executionReady: false });
   assert.equal(calls[0]!.url, "https://eve.test/eve/v1/health");
@@ -75,7 +75,7 @@ test("health uses only the fixed route with bearer auth and never claims executi
 });
 
 test("malformed or unrecognised 2xx health is unknown, not ready", async () => {
-  for (const body of ["not json", "{}", JSON.stringify({ ok: "yes" }), "null"]) {
+  for (const body of ["not json", "{}", JSON.stringify({ ok: "yes" }), JSON.stringify({ ok: true }), JSON.stringify({ ok: true, status: "ready", workflowId: "" }), "null"]) {
     const { f } = fake(() => new Response(body, { status: 200 }));
     const r = await handle(req({ action: "health" }), env, f);
     assert.equal((r.body as any).status, "unknown");
