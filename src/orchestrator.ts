@@ -9,7 +9,7 @@ import { runTool, TOOL_DOCS, type ToolCall, type ToolEnv } from "./tools.ts";
 const RETRY_MARKER = "ACP retry";
 const MAX_PROVIDER_RETRIES = 3;
 // HTTP 0 means no response (network error/timeout); 408/425/429/5xx are worth retrying. Everything else is permanent.
-const TRANSIENT_STATUS = new Set([0, 408, 425, 429, 500, 502, 503, 504]);
+const TRANSIENT_STATUS = new Set([0, 408, 425, 429, 500, 502, 503, 504, 529]);
 
 export const COMMAND_MARKER = "Command issued from AI Command Post";
 export const RESULT_MARKER = "## Result";
