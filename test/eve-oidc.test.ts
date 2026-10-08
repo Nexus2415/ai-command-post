@@ -84,7 +84,7 @@ test("a token for the wrong project, environment, team or time is never used", a
 test("only the strict 202 accepted shape counts; accepted is never completion", () => {
   const ok = { ok: true, sessionId: "s1", status: "accepted" };
   assert.deepEqual(parseSessionCreated(202, "s1", ok), { accepted: true, completed: false, sessionId: "s1" });
-  assert.equal(parseSessionCreated(202, null, ok).accepted, true);
+  assert.equal(parseSessionCreated(202, null, ok).accepted, false, "missing x-eve-session-id is unknown");
   for (const [st, h, b] of [[200, "s1", ok], [202, "s2", ok], [202, null, { ...ok, extra: 1 }], [202, null, { ...ok, sessionId: "" }], [202, null, { ...ok, status: "done" }], [202, null, null], [202, null, [ok]]] as const) {
     assert.deepEqual(parseSessionCreated(st, h, b), { accepted: false, outcome: "unknown", retry: false });
   }

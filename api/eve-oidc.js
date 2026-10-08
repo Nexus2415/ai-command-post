@@ -77,6 +77,6 @@ export function parseSessionCreated(status, headerSessionId, body) {
   const keys = Object.keys(body).sort().join(",");
   if (keys !== "ok,sessionId,status" || body.ok !== true || body.status !== "accepted") return unknown;
   if (typeof body.sessionId !== "string" || !body.sessionId) return unknown;
-  if (headerSessionId != null && headerSessionId !== body.sessionId) return unknown;
+  if (headerSessionId !== body.sessionId) return unknown; // x-eve-session-id is required and must match
   return { accepted: true, completed: false, sessionId: body.sessionId };
 }
