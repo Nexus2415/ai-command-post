@@ -211,7 +211,7 @@
     document.querySelectorAll("#cIntent button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.intent === k)));
     $("cIntentNote").textContent = k === "question"
       ? "Question · read-only. It asks for an answer and must not change any tasking."
-      : "Command · becomes a tasking for the agents, subject to the usual approval gates.";
+      : "Command · runs for real. With the current settings Gemini picks it up on a later engine run and works it; it is not just recorded.";
     $("cSend").textContent = k === "question" ? "Ask question" : "Send command";
   }
   async function send() {
