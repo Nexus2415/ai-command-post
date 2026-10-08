@@ -47,3 +47,41 @@ test("intake body validates intent and text; 404 is reported, not faked", () => 
 test("console never assigns innerHTML", () => {
   assert.doesNotMatch(src, /\.innerHTML\s*=/);
 });
+
+// ---- ARN-53 static checks (source inspection, not behaviour) ----
+const html = readFileSync(new URL("../dashboard/index.html", import.meta.url), "utf8");
+const code = src.replace(/^\s*\/\/.*$/gm, ""); // comments stripped
+
+test("static: console never builds HTML from data or persists the password", () => {
+  assert.doesNotMatch(code, /innerHTML|insertAdjacentHTML|outerHTML|document\.write/);
+  assert.doesNotMatch(src, /(localStorage|sessionStorage)\.setItem/);
+  assert.doesNotMatch(html, /setItem\(\s*["']acp\.pw|lsSet\(\s*["']acp\.pw/);
+  assert.doesNotMatch(src, /\.href\s*=(?!\s*href\b)/, "links only via safeUrl()");
+});
+
+test("static: fetches are relative /api/console and /api/intake only", () => {
+  const paths = [...src.matchAll(/post\(\s*"([^"]+)"/g)].map(m => m[1]);
+  assert.deepEqual([...new Set(paths)].sort(), ["/api/console", "/api/intake"]);
+  assert.equal((src.match(/fetch\(/g) || []).length, 1);
+  assert.doesNotMatch(src, /https?:\/\/(?!\/)/);
+});
+
+test("static: route compatibility — every element id console.js uses exists in index.html", () => {
+  assert.match(html, /<script src="console\.js"><\/script>/);
+  const ids = new Set([...src.matchAll(/\$\("([A-Za-z]+)"\)/g)].map(m => m[1]));
+  for (const id of ids) assert.match(html, new RegExp(`id="${id}"`), id);
+  assert.match(html, /id="cIntent"[^]*data-intent="command"[^]*data-intent="question"/);
+});
+
+test("static: small screens — viewport meta, no fixed widths over 375px outside collapsing media queries", () => {
+  assert.match(html, /<meta name="viewport" content="width=device-width, initial-scale=1">/);
+  assert.match(html, /@media \(max-width:640px\)/);
+  const css = html.slice(html.indexOf("<style>"), html.indexOf("</style>"));
+  const wide = [...css.matchAll(/(?<![-\w])(min-)?width:\s*(\d+)px/g)].filter(m => Number(m[2]) > 375);
+  assert.deepEqual(wide.map(m => m[0]), []);
+});
+
+test("static: no engine-live or spend claim outside the hidden legacy chip", () => {
+  for (const line of html.split("\n").filter(l => /engine live|spend|online/i.test(l))) assert.match(line, /data-legacy/, line);
+  assert.doesNotMatch(src, /engine (is )?live|spending|\$\d/i);
+});
