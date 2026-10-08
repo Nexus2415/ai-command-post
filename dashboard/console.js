@@ -57,7 +57,7 @@
   // ---- DOM ----
   const $ = id => document.getElementById(id);
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = String(text); return e; };
-  let overview = null, tab = "active", intent = "command", busy = false, lastFocus = null, threadSeq = 0;
+  let pendingKey = null, overview = null, tab = "active", intent = "command", busy = false, lastFocus = null, threadSeq = 0;
 
   function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
   function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
@@ -218,11 +218,16 @@
     if (busy) return;
     let body;
     try { body = intakeBody(intent, $("cText").value); } catch (e) { setMsg($("cSendMsg"), e.message, "warn"); return; }
+    // One idempotency key per draft: a retry of the same text can't file a second issue.
+    const draft = intent + "\n" + body.text;
+    if (!pendingKey || pendingKey.draft !== draft) pendingKey = { draft, key: crypto.randomUUID() };
+    body.idempotencyKey = pendingKey.key;
     busy = true; $("cSend").disabled = true; setMsg($("cSendMsg"), "Sending…", "");
     try {
       const j = await post("/api/intake", body);
       const ref = j && (j.identifier || j.id);
-      setMsg($("cSendMsg"), (intent === "question" ? "Question received" : "Command received") + (ref ? " as " + ref : "") + ".", "ok");
+      pendingKey = null;
+      setMsg($("cSendMsg"), (intent === "question" ? "Question received" : "Command received") + (ref ? " as " + ref : "") + (j && j.duplicate ? " (already filed earlier)" : "") + ".", "ok");
       $("cText").value = "";
       loadOverview();
     } catch (e) { setMsg($("cSendMsg"), e.message, "err"); }
