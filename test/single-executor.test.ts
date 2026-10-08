@@ -195,3 +195,24 @@ test("documents current question behaviour: an unlabelled [Question] has no owne
   await tick(deps(store, { gemini: scripted([done], seen) }, { ACP_DEFAULT_LEAD: "gemini" }));
   assert.equal(seen.length, 0);
 });
+
+test("the earliest-created claim wins even if comments arrive newest-first", () => {
+  const claims = claimsOn([], [
+    { body: `${EXECUTOR_MARKER} acp:gemini`, createdAt: "2026-10-08T10:00:01Z" },
+    { body: `${EXECUTOR_MARKER} acp:claude`, createdAt: "2026-10-08T10:00:00Z" },
+  ]);
+  assert.equal(claimStatus(claims, "claude"), "own");
+  assert.equal(claimStatus(claims, "gemini"), "foreign");
+});
+
+test("a failed claim read on one task does not abort the tick", async () => {
+  const store = new MemoryStore();
+  const bad = store.add({ title: "[Gemini] flaky read", priority: 1 });
+  const cmd = store.add({ title: "[Gemini] cmd", description: COMMAND_MARKER, stateType: "started" });
+  store.add({ title: "[Gemini] a", parentId: cmd.id, stateType: "completed" });
+  const orig = store.getComments.bind(store);
+  store.getComments = async (id: string) => { if (id === bad.id) throw new Error("linear down"); return orig(id); };
+  const r = await tick(deps(store, { gemini: scripted(["summary"]) }));
+  assert.ok(r.errors.some((e) => e.includes("linear down")));
+  assert.equal(store.issues.find((i) => i.id === cmd.id)!.stateType, "completed", "reconciliation still ran");
+});

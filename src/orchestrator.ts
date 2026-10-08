@@ -77,13 +77,15 @@ function activeLead(d: Deps, cmd: Issue): { lead: AgentKey; note: string } {
  */
 export type ExecutorClaim = { executor: string; source: "comment" | "label" };
 
-export function claimsOn(labels: string[], comments: { body: string }[]): ExecutorClaim[] {
+export function claimsOn(labels: string[], comments: { body: string; createdAt?: string }[]): ExecutorClaim[] {
   const out: ExecutorClaim[] = [];
   for (const l of labels) {
     const m = /^executor:\s*(\S+)$/i.exec(l.trim());
     if (m) out.push({ executor: m[1]!.toLowerCase(), source: "label" });
   }
-  for (const c of comments) {
+  // Linear doesn't guarantee comment order, so sort by creation time; the earliest claim must win.
+  const sorted = [...comments].sort((a, b) => (a.createdAt ?? "").localeCompare(b.createdAt ?? ""));
+  for (const c of sorted) {
     const m = new RegExp(`^${EXECUTOR_MARKER}\\s*(\\S+)`, "m").exec(c.body);
     if (m) {
       out.push({ executor: m[1]!.toLowerCase(), source: "comment" });
@@ -327,7 +329,14 @@ export async function tick(d: Deps): Promise<TickReport> {
     // No owner, or an owner that isn't connected: leave it. An offline preferred agent never silently becomes
     // another agent (e.g. Gemini); only an explicit title prefix, label or assignee routes a task.
     if (!agent || busy.has(agent) || !d.clients[agent]) continue;
-    if (claimStatus(claimsOn(t.labels, await d.store.getComments(t.id)), agent) === "foreign") {
+    let claim: "own" | "foreign" | "free";
+    try {
+      claim = claimStatus(claimsOn(t.labels, await d.store.getComments(t.id)), agent);
+    } catch (e) {
+      report.errors.push(`${t.identifier}: ${(e as Error).message}`);
+      continue;
+    }
+    if (claim === "foreign") {
       report.waiting.push(`${t.identifier}: claimed by another executor; skipped`);
       continue;
     }
