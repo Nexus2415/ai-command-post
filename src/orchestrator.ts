@@ -134,11 +134,34 @@ export async function work(d: Deps, task: Issue, agent: AgentKey, report: TickRe
   await d.store.comment(task.id, `${CLAIM_MARKER} ${profile.name} (AI Command Post).`);
   await d.store.setState(task.id, d.cfg.linearTeamKey, "started");
 
+  let toolCallAttempted = false;
   for (let step = 1; step <= d.cfg.maxStepsPerTask; step++) {
-    const out = await callModel(d, agent, task, messages, STEP_TOKENS);
+    let out: string | { blocked: string };
+    try {
+      out = await callModel(d, agent, task, messages, STEP_TOKENS);
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      if (!toolCallAttempted) {
+        // No tool ran, so replay is safe. Return the task to Todo instead of orphaning it In Progress.
+        await d.store.setState(task.id, d.cfg.linearTeamKey, "unstarted");
+        report.waiting.push(`${task.identifier}: provider/model call failed before any tool ran (${reason})`);
+        return;
+      }
+      // A tool may already have created durable state. Fail closed rather than replaying it automatically.
+      await d.store.comment(task.id, `${RESULT_MARKER} (${profile.name}, blocked)\n\nModel/provider failure after a tool call; automatic replay was stopped to avoid duplicating side effects. Error: ${reason}`);
+      await d.store.setState(task.id, d.cfg.linearTeamKey, "canceled");
+      report.worked.push(`${task.identifier} blocked after tool call`);
+      return;
+    }
     if (typeof out !== "string") {
-      await d.store.comment(task.id, `**Paused:** ${out.blocked}. Task stays in progress until this is resolved.`);
-      report.waiting.push(`${task.identifier}: ${out.blocked}`);
+      if (!toolCallAttempted) {
+        await d.store.setState(task.id, d.cfg.linearTeamKey, "unstarted");
+        report.waiting.push(`${task.identifier}: ${out.blocked}`);
+        return;
+      }
+      await d.store.comment(task.id, `${RESULT_MARKER} (${profile.name}, blocked)\n\nExecution became blocked after a tool call; automatic replay was stopped to avoid duplicating side effects. Reason: ${out.blocked}`);
+      await d.store.setState(task.id, d.cfg.linearTeamKey, "canceled");
+      report.worked.push(`${task.identifier} blocked after tool call`);
       return;
     }
     messages.push({ role: "assistant", content: out });
@@ -153,6 +176,7 @@ export async function work(d: Deps, task: Issue, agent: AgentKey, report: TickRe
     }
     if (j && typeof j["tool"] === "string") {
       const call: ToolCall = { tool: j["tool"], input: (j["input"] as Record<string, unknown>) ?? {} };
+      toolCallAttempted = true;
       const res = await runTool(call, tools, env);
       messages.push({ role: "user", content: `Tool ${call.tool} ${res.ok ? "returned" : "failed"}:\n${res.output}` });
       continue;
