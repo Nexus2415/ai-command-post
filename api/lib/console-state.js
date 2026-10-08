@@ -20,8 +20,10 @@ export function ownerOf(issueOrTitle) {
   const prefix = /^\s*\[([^\]]+)\]/.exec(issue?.title || "")?.[1];
   if (prefix && CODEX.test(prefix)) return "codex";
   const labels = (issue?.labels?.nodes || []).map(x => String(x.name));
-  // A Codex label/assignee wins over the broader ChatGPT/OpenAI match, unless another agent owns the title prefix.
-  if (!prefix && [...labels, issue?.assignee?.name || ""].some(v => CODEX.test(v))) return "codex";
+  // A Codex label/assignee wins over the broader ChatGPT/OpenAI match, unless the title prefix itself names another
+  // agent. A non-agent prefix such as [Question] does not suppress Codex metadata.
+  const prefixOwner = prefix ? agentFor({ title: issue?.title || "" }) : null;
+  if (!prefixOwner && [...labels, issue?.assignee?.name || ""].some(v => CODEX.test(v))) return "codex";
   return agentFor({
     title: issue?.title || "",
     labels: (issue?.labels?.nodes || []).map(x => x.name),

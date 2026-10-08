@@ -168,3 +168,22 @@ test("Codex is a separate owner from ChatGPT, and questions are marked as questi
   assert.deepEqual([codex.connection, codex.nextTask], ["not_verified", "ARN-7"]);
   assert.equal((ov.agents.find((a: any) => a.key === "chatgpt") as any).queued.length, 0);
 });
+
+test("ARN-54: Codex metadata survives non-agent prefixes; agent prefixes and other metadata still win", async () => {
+  const { ownerOf } = await import("../api/lib/console-state.js");
+  const L = (...n: string[]) => ({ nodes: n.map((name) => ({ name })) });
+  // Codex label or assignee under a non-agent prefix ([Question]) is Codex, never ChatGPT via "openai".
+  assert.equal(ownerOf({ title: "[Question] What is blocked?", labels: L("codex") }), "codex");
+  assert.equal(ownerOf({ title: "[Question] What is blocked?", labels: L("OpenAI Codex") }), "codex");
+  assert.equal(ownerOf({ title: "  [Question] x", assignee: { name: "OpenAI Codex" } }), "codex");
+  assert.equal(ownerOf({ title: "[Bug] x", labels: L("OpenAI Codex", "ChatGPT") }), "codex");
+  // An agent prefix still beats conflicting Codex metadata.
+  assert.equal(ownerOf({ title: "[Claude] x", labels: L("codex") }), "claude");
+  assert.equal(ownerOf({ title: "[ChatGPT] x", assignee: { name: "OpenAI Codex" } }), "chatgpt");
+  // Label/assignee ownership without a prefix, and missing fields.
+  assert.equal(ownerOf({ title: "No prefix", labels: L("bug"), assignee: { name: "Gemini" } }), "gemini");
+  assert.equal(ownerOf({ title: "[Question] x", labels: L("OpenAI") }), "chatgpt");
+  assert.equal(ownerOf({ title: "[Question] x" }), null);
+  assert.equal(ownerOf({ title: "[Question] x", labels: { nodes: [] }, assignee: null }), null);
+  assert.equal(ownerOf({}), null);
+});
