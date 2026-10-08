@@ -6,10 +6,10 @@ Owner: Darius. Scope: ARN-43 only; documentation and evidence tracking, not perm
 
 | Work item | Owner | Evidence | Current status | Next gate |
 | --- | --- | --- | --- | --- |
-| ARN-44 acceptance contract | ChatGPT | ai-command-post PR #16, head 05d8461 | Draft; five Perplexity changes addressed, reviewer re-verdict pending | Independent review + validation, owner merge decision |
-| ARN-54 scoped overview/thread API | Perplexity | ai-command-post PR #15, head f3bde96 | Draft; Perplexity reported 44 synthetic tests on an earlier head, not independent verification of current head | CI, independent code review, live scoped integration using approved non-client test context |
+| ARN-44 acceptance contract | ChatGPT | ai-command-post PR #16, head 05d8461 | Perplexity independent review PASS per ARN-45; draft, not merged | CI and owner merge decision |
+| ARN-54 scoped overview/thread API | Perplexity | ai-command-post PR #15, reported head 8e45cd4 | Draft; Perplexity reports 46/46 tests. Codex review clean on earlier f3bde96; ARN-56 follow-up work ongoing | Review exact new head, approved synthetic integration |
 | ARN-35 CI protection | Claude | opsdesk-harmony PR #174, head 3fc54d4 | Draft; review not established by this snapshot | CI/reviewer/owner merge decision |
-| ARN-49..53 console UI, intake, adapter | Claude | Linear task queue under ARN-43 | Do not claim implementation complete without PR and test evidence | Focused UI/API acceptance and security checks |
+| ARN-49 UI | Claude | ai-command-post PR #18 | Perplexity CHANGES_REQUIRED: Canceled tab, charset, question count, Codex card | Fix on same branch, re-review, UI acceptance |\n| ARN-50 intake | Claude | ai-command-post PR #17 | Perplexity PASS with follow-ups; not proof of deployment | Follow-up fixes, tests, owner merge gate |\n| ARN-51..53 adapter/routing/tests | Claude | Linear under ARN-43 | Await PR-specific evidence | Focused implementation and review |\n| ARN-56 Codex follow-up | Codex | ai-command-post PR #15 | In progress, distinct agent from ChatGPT chat | Review new code and preserve signed identity |
 | ARN-45 integration checklist | ChatGPT | This document | Draft PR pending | Independent review |
 | ARN-46 handoff truthfulness | ChatGPT | Linear ARN-46 | Not yet verified complete | Separate bounded task |
 | ARN-47 acceptance/accessibility | ChatGPT | Linear ARN-47 | Not yet verified complete | Run against deployed preview, not mocks alone |
@@ -23,9 +23,9 @@ Owner: Darius. Scope: ARN-43 only; documentation and evidence tracking, not perm
 4. Verify bounded Eve adapter and safe intake. Questions may be durably recorded without executing tools; commands require explicit policy/approval.
 5. Run synthetic acceptance flows. Capture test commands, versions, trace/correlation IDs if available, exact result and observed side effects.
 6. Obtain independent reviews. Owner controls merge and any production deployment or preview-only flag change.
-7. Retain kill switch off and zero incremental AI spend except for specifically owner-approved isolated tests. Do not infer Limited Live readiness.
+7. Preserve the **observed ACP engine state** rather than assuming shutdown: Perplexity reported repo variables `ACP_ACTIVE=true`, `ACP_DRY_RUN=false`, `ACP_DEFAULT_LEAD=gemini`, with `GEMINI_API_KEY` set and a successful scheduled tick at 09:30Z. This is active internal Gemini orchestration, **not** Eve production activation or Limited Live. Any change to flags is owner-only. Zero unauthorized paid spend remains mandatory. Do not infer readiness.
 
-## Evidence rules
+## Integration evidence boundary\n\nPerplexity reported local browser verification of combined PRs #15, #17 and #18 against a **synthetic fake Linear upstream**. This is not evidence of deployed preview or live Linear behavior. Codex is its own subscription-backed work lane, separate from ChatGPT chat; signatures identify agent intent, not authenticated accounts.\n\n## Evidence rules
 
 - Record exact PR head SHA, automated test result, reviewer verdict and preview result separately.
 - A READY deployment is build/deploy evidence only, not operational correctness.
