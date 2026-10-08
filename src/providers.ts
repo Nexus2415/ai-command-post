@@ -28,7 +28,7 @@ export class ProviderError extends Error {
 }
 
 // Free tiers often answer "busy" (429/5xx) for a few seconds; retry those before giving up on the tick.
-const RETRYABLE = new Set([429, 500, 502, 503, 504]);
+const RETRYABLE = new Set([429, 500, 502, 503, 504, 529]);
 let retryDelaysMs = [5_000, 15_000];
 export function setRetryDelays(ms: number[]): void {
   retryDelaysMs = ms;

@@ -7,7 +7,7 @@ import { extractJson } from "../src/json.ts";
 import type { Issue, StateType, TaskStore } from "../src/linear.ts";
 import { COMMAND_MARKER, RECONCILED_MARKER, RESULT_MARKER, tick, type Deps } from "../src/orchestrator.ts";
 import { decide } from "../src/policy.ts";
-import type { ChatMessage, ModelClient } from "../src/providers.ts";
+import { ProviderError, type ChatMessage, type ModelClient } from "../src/providers.ts";
 import { runTool } from "../src/tools.ts";
 
 // ---------- helpers ----------
@@ -326,4 +326,85 @@ test("issues without an AI owner are left alone", async () => {
   const r = await tick(d);
   assert.equal(r.worked.length, 0);
   assert.equal(store.comments.size, 0);
+});
+
+
+test("provider failure before any tool returns task to Todo for safe retry", async () => {
+  const store = new MemoryStore();
+  const task = store.add({ title: "[Gemini] Review PR", description: "review" });
+  let calls = 0;
+  const gemini: ModelClient = {
+    async chat() {
+      calls += 1;
+      if (calls === 1) throw new Error("gemini 503: temporarily unavailable");
+      return { text: JSON.stringify({ final: "Review complete.", status: "done" }), inputTokens: 100, outputTokens: 20 };
+    },
+  };
+  const d = deps(store, { gemini });
+
+  const first = await tick(d);
+  assert.equal(store.issues.find((i) => i.id === task.id)!.stateType, "unstarted");
+  assert.match(first.waiting.join(" "), /failed before any tool ran/);
+  assert.ok(!(store.comments.get(task.id) ?? []).some((c) => c.body.startsWith(RESULT_MARKER)));
+
+  const second = await tick(d);
+  assert.equal(store.issues.find((i) => i.id === task.id)!.stateType, "completed");
+  assert.equal(second.worked.length, 1);
+});
+
+test("provider failure after a tool call stops replay and closes task blocked", async () => {
+  const store = new MemoryStore();
+  const task = store.add({ title: "[Gemini] Review PR", description: "review" });
+  let calls = 0;
+  const gemini: ModelClient = {
+    async chat() {
+      calls += 1;
+      if (calls === 1) {
+        return { text: JSON.stringify({ tool: "linear.comment", input: { body: "Internal checkpoint" } }), inputTokens: 100, outputTokens: 20 };
+      }
+      throw new Error("gemini 503: temporarily unavailable");
+    },
+  };
+  const d = deps(store, { gemini });
+
+  const r = await tick(d);
+  assert.equal(store.issues.find((i) => i.id === task.id)!.stateType, "canceled");
+  assert.match(r.worked.join(" "), /blocked after tool call/);
+  const comments = store.comments.get(task.id) ?? [];
+  assert.ok(comments.some((c) => c.body === "Internal checkpoint"));
+  assert.ok(comments.some((c) => c.body.startsWith(RESULT_MARKER) && c.body.includes("automatic replay was stopped")));
+});
+
+test("permanent provider error closes the task blocked instead of retrying forever", async () => {
+  const store = new MemoryStore();
+  const task = store.add({ title: "[Gemini] Review PR", description: "review" });
+  let calls = 0;
+  const gemini: ModelClient = {
+    async chat() {
+      calls += 1;
+      throw new ProviderError("gemini", 401, "invalid API key");
+    },
+  };
+  const d = deps(store, { gemini });
+  await tick(d);
+  assert.equal(store.issues.find((i) => i.id === task.id)!.stateType, "canceled");
+  assert.ok((store.comments.get(task.id) ?? []).some((c) => c.body.startsWith(RESULT_MARKER) && c.body.includes("Permanent provider error")));
+  await tick(d);
+  assert.equal(calls, 1);
+});
+
+test("transient provider errors are retried a bounded number of times, then blocked", async () => {
+  const store = new MemoryStore();
+  const task = store.add({ title: "[Gemini] Review PR", description: "review" });
+  let calls = 0;
+  const gemini: ModelClient = {
+    async chat() {
+      calls += 1;
+      throw new ProviderError("gemini", 503, "busy");
+    },
+  };
+  const d = deps(store, { gemini });
+  for (let i = 0; i < 6; i++) await tick(d);
+  assert.equal(calls, 4);
+  assert.equal(store.issues.find((i) => i.id === task.id)!.stateType, "canceled");
 });
