@@ -23,6 +23,14 @@ Owner: Darius. Scope: ARN-43 only; documentation and evidence tracking, not perm
 
 All test counts and review claims are scoped to the cited heads. A new head invalidates earlier review unless the delta is explicitly reconciled. No merge, production deployment, flag changes, customer data or paid API calls authorized by this table.
 
+## Latest ARN-43 integration checkpoint (2026-10-08)
+
+- ARN-52 / PR #22 head `069b3d9`: targeted claim-order/read-failure corrections; per-task comment claims still are not atomic execution leases.
+- ARN-56 / PR #26 head `b6f61be`: `[Question]` exclusion checks implemented; stacked on #22, so review/merge order is significant.
+- ARN-58 / PR #27 head `b97e681`: inert OIDC request construction only. GitHub Validate 37830463604 passed and ChatGPT gave source/CI PASS; dispatch remains `unsupported`/503. No cross-project trust, atomic budget reservation or live Eve authorization is proven.
+- ARN-59: Perplexity's single atomic claim/budget design research request is outstanding; do not re-ping without a response.
+- ARN-60: Codex independent combined engine review remains queued. No stable combined integration PR is verified, and Codex's separate runtime reported missing GitHub issue API/Linear access; do not dispatch a duplicate task.
+
 ## Integration order and gates
 
 1. Freeze question/command contract via ARN-44 and reconcile backend API fields under ARN-54.
