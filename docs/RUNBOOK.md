@@ -8,12 +8,12 @@
   - `ACP_DRY_RUN` — `true` (default) plans but writes nothing to Linear/GitHub; `false` = live writes.
   - `ACP_MONTHLY_BUDGET_USD` — spend cap, default `0` (free tiers only).
   - `ACP_ALLOW_PULL_REQUESTS` — default `false`; engine PRs are always draft.
-- The first log line of a run states the mode, e.g. `ACTIVE · live writes · cap $0 · agents online: Gemini`.
+- The first log line of a run states the mode, e.g. `ACTIVE · live writes · cap $0 · agents online: Gemini`. "Online" means a key is configured, not that the provider was reachable; reachability shows only when a call succeeds or fails in that run.
 
 ## Provider errors
-- HTTP retries (`src/providers.ts`): 429/500/502/503/504 are retried after 5 s and 15 s before failing.
+- HTTP retries (`src/providers.ts`): 429/500/502/503/504/529 are retried after 5 s and 15 s before failing.
 - Requeue rules (`src/orchestrator.ts`):
-  - Transient failure (status 0, 408, 425, 429, 5xx, 529) **before any tool call**: issue goes back to unstarted with an `ACP retry` comment; picked up next run. Max 3 retries.
+  - Transient failure (exactly status 0, 408, 425, 429, 500, 502, 503, 504 or 529; other 5xx codes are permanent) **before any tool call**: issue goes back to unstarted with an `ACP retry` comment; picked up next run. Max 3 retries.
   - Retries exhausted, or a permanent error: comment `## Result … blocked` and set the issue to Canceled.
   - Failure **after** a tool call: blocked immediately (never replayed, to avoid duplicate writes).
 - To retry a blocked task, reopen it in Linear (or re-issue the command).
@@ -28,6 +28,7 @@ Resume by reversing the change.
 - Ledger file: `.acp/ledger.json` (override with `ACP_LEDGER_PATH`), persisted between runs in the Actions cache (`acp-ledger-*`).
 - Each run prints the budget summary in its log; open the latest Engine run to see month-to-date spend vs. cap.
 - With cap `$0`, any call that would cost money is refused.
+- The ledger lives in a cache, which GitHub can evict, so it is a best-effort record, not a durable guarantee of paid spend. Paid keys stay off until a durable ledger exists.
 
 ## Keys and models
 - Only Gemini (free tier) is keyed (`GEMINI_API_KEY`). Linear, Firecrawl and Vercel keys are tools, not models.
