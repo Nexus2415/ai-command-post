@@ -348,7 +348,7 @@ export async function tick(d: Deps): Promise<TickReport> {
 
   const newCommands = issues.filter((i) => !isQuestion(i) && isCommand(i) && OPEN.includes(i.stateType) && i.childIds.length === 0);
   const tasks = issues.filter((i) => !isQuestion(i) && !isCommand(i) && OPEN.includes(i.stateType));
-  const runningCommands = issues.filter((i) => isCommand(i) && i.stateType === "started" && i.childIds.length > 0);
+  const runningCommands = issues.filter((i) => !isQuestion(i) && isCommand(i) && i.stateType === "started" && i.childIds.length > 0);
 
   if (!d.cfg.active) {
     report.waiting.push(`Engine is off (ACP_ACTIVE=false). ${newCommands.length} command(s) and ${tasks.length} task(s) waiting.`);

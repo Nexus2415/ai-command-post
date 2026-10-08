@@ -389,3 +389,14 @@ test("ARN-56: [Question] issues are never worked or planned, even with Gemini ow
   assert.ok(isQuestion({ title: " \t[Question] x" } as any));
   assert.ok(!isQuestion({ title: "Re: [Question] x" } as any));
 });
+
+test("ARN-56: a started command renamed to [Question] is never reconciled", async () => {
+  const store = new MemoryStore();
+  const cmd = store.add({ title: "[Question] was a command", description: COMMAND_MARKER, stateType: "started" });
+  store.add({ title: "[Gemini] a", parentId: cmd.id, stateType: "completed" });
+  const seen: ChatMessage[][] = [];
+  await tick(deps(store, { gemini: scripted(["summary"], seen) }));
+  assert.equal(seen.length, 0);
+  assert.equal(store.issues.find((i) => i.id === cmd.id)!.stateType, "started");
+  assert.equal(store.comments.get(cmd.id), undefined);
+});
