@@ -4,9 +4,9 @@
 // Roster shows observed Linear workload only. Agent connection is never claimed to be live.
 (function (root) {
   "use strict";
-  const TABS = ["done", "active", "queued", "blocked", "review"];
-  const TAB_LABEL = { done: "Done", active: "Active", queued: "Queued", blocked: "Blocked", review: "Review" };
-  const AGENT_NAME = { chatgpt: "ChatGPT", claude: "Claude", gemini: "Gemini", perplexity: "Perplexity" };
+  const TABS = ["done", "active", "queued", "blocked", "review", "canceled"];
+  const TAB_LABEL = { done: "Done", active: "Active", queued: "Queued", blocked: "Blocked", review: "Review", canceled: "Canceled" };
+  const AGENT_NAME = { chatgpt: "ChatGPT", claude: "Claude", codex: "Codex", gemini: "Gemini", perplexity: "Perplexity" };
   const ID_RE = /^ARN-[1-9]\d{0,8}$/;
 
   // ---- pure helpers (unit-tested in test/console-ui.test.ts) ----
@@ -50,7 +50,10 @@
     if (!isFinite(t)) return "unknown";
     return new Date(t).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
   }
-  const api = { TABS, laneCounts, laneIssues, rosterRow, connectionLabel, intakeBody, errorMessage, isIssueId: s => ID_RE.test(String(s)) };
+  // Owner questions filed through intake are read-only, not unclaimed work.
+  const isQuestion = it => /^\[Question\]/.test(String(it && it.title || ""));
+  const ownerLabel = it => AGENT_NAME[it && it.owner] || (isQuestion(it) ? "Owner question · read-only" : "Unclaimed");
+  const api = { ownerLabel, TABS, laneCounts, laneIssues, rosterRow, connectionLabel, intakeBody, errorMessage, isIssueId: s => ID_RE.test(String(s)) };
   root.ACPConsoleCore = api;
   if (typeof document === "undefined") return;
 
@@ -129,7 +132,7 @@
       const btn = el("button", "linkbtn", it.title || it.id);
       btn.type = "button"; btn.onclick = () => openThread(it.id);
       const meta = el("div", "meta");
-      meta.append(el("span", null, it.id), el("span", "ag", AGENT_NAME[it.owner] || "Unclaimed"), el("span", null, it.status || ""));
+      meta.append(el("span", null, it.id), el("span", "ag", ownerLabel(it)), el("span", null, it.status || ""));
       if (it.priority === 1 || it.priority === 2) meta.appendChild(el("span", "prio-" + it.priority, it.priority === 1 ? "Urgent" : "High"));
       meta.appendChild(el("span", null, "updated " + fmtTime(it.updatedAt)));
       body.append(btn, meta);
@@ -179,7 +182,7 @@
       if (seq !== threadSeq) return;
       const is = t.issue || {};
       $("cDetailTitle").textContent = (is.id || id) + " · " + (is.title || "");
-      $("cDetailMeta").textContent = (is.status || "Unknown") + " · " + (AGENT_NAME[is.owner] || "Unclaimed") + " · last updated " + fmtTime(t.fetchedAt);
+      $("cDetailMeta").textContent = (is.status || "Unknown") + " · " + ownerLabel(is) + " · last updated " + fmtTime(t.fetchedAt);
       const body = $("cDetailBody");
       if (is.url) { const a = el("a", null, "Open in Linear"); a.href = is.url; a.target = "_blank"; a.rel = "noopener noreferrer"; body.appendChild(a); }
       body.appendChild(el("pre", "desc", is.description || "No description."));

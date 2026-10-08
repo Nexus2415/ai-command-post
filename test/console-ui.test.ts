@@ -14,10 +14,17 @@ const overview = {
   agents: [{ key: "claude", connection: "not_verified", active: ["ARN-1"], queued: [], blocked: [], review: [], nextTask: null }],
 };
 
-test("console counts the five lanes and never folds canceled into done", () => {
-  assert.deepEqual({ ...core.laneCounts(overview) }, { done: 1, active: 1, queued: 0, blocked: 0, review: 0 });
+test("console shows canceled as its own lane, never folded into done", () => {
+  assert.deepEqual({ ...core.laneCounts(overview) }, { done: 1, active: 1, queued: 0, blocked: 0, review: 0, canceled: 1 });
   assert.equal(core.laneIssues(overview, "done").length, 1);
-  assert.deepEqual({ ...core.laneCounts(null) }, { done: 0, active: 0, queued: 0, blocked: 0, review: 0 });
+  assert.equal(core.laneIssues(overview, "canceled")[0].id, "ARN-3");
+  assert.deepEqual({ ...core.laneCounts(null) }, { done: 0, active: 0, queued: 0, blocked: 0, review: 0, canceled: 0 });
+});
+
+test("owner questions read as read-only, not unclaimed work; Codex is named", () => {
+  assert.equal(core.ownerLabel({ title: "[Question] status?", owner: null }), "Owner question · read-only");
+  assert.equal(core.ownerLabel({ title: "Do it", owner: null }), "Unclaimed");
+  assert.equal(core.ownerLabel({ title: "[Codex] x", owner: "codex" }), "Codex");
 });
 
 test("roster shows workload and never claims an agent is online", () => {
