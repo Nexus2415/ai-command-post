@@ -187,3 +187,12 @@ test("ARN-54: Codex metadata survives non-agent prefixes; agent prefixes and oth
   assert.equal(ownerOf({ title: "[Question] x", labels: { nodes: [] }, assignee: null }), null);
   assert.equal(ownerOf({}), null);
 });
+
+test("ARN-54: an owner question is never an agent's nextTask", async () => {
+  const { overviewOf } = await import("../api/lib/console-state.js");
+  const q = { id: "q", identifier: "ARN-1", title: "[Question] what?", priority: 1, state: { name: "Todo", type: "unstarted" }, labels: { nodes: [{ name: "codex" }] } };
+  const t = { id: "t", identifier: "ARN-2", title: "[Codex] fix", priority: 3, state: { name: "Todo", type: "unstarted" }, labels: { nodes: [] } };
+  const codex = overviewOf([q, t], "now").agents.find((a: any) => a.key === "codex")!;
+  assert.equal(codex.nextTask, "ARN-2");
+  assert.equal(overviewOf([q], "now").agents.find((a: any) => a.key === "codex")!.nextTask, null);
+});

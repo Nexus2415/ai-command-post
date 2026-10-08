@@ -65,7 +65,7 @@ export function overviewOf(nodes, fetchedAt, hasNextPage = false) {
   const lanes = Object.fromEntries(LANES.map(k => [k, issues.filter(i => i.lane === k).map(i => i.id)]));
   const agents = AGENTS.map(key => {
     const assigned = issues.filter(i => i.owner === key);
-    const next = assigned.filter(i => i.lane === "queued")
+    const next = assigned.filter(i => i.lane === "queued" && i.kind === "task")
       .sort((a, b) => (a.priority || 5) - (b.priority || 5) || a.id.localeCompare(b.id, undefined, { numeric: true }))[0];
     return {
       key, connection: "not_verified",
