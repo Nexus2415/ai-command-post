@@ -4,7 +4,7 @@ import { agentFor } from "../src/agents.ts";
 import { Budget } from "../src/budget.ts";
 import { loadConfig, type AgentKey } from "../src/config.ts";
 import { DryRunStore, type Issue, type StateType, type TaskStore } from "../src/linear.ts";
-import { COMMAND_MARKER, EXECUTOR_MARKER, RECONCILED_MARKER, RESULT_MARKER, claimStatus, claimsOn, tick, type Deps } from "../src/orchestrator.ts";
+import { COMMAND_MARKER, EXECUTOR_MARKER, isQuestion, RECONCILED_MARKER, RESULT_MARKER, claimStatus, claimsOn, tick, type Deps } from "../src/orchestrator.ts";
 import type { ChatMessage, ModelClient } from "../src/providers.ts";
 
 // Fakes only (copied from engine.test.ts so this file stays independent).
@@ -369,4 +369,23 @@ test("dry-run over a store without getLabels keeps the snapshot label fence", as
   d.store = dry;
   await tick(d);
   assert.equal(seen.length, 0, "fenced command never reaches the model");
+});
+
+test("ARN-56: [Question] issues are never worked or planned, even with Gemini ownership", async () => {
+  const store = new MemoryStore();
+  const q1 = store.add({ title: "[Question] what is blocked?", labels: ["gemini"] });
+  const q2 = store.add({ title: "  [question] status", assignee: "Gemini" } as any);
+  const q3 = store.add({ title: "[QUESTION] plan it", labels: ["gemini"], description: `**${COMMAND_MARKER}**` });
+  const t = store.add({ title: "[Gemini] real task" });
+  const seen: ChatMessage[][] = [];
+  await tick(deps(store, { gemini: scripted([done], seen) }));
+  assert.equal(seen.length, 1, "only the normal task reached the model");
+  for (const q of [q1, q2, q3]) {
+    assert.equal(store.issues.find((i) => i.id === q.id)!.stateType, "unstarted");
+    assert.equal(store.comments.get(q.id), undefined, "no claim, plan or result written");
+  }
+  assert.equal(q3.childIds.length, 0, "question with command marker is not planned");
+  assert.equal(store.issues.find((i) => i.id === t.id)!.stateType, "completed");
+  assert.ok(isQuestion({ title: " \t[Question] x" } as any));
+  assert.ok(!isQuestion({ title: "Re: [Question] x" } as any));
 });
