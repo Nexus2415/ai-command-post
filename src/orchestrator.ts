@@ -3,8 +3,13 @@ import { Budget, estimateTokens } from "./budget.ts";
 import { isAgentKey, type AgentKey, type Config } from "./config.ts";
 import { extractJson } from "./json.ts";
 import type { Issue, TaskStore } from "./linear.ts";
-import type { ChatMessage, ModelClient } from "./providers.ts";
+import { ProviderError, type ChatMessage, type ModelClient } from "./providers.ts";
 import { runTool, TOOL_DOCS, type ToolCall, type ToolEnv } from "./tools.ts";
+
+const RETRY_MARKER = "ACP retry";
+const MAX_PROVIDER_RETRIES = 3;
+// HTTP 0 means no response (network error/timeout); 408/425/429/5xx are worth retrying. Everything else is permanent.
+const TRANSIENT_STATUS = new Set([0, 408, 425, 429, 500, 502, 503, 504]);
 
 export const COMMAND_MARKER = "Command issued from AI Command Post";
 export const RESULT_MARKER = "## Result";
@@ -65,8 +70,10 @@ async function callModel(d: Deps, agent: AgentKey, issue: Issue, messages: ChatM
   const est = estimateTokens(messages.map((m) => m.content).join("\n"));
   const ok = d.budget.check(agent, est, maxOut);
   if (!ok.ok) return { blocked: ok.reason };
+  // Reserve the worst-case charge before the request. A paid call can be billed even when the response is lost
+  // (timeout, dropped connection, malformed body), so recording only after success would let retries exceed the cap.
+  d.budget.record({ agent, issue: issue.identifier, inputTokens: est, outputTokens: maxOut });
   const r = await client.chat(messages, { maxOutputTokens: maxOut });
-  d.budget.record({ agent, issue: issue.identifier, inputTokens: r.inputTokens || est, outputTokens: r.outputTokens || estimateTokens(r.text) });
   return r.text;
 }
 
@@ -142,7 +149,19 @@ export async function work(d: Deps, task: Issue, agent: AgentKey, report: TickRe
     } catch (e) {
       const reason = e instanceof Error ? e.message : String(e);
       if (!toolCallAttempted) {
+        // Permanent errors (bad key, rejected model/request) never succeed on retry: close as blocked.
+        // Transient errors are requeued, but only a bounded number of times so one task cannot starve the queue.
+        const permanent = e instanceof ProviderError && !TRANSIENT_STATUS.has(e.status);
+        const priorRetries = permanent ? 0 : (await d.store.getComments(task.id)).filter((c) => c.body.startsWith(RETRY_MARKER)).length;
+        if (permanent || priorRetries >= MAX_PROVIDER_RETRIES) {
+          const why = permanent ? "Permanent provider error" : `Provider still failing after ${MAX_PROVIDER_RETRIES} retries`;
+          await d.store.comment(task.id, `${RESULT_MARKER} (${profile.name}, blocked)\n\n${why}; not retrying automatically. Error: ${reason}`);
+          await d.store.setState(task.id, d.cfg.linearTeamKey, "canceled");
+          report.worked.push(`${task.identifier} blocked: ${why.toLowerCase()}`);
+          return;
+        }
         // No tool ran, so replay is safe. Return the task to Todo instead of orphaning it In Progress.
+        await d.store.comment(task.id, `${RETRY_MARKER} ${priorRetries + 1}/${MAX_PROVIDER_RETRIES}: transient provider failure (${reason}).`);
         await d.store.setState(task.id, d.cfg.linearTeamKey, "unstarted");
         report.waiting.push(`${task.identifier}: provider/model call failed before any tool ran (${reason})`);
         return;
