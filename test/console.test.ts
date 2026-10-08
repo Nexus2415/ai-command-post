@@ -85,6 +85,20 @@ test("agent recognition is anchored and next queued task respects actual priorit
   assert.equal(body.agents.find(a => a.key === "perplexity")?.nextTask, "ARN-54");
 });
 
+test("ownership preserves engine prefix precedence, whitespace, aliases, labels and assignees", () => {
+  assert.equal(ownerOf("  [Claude] UI"), "claude");
+  assert.equal(ownerOf("[OpenAI] Plan"), "chatgpt");
+  assert.equal(ownerOf({ title: "No prefix", labels: { nodes: [{ name: "gemini" }] } }), "gemini");
+  assert.equal(ownerOf({ title: "No prefix", assignee: { name: "Perplexity" } }), "perplexity");
+  assert.equal(ownerOf({ title: "[ChatGPT] Plan", labels: { nodes: [{ name: "claude" }] } }), "chatgpt");
+  const o = overviewOf([
+    item("ARN-49", "started", { title: "UI", assignee: { name: "Claude" } }),
+    item("ARN-50", "unstarted", { title: "Intake", labels: { nodes: [{ name: "claude" }] } }),
+  ], "t");
+  assert.deepEqual(o.agents.find(a => a.key === "claude")?.active, ["ARN-49"]);
+  assert.equal(o.agents.find(a => a.key === "claude")?.nextTask, "ARN-50");
+});
+
 test("thread checks team and project after issue lookup and cannot reveal a foreign issue", async () => {
   for (const issue of [null, item("ARN-1", "started", { team: { id: "other" } }),
     item("ARN-1", "started", { project: { id: "other" } })]) {

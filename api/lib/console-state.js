@@ -1,4 +1,5 @@
 // Read-only projections. "Assigned" does not mean a consumer AI session is online.
+import { agentFor } from "../../src/agents.ts";
 export const TEAM_ID = "faa75915-076f-479a-a3fb-92af2369e6c3";
 export const PROJECT_ID = "e8cf8cda-3347-4310-aea5-e6b7c7b95b4f";
 export const AGENTS = ["chatgpt", "claude", "gemini", "perplexity"];
@@ -12,9 +13,13 @@ export function safeLinearUrl(value) {
   } catch { return null; }
 }
 
-export function ownerOf(title) {
-  const m = /^\[(ChatGPT|Claude|Gemini|Perplexity)\](?:\s|$)/i.exec(String(title || ""));
-  return m ? m[1].toLowerCase() : null;
+export function ownerOf(issueOrTitle) {
+  const issue = typeof issueOrTitle === "string" ? { title: issueOrTitle } : issueOrTitle;
+  return agentFor({
+    title: issue?.title || "",
+    labels: (issue?.labels?.nodes || []).map(x => x.name),
+    assignee: issue?.assignee?.name || null,
+  });
 }
 
 export function laneOf(issue) {
@@ -34,7 +39,7 @@ export function laneOf(issue) {
 export function projectIssue(issue) {
   return {
     id: issue.identifier, uuid: issue.id, title: issue.title || "",
-    url: safeLinearUrl(issue.url), owner: ownerOf(issue.title),
+    url: safeLinearUrl(issue.url), owner: ownerOf(issue),
     status: issue.state?.name || "Unknown", statusType: issue.state?.type || "unknown",
     lane: laneOf(issue), priority: Number.isInteger(issue.priority) ? issue.priority : 0,
     updatedAt: issue.updatedAt || null, completedAt: issue.completedAt || null,

@@ -4,7 +4,7 @@ import { TEAM_ID, PROJECT_ID, overviewOf, projectIssue, safeLinearUrl } from "./
 const LINEAR = "https://api.linear.app/graphql";
 const FIELDS = `id identifier title url priority updatedAt completedAt
   team { id } project { id } parent { identifier }
-  state { name type } labels { nodes { name } }`;
+  state { name type } labels { nodes { name } } assignee { name }`;
 const OVERVIEW = `query ConsoleOverview($team: ID!, $project: ID!) {
   issues(first: 250, orderBy: updatedAt, filter: {
     team: { id: { eq: $team } }, project: { id: { eq: $project } }
