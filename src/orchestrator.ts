@@ -15,6 +15,8 @@ export const COMMAND_MARKER = "Command issued from AI Command Post";
 export const RESULT_MARKER = "## Result";
 export const RECONCILED_MARKER = "## Command summary";
 const CLAIM_MARKER = "Claimed by";
+/** Durable executor claim, one per command/task: `ACP executor: acp:<agent>` (or `manual`, `eve`, ... for others). */
+export const EXECUTOR_MARKER = "ACP executor:";
 const MAX_SUBTASKS = 6;
 const PLAN_TOKENS = 2_000;
 const STEP_TOKENS = 2_500;
@@ -55,6 +57,53 @@ function activeLead(d: Deps, cmd: Issue): { lead: AgentKey; note: string } {
   if (d.clients[named] || !d.clients[d.cfg.defaultLead]) return { lead: named, note: "" };
   const lead = d.cfg.defaultLead;
   return { lead, note: `${AGENTS[named].name} isn't connected, so ${AGENTS[lead].name} led instead.\n\n` };
+}
+
+/*
+ * Single-executor ownership (ARN-52).
+ *
+ * Each task has at most one executor. ACP records its claim as a Linear comment `ACP executor: acp:<agent>`
+ * before it does any work, and skips any task whose comments or labels name another executor (`manual`, `eve`,
+ * another `acp:<agent>`, ...). Older ACP claims ("Claimed by <Agent> (AI Command Post).") are read as `acp:<agent>`.
+ * A label `executor:<name>` is also honoured as a claim, so a human can fence off an issue without a comment.
+ * Eve is never an ACP executor: ACP never claims for Eve and never treats an Eve claim as a result.
+ *
+ * Lock limitations, stated honestly: a Linear comment or label is NOT an atomic lock. TaskStore has no
+ * compare-and-set, so two engine runs (or ACP and a person) that read the issue before either writes can both
+ * claim it. What narrows the window: the scheduled workflow is the only ACP runner and Actions `concurrency`
+ * serialises it; claims are re-read immediately before the claim is written; and the earliest claim comment wins,
+ * so a run that loses the race sees the other claim on its next read and stops. A true guarantee needs an
+ * atomic store (e.g. a KV with conditional writes); until then, duplicate execution is unlikely, not impossible.
+ */
+export type ExecutorClaim = { executor: string; source: "comment" | "label" };
+
+export function claimsOn(labels: string[], comments: { body: string }[]): ExecutorClaim[] {
+  const out: ExecutorClaim[] = [];
+  for (const l of labels) {
+    const m = /^executor:\s*(\S+)$/i.exec(l.trim());
+    if (m) out.push({ executor: m[1]!.toLowerCase(), source: "label" });
+  }
+  for (const c of comments) {
+    const m = new RegExp(`^${EXECUTOR_MARKER}\\s*(\\S+)`, "m").exec(c.body);
+    if (m) {
+      out.push({ executor: m[1]!.toLowerCase(), source: "comment" });
+      continue;
+    }
+    const legacy = new RegExp(`^${CLAIM_MARKER} (.+?) \\(AI Command Post\\)`).exec(c.body);
+    const key = legacy ? AGENT_LIST.find((a) => a.name === legacy[1])?.key : undefined;
+    if (key) out.push({ executor: `acp:${key}`, source: "comment" });
+  }
+  return out;
+}
+
+/** "own" = already claimed by this ACP agent; "foreign" = another executor holds it; "free" = unclaimed. */
+export function claimStatus(claims: ExecutorClaim[], agent: AgentKey): "own" | "foreign" | "free" {
+  if (!claims.length) return "free";
+  const me = `acp:${agent}`;
+  // Earliest comment claim wins; any foreign label claim also fences the issue off.
+  if (claims.some((c) => c.source === "label" && c.executor !== me)) return "foreign";
+  const first = claims.find((c) => c.source === "comment") ?? claims[0]!;
+  return first.executor === me ? "own" : "foreign";
 }
 
 const RULES = `Rules you must follow:
@@ -138,7 +187,13 @@ export async function work(d: Deps, task: Issue, agent: AgentKey, report: TickRe
     { role: "user", content: `Task ${task.identifier}: ${task.title}\n\n${task.description}` },
   ];
 
-  await d.store.comment(task.id, `${CLAIM_MARKER} ${profile.name} (AI Command Post).`);
+  // Re-read claims immediately before writing ours, to narrow (not close) the race window.
+  const status = claimStatus(claimsOn(task.labels, await d.store.getComments(task.id)), agent);
+  if (status === "foreign") {
+    report.waiting.push(`${task.identifier}: claimed by another executor; ACP will not run it`);
+    return;
+  }
+  if (status === "free") await d.store.comment(task.id, `${EXECUTOR_MARKER} acp:${agent}\n\n${CLAIM_MARKER} ${profile.name} (AI Command Post).`);
   await d.store.setState(task.id, d.cfg.linearTeamKey, "started");
 
   let toolCallAttempted = false;
@@ -236,7 +291,9 @@ async function reconcile(d: Deps, cmd: Issue, children: Issue[], report: TickRep
     return;
   }
   await d.store.comment(cmd.id, `${RECONCILED_MARKER} (${AGENTS[lead].name})\n\n${out}`);
-  await d.store.setState(cmd.id, d.cfg.linearTeamKey, "completed");
+  // Never report a command as completed when none of its sub-tasks actually completed (all canceled/blocked).
+  const anyDone = children.some((c) => c.stateType === "completed");
+  await d.store.setState(cmd.id, d.cfg.linearTeamKey, anyDone ? "completed" : "canceled");
   report.reconciled.push(cmd.identifier);
 }
 
@@ -267,7 +324,13 @@ export async function tick(d: Deps): Promise<TickReport> {
   const ordered = [...tasks].sort((a, b) => (a.priority || 9) - (b.priority || 9) || a.createdAt.localeCompare(b.createdAt));
   for (const t of ordered) {
     const agent = agentFor({ title: t.title, labels: t.labels, assignee: t.assignee });
+    // No owner, or an owner that isn't connected: leave it. An offline preferred agent never silently becomes
+    // another agent (e.g. Gemini); only an explicit title prefix, label or assignee routes a task.
     if (!agent || busy.has(agent) || !d.clients[agent]) continue;
+    if (claimStatus(claimsOn(t.labels, await d.store.getComments(t.id)), agent) === "foreign") {
+      report.waiting.push(`${t.identifier}: claimed by another executor; skipped`);
+      continue;
+    }
     busy.add(agent);
     // Check spend before claiming, so a budget-blocked agent never leaves a task stuck "in progress".
     const pre = d.budget.check(agent, estimateTokens(t.description) + 1_000, STEP_TOKENS);
