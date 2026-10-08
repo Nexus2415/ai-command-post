@@ -5,7 +5,7 @@ const MAX_TEXT = 4000;
 const REMOTE_EXECUTION_UNSUPPORTED = "No supported, authenticated remote Perplexity Computer execution trigger has been verified.";
 export const PERPLEXITY_CONNECTION = Object.freeze({
   provider: "perplexity-computer",
-  mode: "manual-handoff-only",
+  mode: "native-event-automation-not-configured",
   remoteExecutionReady: false,
   paidApiAuthorized: false,
 });
@@ -21,12 +21,14 @@ export function makePerplexityHandoff(input) {
   const link = "https://linear.app/arnexyia/issue/" + issue.toLowerCase();
   return {
     ok: true,
-    status: "awaiting-manual-start",
+    status: "awaiting-native-automation-setup",
     provider: "perplexity-computer",
     issue,
     issueUrl: link,
-    instruction: "Open " + link + ". Read the current issue and comments; execute only its bounded public/synthetic research task, then post one sourced result in the same issue. Sign — Perplexity Computer.",
+    instruction: "When a configured Perplexity Computer native Linear event automation triggers for " + issue + ", open " + link + ". Confirm this issue explicitly assigns Perplexity a bounded public/synthetic research task, read the newest comments, and record one sourced result in the same issue. Do not execute on unrelated issue changes. Sign — Perplexity Computer.",
     remoteExecutionReady: false,
+    triggerTransport: "perplexity-native-linear-event-automation",
+    requiredVerification: ["owner-configured automation", "scoped Linear authorization", "real event-delivery test", "usage limits"],
   };
 }
 
