@@ -75,7 +75,7 @@ test("health uses only the fixed route with bearer auth and never claims executi
 });
 
 test("malformed or unrecognised 2xx health is unknown, not ready", async () => {
-  for (const body of ["not json", "{}", JSON.stringify({ ok: "yes" }), JSON.stringify({ ok: true }), JSON.stringify({ ok: true, status: "ready", workflowId: "" }), "null"]) {
+  for (const body of ["not json", "{}", JSON.stringify({ ok: "yes" }), JSON.stringify({ ok: true }), JSON.stringify({ ok: true, status: "ready", workflowId: "wf_1", extra: 1 }), JSON.stringify({ ok: true, status: "ready", workflowId: "" }), "null"]) {
     const { f } = fake(() => new Response(body, { status: 200 }));
     const r = await handle(req({ action: "health" }), env, f);
     assert.equal((r.body as any).status, "unknown");

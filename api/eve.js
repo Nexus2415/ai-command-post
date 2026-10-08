@@ -75,10 +75,10 @@ export async function handle(req, env, f = fetch) {
     const r = await call(env, f, "GET", HEALTH_PATH);
     if (r.failed) return out(502, { status: "unreachable", reason: "Eve health check did not answer." });
     if (!r.res.ok) return out(200, { status: "not_ready", httpStatus: r.res.status, executionReady: false });
-    // Eve 0.71.3 client/health-schema.js: exactly {ok:true, status:"ready", workflowId:<non-empty string>}. Anything else is unknown.
+    // Eve 0.71.3 client/health-schema.js (.strict()): exactly {ok:true, status:"ready", workflowId:<non-empty string>}. Anything else is unknown.
     // Reachable is transport only: execution readiness is never claimed while dispatch is unsupported.
     const j = await r.res.json().catch(() => null);
-    const healthy = j && typeof j === "object" && j.ok === true && j.status === "ready" && typeof j.workflowId === "string" && j.workflowId.length > 0;
+    const healthy = j && typeof j === "object" && !Array.isArray(j) && Object.keys(j).length === 3 && j.ok === true && j.status === "ready" && typeof j.workflowId === "string" && j.workflowId.length > 0;
     if (!healthy) return out(502, { status: "unknown", retry: false, reason: "Eve health answered with an unrecognised body.", executionReady: false });
     return out(200, { status: "reachable", httpStatus: r.res.status, executionReady: false });
   }
