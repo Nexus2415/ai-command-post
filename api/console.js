@@ -12,7 +12,7 @@ const OVERVIEW = `query ConsoleOverview($team: ID!, $project: ID!) {
 }`;
 const THREAD = `query ConsoleThread($identifier: String!) {
   issue(id: $identifier) { ${FIELDS} description
-    comments(last: 100) {
+    comments(last: 100, orderBy: createdAt) {
       nodes { id body createdAt updatedAt url user { name } }
       pageInfo { hasPreviousPage }
     }
@@ -82,7 +82,9 @@ export async function handle(req, env, f = fetch, now = () => new Date()) {
     if (!Array.isArray(data.issue.comments?.nodes)) throw new Error("Invalid comments response");
     return { status: 200, body: {
       issue: { ...projectIssue(data.issue), description: data.issue.description || "" },
-      comments: data.issue.comments.nodes.map(c => ({
+      comments: [...data.issue.comments.nodes]
+        .sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")) || String(a.id).localeCompare(String(b.id)))
+        .map(c => ({
         id: c.id, body: c.body || "", author: c.user?.name || "Unknown",
         authorVerifiedAsAgent: false,
         createdAt: c.createdAt, updatedAt: c.updatedAt, url: safeLinearUrl(c.url),

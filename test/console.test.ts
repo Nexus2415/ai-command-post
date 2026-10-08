@@ -129,6 +129,20 @@ test("URL sanitizer rejects lookalikes, credentials, and non-HTTPS links", () =>
   assert.equal(safeLinearUrl("https://linear.app/arnexyia/issue/ARN-1"), "https://linear.app/arnexyia/issue/ARN-1");
 });
 
+test("thread comments are explicitly chronological regardless of upstream node order", async () => {
+  const { f, calls } = mock({ data: { issue: {
+    ...item(), comments: {
+      nodes: [
+        { id: "b", body: "second", createdAt: "2026-10-08T15:00:00Z" },
+        { id: "a", body: "first", createdAt: "2026-10-08T14:00:00Z" },
+      ], pageInfo: { hasPreviousPage: false },
+    },
+  } } });
+  const result: any = await handle(req({ action: "thread", identifier: "ARN-54" }), env, f);
+  assert.deepEqual(result.body.comments.map((c: any) => c.id), ["a", "b"]);
+  assert.match(calls[0].query, /comments\(last: 100, orderBy: createdAt\)/);
+});
+
 test("upstream errors and malformed replies are sanitized; no false empty success", async () => {
   for (const data of [{ errors: [{ message: "secret lin pw" }] }, { data: {} }]) {
     const { f } = mock(data);
