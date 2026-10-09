@@ -329,3 +329,14 @@ test("reconciliation uses the ACP lead recorded in the claim, not the current ac
   assert.equal(claudeSeen.length, 0, "current lead never called");
   assert.equal(geminiSeen.length, 1, "recorded lead reconciles");
 });
+
+test("reconciliation keeps an ACP lead recorded only in an executor label", async () => {
+  const store = new MemoryStore();
+  const running = store.add({ title: "[Claude] Running", description: COMMAND_MARKER, stateType: "started", labels: ["executor:acp:gemini"] });
+  store.add({ title: "[Gemini] a", parentId: running.id, stateType: "completed" });
+  const claudeSeen: ChatMessage[][] = [];
+  const geminiSeen: ChatMessage[][] = [];
+  await tick(deps(store, { claude: scripted(["c"], claudeSeen), gemini: scripted(["g"], geminiSeen) }, { ACP_DEFAULT_LEAD: "gemini" }));
+  assert.equal(claudeSeen.length, 0);
+  assert.equal(geminiSeen.length, 1);
+});

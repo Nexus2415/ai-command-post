@@ -115,7 +115,7 @@ async function commandLead(d: Deps, cmd: Issue, report: TickReport, phase: "plan
   const labels = d.store.getLabels ? await d.store.getLabels(cmd.id) : cmd.labels;
   const claims = claimsOn(labels, await d.store.getComments(cmd.id));
   // A planned command keeps the ACP lead that claimed it, even if the active lead has since changed (fallback recovery).
-  const winner = claims.find((c) => c.source === "comment");
+  const winner = claims.find((c) => c.source === "comment") ?? claims.find((c) => c.source === "label" && c.executor.startsWith("acp:"));
   const recorded = phase === "reconcile" && winner?.executor.startsWith("acp:") && !claims.some((c) => c.source === "label" && c.executor !== winner.executor);
   const recordedKey = recorded ? winner!.executor.slice("acp:".length) : undefined;
   if (recordedKey && isAgentKey(recordedKey)) lead = recordedKey;
