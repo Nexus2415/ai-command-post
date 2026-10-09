@@ -43,6 +43,11 @@ const OPEN: Issue["stateType"][] = ["triage", "backlog", "unstarted"];
 /** Closed for reconciliation. Linear teams have a separate "duplicate" state type. */
 const DONE: Issue["stateType"][] = ["completed", "canceled", "duplicate"];
 
+/** Owner questions (ARN-56) are read-only: never planned or worked, whatever their labels or assignee. */
+export function isQuestion(i: Issue): boolean {
+  return /^\s*\[question\]/i.test(i.title);
+}
+
 export function isCommand(i: Issue): boolean {
   return i.parentId === null && i.description.includes(COMMAND_MARKER);
 }
@@ -341,9 +346,9 @@ export async function tick(d: Deps): Promise<TickReport> {
   const issues = await d.store.listOpenAndRecent(d.cfg.linearTeamKey);
   const byId = new Map(issues.map((i) => [i.id, i]));
 
-  const newCommands = issues.filter((i) => isCommand(i) && OPEN.includes(i.stateType) && i.childIds.length === 0);
-  const tasks = issues.filter((i) => !isCommand(i) && OPEN.includes(i.stateType));
-  const runningCommands = issues.filter((i) => isCommand(i) && i.stateType === "started" && i.childIds.length > 0);
+  const newCommands = issues.filter((i) => !isQuestion(i) && isCommand(i) && OPEN.includes(i.stateType) && i.childIds.length === 0);
+  const tasks = issues.filter((i) => !isQuestion(i) && !isCommand(i) && OPEN.includes(i.stateType));
+  const runningCommands = issues.filter((i) => !isQuestion(i) && isCommand(i) && i.stateType === "started" && i.childIds.length > 0);
 
   if (!d.cfg.active) {
     report.waiting.push(`Engine is off (ACP_ACTIVE=false). ${newCommands.length} command(s) and ${tasks.length} task(s) waiting.`);
