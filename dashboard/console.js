@@ -43,7 +43,8 @@
     const msg = body && typeof body.error === "string" ? body.error : "";
     if (status === 404 && what === "intake") return "Intake endpoint isn't available yet (404). Nothing was sent.";
     if (status === 401) return "Password required.";
-    return (msg || ("Request failed (HTTP " + status + ").")) + (what === "intake" ? " Nothing was confirmed as received." : "");
+    const base = msg || ("Request failed (HTTP " + status + ").");
+    return what === "intake" ? base + (/[.!?]$/.test(base) ? " " : ". ") + "Nothing was confirmed as received." : base;
   }
   function fmtTime(iso) {
     const t = Date.parse(iso || "");
@@ -53,7 +54,9 @@
   // Owner questions filed through intake are read-only, not unclaimed work.
   const isQuestion = it => /^\[Question\]/.test(String(it && it.title || ""));
   const ownerLabel = it => AGENT_NAME[it && it.owner] || (isQuestion(it) ? "Owner question · read-only" : "Unclaimed");
-  const api = { ownerLabel, TABS, laneCounts, laneIssues, rosterRow, connectionLabel, intakeBody, errorMessage, isIssueId: s => ID_RE.test(String(s)) };
+  // Only plain http(s) links are rendered; javascript:, data: and the like are dropped.
+  function safeUrl(u) { const s = String(u || "").trim(); return /^https?:\/\/[^\s]+$/i.test(s) ? s : null; }
+  const api = { safeUrl, ownerLabel, TABS, laneCounts, laneIssues, rosterRow, connectionLabel, intakeBody, errorMessage, isIssueId: s => ID_RE.test(String(s)) };
   root.ACPConsoleCore = api;
   if (typeof document === "undefined") return;
 
@@ -62,18 +65,19 @@
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = String(text); return e; };
   let pendingKey = null, overview = null, tab = "active", intent = "command", busy = false, lastFocus = null, threadSeq = 0;
 
-  function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
-  function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+  // The password lives in memory for this tab only; it is never written to browser storage (ARN-53).
+  let password = "";
+  try { localStorage.removeItem("acp.pw"); } catch (e) {}
 
   async function post(path, body, retry) {
     let r;
     try {
-      r = await fetch(path, { method: "POST", headers: { "content-type": "application/json", "x-acp-password": lsGet("acp.pw") || "" }, body: JSON.stringify(body) });
+      r = await fetch(path, { method: "POST", headers: { "content-type": "application/json", "x-acp-password": password }, body: JSON.stringify(body) });
     } catch (e) { const err = new Error("Network error: couldn't reach the server."); err.status = 0; throw err; }
     const j = await r.json().catch(() => ({}));
     if (r.status === 401 && retry !== false) {
       const pw = window.prompt("Password for AI Command Post");
-      if (pw) { lsSet("acp.pw", pw); return post(path, body, false); }
+      if (pw) { password = pw; return post(path, body, false); }
     }
     if (!r.ok) { const err = new Error(errorMessage(r.status, j, path === "/api/intake" ? "intake" : "console")); err.status = r.status; throw err; }
     return j;
@@ -184,7 +188,8 @@
       $("cDetailTitle").textContent = (is.id || id) + " · " + (is.title || "");
       $("cDetailMeta").textContent = (is.status || "Unknown") + " · " + ownerLabel(is) + " · last updated " + fmtTime(t.fetchedAt);
       const body = $("cDetailBody");
-      if (is.url) { const a = el("a", null, "Open in Linear"); a.href = is.url; a.target = "_blank"; a.rel = "noopener noreferrer"; body.appendChild(a); }
+      const href = safeUrl(is.url);
+      if (href) { const a = el("a", null, "Open in Linear"); a.href = href; a.target = "_blank"; a.rel = "noopener noreferrer"; body.appendChild(a); }
       body.appendChild(el("pre", "desc", is.description || "No description."));
       const comments = Array.isArray(t.comments) ? t.comments : [];
       body.appendChild(el("h3", "eyebrow", "Comments (" + comments.length + (t.hasPreviousPage ? ", older not shown" : "") + ")"));
