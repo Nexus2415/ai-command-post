@@ -305,3 +305,14 @@ test("a planned command keeps its recorded ACP lead after the active lead change
   assert.ok(!r.waiting.some((w) => w.includes("command claimed by another executor")));
   assert.equal(claimsFor(store, running.id).length, 1, "no second claim");
 });
+
+test("reconciliation budget preflight counts child results, so a too-large prompt leaves no claim", async () => {
+  const store = new MemoryStore();
+  const running = store.add({ title: "[Claude] Running", description: COMMAND_MARKER, stateType: "started" });
+  const child = store.add({ title: "[Claude] a", parentId: running.id, stateType: "completed" });
+  await store.comment(child.id, `${RESULT_MARKER}\n${"x".repeat(200_000)}`);
+  const seen: ChatMessage[][] = [];
+  await tick(deps(store, { claude: scripted(["summary"], seen) }, { ACP_MONTHLY_BUDGET_USD: "0.05" }));
+  assert.equal(seen.length, 0, "no model call");
+  assert.equal(claimsFor(store, running.id).length, 0, "no stale claim");
+});

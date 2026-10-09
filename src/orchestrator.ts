@@ -109,7 +109,7 @@ export function claimsOn(labels: string[], comments: { body: string; createdAt?:
  * Ownership check for a command, against the agent that would act on it (its active lead). Another ACP agent's
  * claim is foreign before planning; once planned, a command keeps the ACP lead recorded in its claim. A free command is claimed before acting.
  */
-async function commandFenced(d: Deps, cmd: Issue, report: TickReport, phase: "plan" | "reconcile"): Promise<boolean> {
+async function commandFenced(d: Deps, cmd: Issue, report: TickReport, phase: "plan" | "reconcile", input = cmd.description): Promise<boolean> {
   const { lead } = activeLead(d, cmd);
   const labels = d.store.getLabels ? await d.store.getLabels(cmd.id) : cmd.labels;
   const claims = claimsOn(labels, await d.store.getComments(cmd.id));
@@ -122,7 +122,7 @@ async function commandFenced(d: Deps, cmd: Issue, report: TickReport, phase: "pl
     return true;
   }
   // Claim only when the lead can actually plan now, so a budget-blocked or offline lead never leaves a stale claim.
-  const canPlan = !!d.clients[lead] && d.budget.check(lead, estimateTokens(cmd.description) + 1_000, PLAN_TOKENS).ok;
+  const canPlan = !!d.clients[lead] && d.budget.check(lead, estimateTokens(input) + 1_000, PLAN_TOKENS).ok;
   if (status === "free" && canPlan) await d.store.comment(cmd.id, `${EXECUTOR_MARKER} acp:${lead}\n\n${CLAIM_MARKER} ${AGENTS[lead].name} (AI Command Post), as lead.`);
   return false;
 }
@@ -295,16 +295,20 @@ export async function work(d: Deps, task: Issue, agent: AgentKey, report: TickRe
 }
 
 /** When every sub-task is done, the lead writes one summary on the command and closes it. */
-async function reconcile(d: Deps, cmd: Issue, children: Issue[], report: TickReport): Promise<void> {
-  const { lead } = activeLead(d, cmd);
-  const comments = await d.store.getComments(cmd.id);
-  if (comments.some((c) => c.body.includes(RECONCILED_MARKER))) return;
+async function childResults(d: Deps, children: Issue[]): Promise<string[]> {
   const results: string[] = [];
   for (const c of children) {
     const cs = await d.store.getComments(c.id);
     const last = [...cs].reverse().find((x) => x.body.includes(RESULT_MARKER));
     results.push(`### ${c.identifier} ${c.title}\n${last?.body ?? "(no result posted)"}`);
   }
+  return results;
+}
+
+async function reconcile(d: Deps, cmd: Issue, children: Issue[], results: string[], report: TickReport): Promise<void> {
+  const { lead } = activeLead(d, cmd);
+  const comments = await d.store.getComments(cmd.id);
+  if (comments.some((c) => c.body.includes(RECONCILED_MARKER))) return;
   const out = await callModel(
     d,
     lead,
@@ -390,7 +394,10 @@ export async function tick(d: Deps): Promise<TickReport> {
     const children = kids as Issue[];
     if (children.every((c) => DONE.includes(c.stateType))) {
       try {
-        if (!(await commandFenced(d, cmd, report, "reconcile"))) await reconcile(d, cmd, children, report);
+        // Budget preflight must cover the full reconciliation prompt (command plus every child result).
+        const results = await childResults(d, children);
+        const input = `${cmd.title}\n\n${cmd.description}\n\n${results.join("\n\n")}`;
+        if (!(await commandFenced(d, cmd, report, "reconcile", input))) await reconcile(d, cmd, children, results, report);
       } catch (e) {
         report.errors.push(`${cmd.identifier}: ${(e as Error).message}`);
       }
