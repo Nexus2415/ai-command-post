@@ -1,9 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { handle, issueIdFor, TEAM_ID, PROJECT_ID, COMMAND_MARKER } from "../api/intake.js";
+import { handle, commandLead, issueIdFor, TEAM_ID, PROJECT_ID, COMMAND_MARKER } from "../api/intake.js";
 import { COMMAND_MARKER as ENGINE_MARKER } from "../src/orchestrator.ts";
 
-const env = { ACP_SITE_PASSWORD: "pw", LINEAR_API_KEY: "lin" };
+const base = { ACP_SITE_PASSWORD: "pw", LINEAR_API_KEY: "lin" };
+// Synthetic only: commands need an explicitly authorized lead (ARN-76).
+const env = { ...base, ACP_DEFAULT_LEAD: "claude", ACP_INTAKE_ALLOWED_LEADS: "claude" };
 const KEY = "k".repeat(20);
 const headers = (extra: object = {}) => ({ "x-acp-password": "pw", origin: "https://acp.example", host: "acp.example", ...extra });
 const req = (body: any, h: object = {}) => ({ method: "POST", headers: headers(h), body });
@@ -61,7 +63,7 @@ test("command is filed in the fixed team/project with the engine marker and a de
   assert.equal(input.teamId, TEAM_ID);
   assert.equal(input.projectId, PROJECT_ID);
   assert.equal(input.id, issueIdFor(KEY));
-  assert.equal(input.title, "[Gemini] Ship the runbook");
+  assert.equal(input.title, "[Claude] Ship the runbook");
   assert.ok(input.description.includes(COMMAND_MARKER));
   assert.ok(input.description.includes("not proof of who typed it"));
 });
@@ -99,4 +101,36 @@ test("idempotency ids are stable, distinct and valid v4 UUIDs", () => {
   assert.equal(issueIdFor(KEY), issueIdFor(KEY));
   assert.notEqual(issueIdFor(KEY), issueIdFor(KEY + "x"));
   assert.match(issueIdFor(KEY), /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+});
+
+test("ARN-76: commands without an explicitly authorized lead are refused before any Linear call", async () => {
+  const cases: any[] = [
+    base,                                                                         // no lead at all (old default was Gemini)
+    { ...base, ACP_DEFAULT_LEAD: "gemini" },                                      // lead set but not authorized
+    { ...base, ACP_DEFAULT_LEAD: "gemini", ACP_INTAKE_ALLOWED_LEADS: "claude" },  // suspended lead
+    { ...base, ACP_DEFAULT_LEAD: "codex", ACP_INTAKE_ALLOWED_LEADS: "codex" },    // unknown lead
+    { ...base, ACP_INTAKE_ALLOWED_LEADS: "claude" },                              // allowed list but no lead: no silent pick
+    { ...base, ACP_DEFAULT_LEAD: "__proto__", ACP_INTAKE_ALLOWED_LEADS: "__proto__" },
+  ];
+  for (const e of cases) {
+    const { f, calls } = fakeLinear(created);
+    const r: any = await handle(req({ intent: "command", text: "Do it", idempotencyKey: KEY }), e, f, now);
+    assert.equal(r.status, 503, JSON.stringify(e));
+    assert.match(r.body.error, /Nothing was filed/);
+    assert.equal(calls.length, 0, "no Linear mutation");
+    assert.equal(commandLead(e), null);
+  }
+});
+
+test("ARN-76: questions still work with no lead configured and stay read-only", async () => {
+  const { f, calls } = fakeLinear(created);
+  const r: any = await handle(req({ intent: "question", text: "What is queued?", idempotencyKey: KEY }), base, f, now);
+  assert.equal(r.status, 201);
+  assert.match(calls[0]!.vars.input.title, /^\[Question\] /);
+  assert.ok(!calls[0]!.vars.input.description.includes(COMMAND_MARKER));
+});
+
+test("ARN-76: an explicitly authorized lead files the command under that lead, case-insensitively", () => {
+  assert.equal(commandLead({ ACP_DEFAULT_LEAD: " Gemini ", ACP_INTAKE_ALLOWED_LEADS: "claude, GEMINI" }), "gemini");
+  assert.equal(commandLead({ ACP_DEFAULT_LEAD: "perplexity", ACP_INTAKE_ALLOWED_LEADS: "perplexity" }), "perplexity");
 });

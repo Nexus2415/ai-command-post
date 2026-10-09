@@ -72,6 +72,8 @@ test/                node:test suites (fake models, fake fetch; no network)
 
 The dashboard also runs as a website: `vercel.json` serves `dashboard/` and `api/linear.js` talks to Linear for it. Import the repo in Vercel and set two environment variables: `LINEAR_API_KEY` and `ACP_SITE_PASSWORD` (anyone with the password can see your Linear team and issue commands). Without both, the site refuses every request. It can list teams and issues and create new command issues, nothing else.
 
+The owner console sends new commands only to an AI lead you have explicitly approved. In Vercel, set `ACP_DEFAULT_LEAD` (for example `claude`) and list it in `ACP_INTAKE_ALLOWED_LEADS` (comma-separated). If either is missing, or the lead isn't on the list, the console refuses commands and files nothing. Questions still work.
+
 ### Eve adapter (`api/eve.js`, off by default)
 
 **Dispatch is unsupported for now.** `/api/eve` returns `unsupported` for every command and sends nothing, whatever the env vars say, until a verified Eve contract, a budget reservation and an ARN-52 ownership claim exist. Only `health` calls Eve: it reports `reachable` on an `{"ok":true,"status":"ready","workflowId":"…"}` (the Eve 0.71.3 health schema), `unknown` on any other 2xx, and never claims execution readiness. Server-only env vars: `ACP_EVE_ACTIVE`, `ACP_EVE_BUDGET_USD` (default 0 blocks), `EVE_BASE_URL` (bare https origin), `EVE_TOKEN` (never sent to the browser).

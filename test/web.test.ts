@@ -41,10 +41,9 @@ test("website lists issues in the dashboard's shape", async () => {
   assert.equal(calls[0]!.vars.n, "Arnexyia");
 });
 
-test("website only creates new command issues, with a clamped priority", async () => {
-  const { f, calls } = fakeLinear((q) => (q.includes("teams") ? { teams: { nodes: [{ id: "T1" }] } } : { issueCreate: { issue: { identifier: "ARN-9", url: "u" } } }));
-  const out = await handle(req("save_issue", { team: "Arnexyia", title: "Do it", description: "**Command issued from AI Command Post**", priority: 99, id: "ARN-1" }), env, f);
-  assert.deepEqual(out.body, { identifier: "ARN-9", url: "u" });
-  assert.deepEqual(calls[1]!.vars.i, { teamId: "T1", title: "Do it", description: "**Command issued from AI Command Post**", priority: 0 });
+test("website refuses legacy writes (ARN-76: commands go through /api/intake)", async () => {
+  const { f, calls } = fakeLinear(() => ({}));
+  assert.equal((await handle(req("save_issue", { team: "Arnexyia", title: "Do it" }), env, f)).status, 400);
   assert.equal((await handle(req("delete_issue"), env, f)).status, 400);
+  assert.equal(calls.length, 0);
 });
