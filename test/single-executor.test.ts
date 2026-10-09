@@ -216,3 +216,19 @@ test("a failed claim read on one task does not abort the tick", async () => {
   assert.ok(r.errors.some((e) => e.includes("linear down")));
   assert.equal(store.issues.find((i) => i.id === cmd.id)!.stateType, "completed", "reconciliation still ran");
 });
+
+test("claim order uses parsed time, not array order or string format", () => {
+  const claims = claimsOn([], [
+    { body: `${EXECUTOR_MARKER} acp:chatgpt` },
+    { body: `${EXECUTOR_MARKER} acp:gemini`, createdAt: "2026-10-08T10:00:00.500Z" },
+    { body: `${EXECUTOR_MARKER} acp:claude`, createdAt: "2026-10-08T05:00:00-05:00" },
+  ]);
+  // 05:00-05:00 is 10:00:00Z, earlier than 10:00:00.500Z; the undated claim sorts last.
+  assert.equal(claimStatus(claims, "claude"), "own");
+  const reversed = claimsOn([], [...[
+    { body: `${EXECUTOR_MARKER} acp:chatgpt` },
+    { body: `${EXECUTOR_MARKER} acp:gemini`, createdAt: "2026-10-08T10:00:00.500Z" },
+    { body: `${EXECUTOR_MARKER} acp:claude`, createdAt: "2026-10-08T05:00:00-05:00" },
+  ]].reverse());
+  assert.equal(claimStatus(reversed, "claude"), "own");
+});

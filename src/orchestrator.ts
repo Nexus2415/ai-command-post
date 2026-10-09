@@ -83,8 +83,14 @@ export function claimsOn(labels: string[], comments: { body: string; createdAt?:
     const m = /^executor:\s*(\S+)$/i.exec(l.trim());
     if (m) out.push({ executor: m[1]!.toLowerCase(), source: "label" });
   }
-  // Linear doesn't guarantee comment order, so sort by creation time; the earliest claim must win.
-  const sorted = [...comments].sort((a, b) => (a.createdAt ?? "").localeCompare(b.createdAt ?? ""));
+  // Linear doesn't guarantee comment order, so sort by parsed creation time; the earliest claim must win.
+  // A missing or unparseable createdAt sorts last, and ties break on the body, so the winner never depends on
+  // the order the store returned.
+  const at = (c: { createdAt?: string }) => {
+    const t = c.createdAt ? Date.parse(c.createdAt) : NaN;
+    return Number.isNaN(t) ? Number.POSITIVE_INFINITY : t;
+  };
+  const sorted = [...comments].sort((a, b) => at(a) - at(b) || (a.body < b.body ? -1 : a.body > b.body ? 1 : 0));
   for (const c of sorted) {
     const m = new RegExp(`^${EXECUTOR_MARKER}\\s*(\\S+)`, "m").exec(c.body);
     if (m) {
