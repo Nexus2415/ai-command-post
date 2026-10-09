@@ -11,6 +11,7 @@ const EXECUTOR_RE = /^ACP executor:\s*(\S+)/m;
 const LEGACY_CLAIM_RE = /^Claimed by (.+?) \(AI Command Post\)/;
 const RESULT_RE = /^\s*## Result \(([^,)]+),\s*(done|blocked)\)/;
 
+const TERMINAL = ["completed", "canceled", "duplicate"];
 const NOT_VERIFIED = "Execution not verified. This page can't see whether the engine is switched on or whether any AI picked this up.";
 
 const at = c => { const t = Date.parse(c?.createdAt || ""); return Number.isNaN(t) ? Infinity : t; };
@@ -46,7 +47,12 @@ export function lifecycleOf(issue, comments, children) {
   if (type === "completed") {
     if (!doneResult) return unknown("Marked done in Linear, but no recorded result was found.");
     if (blockedResult && at(blockedResult) > at(doneResult)) return unknown("Marked done, but the latest recorded result says blocked.");
-    return { stage: "completed", label: "Completed", detail: "Done in Linear with a recorded result.", evidence: [ref(doneResult)] };
+    if (!Array.isArray(children)) return unknown("Marked done, but its sub-tasks couldn't be read.");
+    const openKids = children.filter(c => !TERMINAL.includes(c?.state?.type));
+    if (openKids.length) return unknown("Marked done, but " + openKids.length + " sub-task(s) are still open.");
+    return { stage: "completed", label: "Completed",
+      detail: "Done in Linear with a recorded result. The result was posted from a shared account, so it isn't proof of which AI wrote it.",
+      evidence: [ref(doneResult)] };
   }
   if (doneResult) return unknown("A result is recorded, but the issue isn't closed in Linear.");
   const name = String(issue?.state?.name || "").toLowerCase();
@@ -56,7 +62,7 @@ export function lifecycleOf(issue, comments, children) {
       detail: blockedResult ? "A blocked result is recorded; open it for the reason." : "Marked blocked in Linear; no reason was recorded.",
       evidence: blockedResult ? [ref(blockedResult)] : [] };
   }
-  const open = Array.isArray(children) ? children.filter(c => !["completed", "canceled", "duplicate"].includes(c?.state?.type)) : [];
+  const open = Array.isArray(children) ? children.filter(c => !TERMINAL.includes(c?.state?.type)) : [];
   if (claim) {
     return { stage: "claimed", label: "Claimed",
       detail: "A claim comment is recorded" + (open.length ? " and " + open.length + " sub-task(s) are open" : "") +

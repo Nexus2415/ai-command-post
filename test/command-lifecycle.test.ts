@@ -46,6 +46,7 @@ test("completed needs both a terminal state and a recorded result", () => {
   const done = { name: "Done", type: "completed" };
   const ok = life(cmd(done), [c("s", `${RECONCILED_MARKER}\n\nAnswer: 50.`)]);
   assert.equal(ok.stage, "completed");
+  assert.match(ok.detail, /shared account, so it isn't proof of which AI wrote it/);
   assert.deepEqual(ok.evidence, [{ kind: "comment", commentId: "s" }]);
   assert.equal(life(cmd(done), [c("r", `${RESULT_MARKER} (Gemini, done)\n\n50`)]).stage, "completed");
   // Done without any result, or a result on an open issue, fails closed.
@@ -97,4 +98,14 @@ test("thread endpoint returns the lifecycle with one read-only Linear query and 
 test("lifecycle code has no write, model or Eve path", () => {
   const src = readFileSync("api/lib/command-lifecycle.js", "utf8");
   assert.doesNotMatch(src, /fetch\(|mutation|^import\s|\beve\b|anthropic|openai|generativelanguage/im);
+});
+
+test("a Done command with an open, missing or unreadable sub-task is unknown, not completed", () => {
+  const done = { name: "Done", type: "completed" };
+  const res = [c("s", `${RECONCILED_MARKER}\n\nAnswer: 50.`)];
+  assert.equal(life(cmd(done), res, [{ identifier: "ARN-901", state: { type: "started" } }]).stage, "unknown");
+  assert.equal(life(cmd(done), res, [{ identifier: "ARN-901", state: null }]).stage, "unknown");
+  assert.equal(life(cmd(done), res, null).stage, "unknown");
+  assert.equal(life(cmd(done), res, [{ identifier: "ARN-901", state: { type: "completed" } },
+    { identifier: "ARN-902", state: { type: "canceled" } }]).stage, "completed");
 });
