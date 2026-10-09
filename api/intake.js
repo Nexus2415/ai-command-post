@@ -34,6 +34,17 @@ export function issueIdFor(key) {
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-${((parseInt(h[16], 16) & 3) | 8).toString(16)}${h.slice(17, 20)}-${h.slice(20, 32)}`;
 }
 
+/**
+ * Commands need an explicitly authorized lead (ARN-76). The lead is ACP_DEFAULT_LEAD and must also be listed in
+ * ACP_INTAKE_ALLOWED_LEADS (comma-separated). Missing, unknown or unlisted leads refuse the command: no default
+ * lead, no reroute to another AI. Questions never need a lead.
+ */
+export function commandLead(env) {
+  const lead = String(env.ACP_DEFAULT_LEAD || "").trim().toLowerCase();
+  const allowed = String(env.ACP_INTAKE_ALLOWED_LEADS || "").split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
+  return Object.hasOwn(LEADS, lead) && allowed.includes(lead) ? lead : null;
+}
+
 // Neither intent may smuggle the engine marker: only the server adds it, and only for commands.
 const neutralize = t => t.replaceAll(COMMAND_MARKER, "[command marker removed]");
 
@@ -47,7 +58,8 @@ export function buildIssue(intent, text, lead, at) {
       description: `**Owner question (read-only)**\n\n${stamp}\n- Intent: question. Answer in comments only; this is not authority to run tools, open PRs or change anything.\n\n## Question\n\n${clean}`,
     };
   }
-  const name = LEADS[lead] || LEADS.gemini;
+  if (!Object.hasOwn(LEADS, lead)) throw new Error("Command lead is not authorized.");
+  const name = LEADS[lead];
   return {
     title: `[${name}] ${first}`,
     description: `**${COMMAND_MARKER}**\n\n- Lead AI: ${name}\n${stamp}\n- Intent: command\n\n## Command\n\n${clean}\n\n## Rules\n\n- The lead breaks this into sub-issues and assigns each to an AI by putting its name in [brackets] at the start of the title.\n- No merges to main, purchases, credential changes or customer-facing actions without owner approval.\n- Record evidence and handoff notes as comments on this issue.`,
@@ -89,8 +101,12 @@ export async function handle(req, env, f = fetch, now = () => new Date()) {
   if (text.length > MAX_TEXT) return error(413, `Text is limited to ${MAX_TEXT} characters.`);
   if (typeof idempotencyKey !== "string" || !KEY_RE.test(idempotencyKey)) return error(400, "idempotencyKey is required (16-64 letters, digits, - or _).");
 
+  const lead = intent === "command" ? commandLead(env) : null;
+  if (intent === "command" && !lead) {
+    return error(503, "Commands are paused: no AI lead is authorized for new commands. Nothing was filed. Questions still work.");
+  }
   const id = issueIdFor(idempotencyKey);
-  const { title, description } = buildIssue(intent, text.trim(), String(env.ACP_DEFAULT_LEAD || "gemini").toLowerCase(), now().toISOString());
+  const { title, description } = buildIssue(intent, text.trim(), lead, now().toISOString());
   try {
     const created = await gql(env, f, CREATE, { input: { id, teamId: TEAM_ID, projectId: PROJECT_ID, title, description, priority: 0 } });
     const issue = created.data?.issueCreate?.issue;
