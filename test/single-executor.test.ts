@@ -316,3 +316,16 @@ test("reconciliation budget preflight counts child results, so a too-large promp
   assert.equal(seen.length, 0, "no model call");
   assert.equal(claimsFor(store, running.id).length, 0, "no stale claim");
 });
+
+test("reconciliation uses the ACP lead recorded in the claim, not the current active lead", async () => {
+  const store = new MemoryStore();
+  const running = store.add({ title: "[Claude] Running", description: COMMAND_MARKER, stateType: "started" });
+  store.add({ title: "[Gemini] a", parentId: running.id, stateType: "completed" });
+  await store.comment(running.id, `${EXECUTOR_MARKER} acp:gemini`);
+  const claudeSeen: ChatMessage[][] = [];
+  const geminiSeen: ChatMessage[][] = [];
+  const d = deps(store, { claude: scripted(["c"], claudeSeen), gemini: scripted(["g"], geminiSeen) }, { ACP_DEFAULT_LEAD: "gemini" });
+  await tick(d);
+  assert.equal(claudeSeen.length, 0, "current lead never called");
+  assert.equal(geminiSeen.length, 1, "recorded lead reconciles");
+});
