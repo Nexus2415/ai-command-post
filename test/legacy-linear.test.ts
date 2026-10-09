@@ -37,3 +37,16 @@ test("legacy read operations remain available", async () => {
   assert.deepEqual((out.body as any).teams, [{ name: "Arnexyia", key: "ARN" }]);
   assert.equal(calls, 1);
 });
+
+test("inherited tool names never invoke prototype methods or expose environment data", async () => {
+  const secrets = { ...env, EVE_TOKEN: "synthetic-eve-token" };
+  let calls = 0;
+  const neverFetch = (async () => { calls++; throw new Error("unexpected fetch"); }) as typeof fetch;
+  for (const tool of ["constructor", "toString", "valueOf", "__proto__"]) {
+    const out = await handle(req(tool), secrets, neverFetch);
+    assert.equal(out.status, 400, tool);
+    assert.match((out.body as any).error, /Unknown tool/);
+    assert.doesNotMatch(JSON.stringify(out.body), /synthetic-token|synthetic-password|synthetic-eve-token/);
+  }
+  assert.equal(calls, 0);
+});
