@@ -170,16 +170,15 @@ export class DryRunStore implements TaskStore {
   readonly log: string[] = [];
   private n = 0;
   private readonly inner: TaskStore;
+  /** Only present when the wrapped store has it, so callers keep the issue-snapshot fallback otherwise. */
+  readonly getLabels?: (issueId: string) => Promise<string[]>;
   constructor(inner: TaskStore) {
     this.inner = inner;
+    if (inner.getLabels) this.getLabels = (issueId) => inner.getLabels!(issueId);
   }
   listOpenAndRecent(teamKey: string) {
     return this.inner.listOpenAndRecent(teamKey);
   }
-  getLabels(issueId: string) {
-    return this.inner.getLabels ? this.inner.getLabels(issueId) : Promise.resolve([] as string[]);
-  }
-
   getComments(issueId: string) {
     return this.inner.getComments(issueId);
   }

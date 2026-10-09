@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { agentFor } from "../src/agents.ts";
 import { Budget } from "../src/budget.ts";
 import { loadConfig, type AgentKey } from "../src/config.ts";
-import type { Issue, StateType, TaskStore } from "../src/linear.ts";
+import { DryRunStore, type Issue, type StateType, type TaskStore } from "../src/linear.ts";
 import { COMMAND_MARKER, EXECUTOR_MARKER, RECONCILED_MARKER, RESULT_MARKER, claimStatus, claimsOn, tick, type Deps } from "../src/orchestrator.ts";
 import type { ChatMessage, ModelClient } from "../src/providers.ts";
 
@@ -350,4 +350,23 @@ test("reconciliation keeps an ACP lead recorded only in an executor label", asyn
   await tick(deps(store, { claude: scripted(["c"], claudeSeen), gemini: scripted(["g"], geminiSeen) }, { ACP_DEFAULT_LEAD: "gemini" }));
   assert.equal(claudeSeen.length, 0);
   assert.equal(geminiSeen.length, 1);
+});
+
+test("dry-run over a store without getLabels keeps the snapshot label fence", async () => {
+  const store = new MemoryStore();
+  store.add({ title: "Do the thing", description: COMMAND_MARKER, labels: ["executor:manual"] });
+  const bare: TaskStore = {
+    listOpenAndRecent: () => store.listOpenAndRecent(),
+    getComments: (id) => store.getComments(id),
+    comment: (id, b) => store.comment(id, b),
+    createIssue: (i) => store.createIssue(i),
+    setState: (id, k, t) => store.setState(id, k, t),
+  };
+  const dry = new DryRunStore(bare);
+  assert.equal(dry.getLabels, undefined);
+  const seen: ChatMessage[][] = [];
+  const d = deps(store, { gemini: scripted(["{}"], seen) }, { ACP_DEFAULT_LEAD: "gemini" });
+  d.store = dry;
+  await tick(d);
+  assert.equal(seen.length, 0, "fenced command never reaches the model");
 });
