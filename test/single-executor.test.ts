@@ -264,3 +264,22 @@ test("a label added after the snapshot still fences the task at the final claim 
   assert.equal(seen.length, 0, "model never called");
   assert.equal(claimsFor(store, t.id).length, 0, "ACP wrote no claim");
 });
+
+test("ACP claims a command for its lead before planning", async () => {
+  const store = new MemoryStore();
+  const cmd = store.add({ title: "Do the thing", description: COMMAND_MARKER });
+  await tick(deps(store, { gemini: scripted(['{"summary":"s","tasks":[]}']) }, { ACP_DEFAULT_LEAD: "gemini" }));
+  const claims = claimsFor(store, cmd.id);
+  assert.equal(claims.length, 1);
+  assert.match(claims[0]!.body, /acp:gemini/);
+});
+
+test("a command claimed by another ACP agent is not planned by the lead", async () => {
+  const store = new MemoryStore();
+  const cmd = store.add({ title: "Do the thing", description: COMMAND_MARKER });
+  await store.comment(cmd.id, `${EXECUTOR_MARKER} acp:claude`);
+  const seen: ChatMessage[][] = [];
+  const r = await tick(deps(store, { gemini: scripted(["{}"], seen) }, { ACP_DEFAULT_LEAD: "gemini" }));
+  assert.equal(seen.length, 0);
+  assert.ok(r.waiting.some((w) => w.includes("command claimed by another executor")));
+});

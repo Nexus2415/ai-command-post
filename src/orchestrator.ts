@@ -104,18 +104,23 @@ export function claimsOn(labels: string[], comments: { body: string; createdAt?:
   return out;
 }
 
-/** True when any executor other than ACP holds the issue (an `executor:` label or a claim comment). */
-export function fencedFromAcp(claims: ExecutorClaim[]): boolean {
-  if (claims.some((c) => c.source === "label" && !c.executor.startsWith("acp:"))) return true;
-  const first = claims.find((c) => c.source === "comment");
-  return !!first && !first.executor.startsWith("acp:");
-}
 
-async function commandFenced(d: Deps, cmd: Issue, report: TickReport): Promise<boolean> {
+/**
+ * Ownership check for a command, against the agent that would act on it (its active lead). Another ACP agent's
+ * claim is foreign too. When `claim` is set and the command is free, ACP writes its claim before acting.
+ */
+async function commandFenced(d: Deps, cmd: Issue, report: TickReport, claim: boolean): Promise<boolean> {
+  const { lead } = activeLead(d, cmd);
   const labels = d.store.getLabels ? await d.store.getLabels(cmd.id) : cmd.labels;
-  if (!fencedFromAcp(claimsOn(labels, await d.store.getComments(cmd.id)))) return false;
-  report.waiting.push(`${cmd.identifier}: command claimed by another executor; ACP will not plan or reconcile it`);
-  return true;
+  const status = claimStatus(claimsOn(labels, await d.store.getComments(cmd.id)), lead);
+  if (status === "foreign") {
+    report.waiting.push(`${cmd.identifier}: command claimed by another executor; ACP will not plan or reconcile it`);
+    return true;
+  }
+  // Claim only when the lead can actually plan now, so a budget-blocked or offline lead never leaves a stale claim.
+  const canPlan = !!d.clients[lead] && d.budget.check(lead, estimateTokens(cmd.description) + 1_000, PLAN_TOKENS).ok;
+  if (status === "free" && claim && canPlan) await d.store.comment(cmd.id, `${EXECUTOR_MARKER} acp:${lead}\n\n${CLAIM_MARKER} ${AGENTS[lead].name} (AI Command Post), as lead.`);
+  return false;
 }
 
 /** "own" = already claimed by this ACP agent; "foreign" = another executor holds it; "free" = unclaimed. */
@@ -336,7 +341,7 @@ export async function tick(d: Deps): Promise<TickReport> {
 
   for (const cmd of newCommands) {
     try {
-      if (!(await commandFenced(d, cmd, report))) await plan(d, cmd, report);
+      if (!(await commandFenced(d, cmd, report, true))) await plan(d, cmd, report);
     } catch (e) {
       report.errors.push(`${cmd.identifier}: ${(e as Error).message}`);
     }
@@ -381,7 +386,7 @@ export async function tick(d: Deps): Promise<TickReport> {
     const children = kids as Issue[];
     if (children.every((c) => DONE.includes(c.stateType))) {
       try {
-        if (!(await commandFenced(d, cmd, report))) await reconcile(d, cmd, children, report);
+        if (!(await commandFenced(d, cmd, report, false))) await reconcile(d, cmd, children, report);
       } catch (e) {
         report.errors.push(`${cmd.identifier}: ${(e as Error).message}`);
       }
