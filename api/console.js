@@ -1,5 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
 import { TEAM_ID, PROJECT_ID, overviewOf, projectIssue, safeLinearUrl } from "./lib/console-state.js";
+import { lifecycleOf } from "./lib/command-lifecycle.js";
 
 const LINEAR = "https://api.linear.app/graphql";
 const FIELDS = `id identifier title url priority updatedAt completedAt
@@ -12,6 +13,7 @@ const OVERVIEW = `query ConsoleOverview($team: ID!, $project: ID!) {
 }`;
 const THREAD = `query ConsoleThread($identifier: String!) {
   issue(id: $identifier) { ${FIELDS} description
+    children(first: 50) { nodes { identifier state { type } } }
     comments(last: 100, orderBy: createdAt) {
       nodes { id body createdAt updatedAt url user { name } }
       pageInfo { hasPreviousPage }
@@ -80,8 +82,11 @@ export async function handle(req, env, f = fetch, now = () => new Date()) {
     const data = await gql(env, f, THREAD, { identifier: body.identifier });
     if (!data.issue || !inScope(data.issue)) return error(404, "Issue not found in this operation.");
     if (!Array.isArray(data.issue.comments?.nodes)) throw new Error("Invalid comments response");
+    const issue = { ...projectIssue(data.issue), description: data.issue.description || "" };
+    const children = Array.isArray(data.issue.children?.nodes) ? data.issue.children.nodes : null;
     return { status: 200, body: {
-      issue: { ...projectIssue(data.issue), description: data.issue.description || "" },
+      issue,
+      lifecycle: lifecycleOf({ ...issue, state: data.issue.state }, data.issue.comments.nodes, children),
       comments: [...data.issue.comments.nodes]
         .sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")) || String(a.id).localeCompare(String(b.id)))
         .map(c => ({

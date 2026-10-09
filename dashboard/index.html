@@ -128,6 +128,11 @@ textarea{width:100%;min-height:84px;resize:vertical;border:1px solid var(--line)
 .cdetail .desc{white-space:pre-wrap;overflow-wrap:anywhere;font:13px/1.5 var(--body);margin:0;background:var(--panel-2);padding:10px;border-radius:6px}
 .comments{list-style:none;margin:0;padding:0;display:grid;gap:8px}
 .comments .meta{font:12px var(--mono);color:var(--muted)}
+.lifecycle{border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin:0 0 12px;display:grid;gap:6px}
+.lifecycle p{margin:0;font-size:13px}
+.lifecycle.stage-completed{border-color:var(--good)}
+.lifecycle.stage-blocked,.lifecycle.stage-unknown{border-color:var(--warn)}
+button.link{background:none;border:0;padding:0;margin-left:8px;color:inherit;text-decoration:underline;cursor:pointer;font:inherit}
 @media (max-width:1000px){.cmain{grid-template-columns:minmax(0,1fr)}.roster{grid-template-columns:repeat(3,minmax(0,1fr))}.board{grid-template-columns:minmax(0,1fr)}.console{grid-template-columns:minmax(0,1fr)}.console .right{border-left:0;border-top:1px solid var(--line);border-radius:0 0 8px 8px}}
 @media (max-width:640px){.roster{grid-template-columns:repeat(2,minmax(0,1fr))}.sitrep{grid-template-columns:repeat(2,minmax(0,1fr))}.sitrep > div:nth-child(3){border-left:0}.sitrep > div:nth-child(n+3){border-top:1px solid var(--line)}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
