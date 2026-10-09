@@ -110,8 +110,20 @@ export class LinearStore implements TaskStore {
   }
 
   async getComments(issueId: string) {
-    const d = await this.gql(`query($id:String!){ issue(id:$id){ comments(first:100){ nodes { body createdAt } } } }`, { id: issueId });
-    return d.issue.comments.nodes;
+    // Page through every comment: claim ownership depends on the earliest claim, which may not be on page one.
+    const out: { body: string; createdAt: string }[] = [];
+    let after: string | null = null;
+    for (let page = 0; page < 50; page++) {
+      const d: any = await this.gql(
+        `query($id:String!,$after:String){ issue(id:$id){ comments(first:100, after:$after){ nodes { body createdAt } pageInfo { hasNextPage endCursor } } } }`,
+        { id: issueId, after },
+      );
+      const c = d.issue.comments;
+      out.push(...c.nodes);
+      if (!c.pageInfo?.hasNextPage) return out;
+      after = c.pageInfo.endCursor;
+    }
+    throw new Error(`issue ${issueId} has more comments than ACP will page through; refusing to guess the earliest claim`);
   }
 
   async createIssue(input: { teamKey: string; title: string; description: string; parentId?: string; priority?: number }) {
