@@ -283,3 +283,25 @@ test("a command claimed by another ACP agent is not planned by the lead", async 
   assert.equal(seen.length, 0);
   assert.ok(r.waiting.some((w) => w.includes("command claimed by another executor")));
 });
+
+test("an unclaimed running command is claimed before reconciliation", async () => {
+  const store = new MemoryStore();
+  const running = store.add({ title: "Running", description: COMMAND_MARKER, stateType: "started" });
+  store.add({ title: "[Gemini] a", parentId: running.id, stateType: "completed" });
+  const seen: ChatMessage[][] = [];
+  await tick(deps(store, { gemini: scripted(["summary"], seen) }, { ACP_DEFAULT_LEAD: "gemini" }));
+  const claims = claimsFor(store, running.id);
+  assert.equal(claims.length, 1);
+  assert.match(claims[0]!.body, /acp:gemini/);
+});
+
+test("a planned command keeps its recorded ACP lead after the active lead changes", async () => {
+  const store = new MemoryStore();
+  const running = store.add({ title: "Running", description: COMMAND_MARKER, stateType: "started" });
+  store.add({ title: "[Gemini] a", parentId: running.id, stateType: "completed" });
+  await store.comment(running.id, `${EXECUTOR_MARKER} acp:claude`);
+  const seen: ChatMessage[][] = [];
+  const r = await tick(deps(store, { gemini: scripted(["summary"], seen) }, { ACP_DEFAULT_LEAD: "gemini" }));
+  assert.ok(!r.waiting.some((w) => w.includes("command claimed by another executor")));
+  assert.equal(claimsFor(store, running.id).length, 1, "no second claim");
+});

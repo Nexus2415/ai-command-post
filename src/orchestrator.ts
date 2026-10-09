@@ -107,19 +107,23 @@ export function claimsOn(labels: string[], comments: { body: string; createdAt?:
 
 /**
  * Ownership check for a command, against the agent that would act on it (its active lead). Another ACP agent's
- * claim is foreign too. When `claim` is set and the command is free, ACP writes its claim before acting.
+ * claim is foreign before planning; once planned, a command keeps the ACP lead recorded in its claim. A free command is claimed before acting.
  */
-async function commandFenced(d: Deps, cmd: Issue, report: TickReport, claim: boolean): Promise<boolean> {
+async function commandFenced(d: Deps, cmd: Issue, report: TickReport, phase: "plan" | "reconcile"): Promise<boolean> {
   const { lead } = activeLead(d, cmd);
   const labels = d.store.getLabels ? await d.store.getLabels(cmd.id) : cmd.labels;
-  const status = claimStatus(claimsOn(labels, await d.store.getComments(cmd.id)), lead);
+  const claims = claimsOn(labels, await d.store.getComments(cmd.id));
+  // A planned command keeps the ACP lead that claimed it, even if the active lead has since changed (fallback recovery).
+  const winner = claims.find((c) => c.source === "comment");
+  const recorded = phase === "reconcile" && winner?.executor.startsWith("acp:") && !claims.some((c) => c.source === "label" && c.executor !== winner.executor);
+  const status = recorded ? "own" : claimStatus(claims, lead);
   if (status === "foreign") {
     report.waiting.push(`${cmd.identifier}: command claimed by another executor; ACP will not plan or reconcile it`);
     return true;
   }
   // Claim only when the lead can actually plan now, so a budget-blocked or offline lead never leaves a stale claim.
   const canPlan = !!d.clients[lead] && d.budget.check(lead, estimateTokens(cmd.description) + 1_000, PLAN_TOKENS).ok;
-  if (status === "free" && claim && canPlan) await d.store.comment(cmd.id, `${EXECUTOR_MARKER} acp:${lead}\n\n${CLAIM_MARKER} ${AGENTS[lead].name} (AI Command Post), as lead.`);
+  if (status === "free" && canPlan) await d.store.comment(cmd.id, `${EXECUTOR_MARKER} acp:${lead}\n\n${CLAIM_MARKER} ${AGENTS[lead].name} (AI Command Post), as lead.`);
   return false;
 }
 
@@ -341,7 +345,7 @@ export async function tick(d: Deps): Promise<TickReport> {
 
   for (const cmd of newCommands) {
     try {
-      if (!(await commandFenced(d, cmd, report, true))) await plan(d, cmd, report);
+      if (!(await commandFenced(d, cmd, report, "plan"))) await plan(d, cmd, report);
     } catch (e) {
       report.errors.push(`${cmd.identifier}: ${(e as Error).message}`);
     }
@@ -386,7 +390,7 @@ export async function tick(d: Deps): Promise<TickReport> {
     const children = kids as Issue[];
     if (children.every((c) => DONE.includes(c.stateType))) {
       try {
-        if (!(await commandFenced(d, cmd, report, false))) await reconcile(d, cmd, children, report);
+        if (!(await commandFenced(d, cmd, report, "reconcile"))) await reconcile(d, cmd, children, report);
       } catch (e) {
         report.errors.push(`${cmd.identifier}: ${(e as Error).message}`);
       }
