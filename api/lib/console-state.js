@@ -1,5 +1,5 @@
 // Read-only projections. "Assigned" does not mean a consumer AI session is online.
-import { agentFor } from "../../src/agents.ts";
+import { agentFor } from "./agent-owner.js";
 export const TEAM_ID = "faa75915-076f-479a-a3fb-92af2369e6c3";
 export const PROJECT_ID = "e8cf8cda-3347-4310-aea5-e6b7c7b95b4f";
 // Codex is tracked separately from ChatGPT chat. The engine has no Codex client, so [Codex] work is never run by it.
