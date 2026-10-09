@@ -53,8 +53,8 @@ export async function handle(req, env, f = fetch) {
   if (!sameSecret(req.headers["x-acp-password"] ?? "", env.ACP_SITE_PASSWORD)) return { status: 401, body: { error: "Wrong password" } };
   if (req.method !== "POST") return { status: 405, body: { error: "POST only" } };
   const body = typeof req.body === "string" ? JSON.parse(req.body || "{}") : req.body || {};
+  if (!Object.hasOwn(TOOLS, body.tool)) return { status: 400, body: { error: `Unknown tool ${body.tool}` } };
   const tool = TOOLS[body.tool];
-  if (!tool) return { status: 400, body: { error: `Unknown tool ${body.tool}` } };
   try {
     return { status: 200, body: await tool(env, f, body.args || {}) };
   } catch (e) {
