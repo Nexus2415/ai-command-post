@@ -17,8 +17,9 @@ const cmd = (state: any, extra: any = {}) => ({
 });
 const backlog = { name: "Backlog", type: "backlog" };
 const c = (id: string, body: string, createdAt = "2026-10-09T10:00:00Z") => ({ id, body, createdAt });
-const life = (issue: any, comments: any[] = [], children: any = []): any =>
-  lifecycleOf({ ...issue, labels: issue.labels.nodes.map((l: any) => l.name) }, comments, children);
+const FULL = { childrenComplete: true, commentsComplete: true };
+const life = (issue: any, comments: any[] = [], children: any = [], complete: any = FULL): any =>
+  lifecycleOf({ ...issue, labels: issue.labels.nodes.map((l: any) => l.name) }, comments, children, complete);
 
 test("JS markers match the engine's markers", () => {
   const src = readFileSync("api/lib/command-lifecycle.js", "utf8");
@@ -108,4 +109,29 @@ test("a Done command with an open, missing or unreadable sub-task is unknown, no
   assert.equal(life(cmd(done), res, null).stage, "unknown");
   assert.equal(life(cmd(done), res, [{ identifier: "ARN-901", state: { type: "completed" } },
     { identifier: "ARN-902", state: { type: "canceled" } }]).stage, "completed");
+});
+
+test("completed needs complete evidence: more than 50 sub-tasks or truncated comments fail closed", () => {
+  const done = { name: "Done", type: "completed" };
+  const res = [c("s", `${RECONCILED_MARKER}\n\nAnswer: 50.`)];
+  const fifty = Array.from({ length: 50 }, (_, i) => ({ identifier: "ARN-" + (1000 + i), state: { type: "completed" } }));
+  assert.equal(life(cmd(done), res, fifty).stage, "completed");
+  assert.equal(life(cmd(done), res, fifty, { childrenComplete: false, commentsComplete: true }).stage, "unknown");
+  assert.equal(life(cmd(done), res, fifty, { childrenComplete: true, commentsComplete: false }).stage, "unknown");
+  assert.equal(life(cmd(done), res, fifty, {}).stage, "unknown");
+});
+
+test("thread endpoint passes pagination through: a 51st child page makes a Done command unknown", async () => {
+  const run = async (hasNextPage: boolean, hasPreviousPage: boolean) => {
+    const f = (async () => new Response(JSON.stringify({ data: { issue: {
+      ...cmd({ name: "Done", type: "completed" }),
+      children: { nodes: [{ identifier: "ARN-901", state: { type: "completed" } }], pageInfo: { hasNextPage } },
+      comments: { nodes: [{ id: "s", body: `${RECONCILED_MARKER}\n\nok`, createdAt: "2026-10-09T10:00:00Z" }], pageInfo: { hasPreviousPage } },
+    } } }), { status: 200 })) as typeof fetch;
+    const r: any = await handle({ method: "POST", headers: { "x-acp-password": "pw" }, body: { action: "thread", identifier: "ARN-900" } }, env, f);
+    return r.body.lifecycle.stage;
+  };
+  assert.equal(await run(false, false), "completed");
+  assert.equal(await run(true, false), "unknown");
+  assert.equal(await run(false, true), "unknown");
 });

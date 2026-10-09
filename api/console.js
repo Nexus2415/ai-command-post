@@ -13,7 +13,7 @@ const OVERVIEW = `query ConsoleOverview($team: ID!, $project: ID!) {
 }`;
 const THREAD = `query ConsoleThread($identifier: String!) {
   issue(id: $identifier) { ${FIELDS} description
-    children(first: 50) { nodes { identifier state { type } } }
+    children(first: 50) { nodes { identifier state { type } } pageInfo { hasNextPage } }
     comments(last: 100, orderBy: createdAt) {
       nodes { id body createdAt updatedAt url user { name } }
       pageInfo { hasPreviousPage }
@@ -86,7 +86,11 @@ export async function handle(req, env, f = fetch, now = () => new Date()) {
     const children = Array.isArray(data.issue.children?.nodes) ? data.issue.children.nodes : null;
     return { status: 200, body: {
       issue,
-      lifecycle: lifecycleOf({ ...issue, state: data.issue.state }, data.issue.comments.nodes, children),
+      lifecycle: lifecycleOf({ ...issue, state: data.issue.state }, data.issue.comments.nodes, children, {
+        // Partial evidence never supports "completed": missing pageInfo counts as incomplete.
+        childrenComplete: data.issue.children?.pageInfo?.hasNextPage === false,
+        commentsComplete: data.issue.comments.pageInfo?.hasPreviousPage === false,
+      }),
       comments: [...data.issue.comments.nodes]
         .sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")) || String(a.id).localeCompare(String(b.id)))
         .map(c => ({

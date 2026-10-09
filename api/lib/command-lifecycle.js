@@ -24,9 +24,10 @@ export function isCommand(issue) {
 /**
  * issue: projected issue fields plus description and state; comments: [{ id, body, createdAt }];
  * children: [{ identifier, state: { type } }] or null when unknown.
+ * complete: { childrenComplete, commentsComplete }; anything not explicitly true is treated as partial.
  * Returns { stage, label, detail, evidence: [{ kind, commentId?, issue? }] }.
  */
-export function lifecycleOf(issue, comments, children) {
+export function lifecycleOf(issue, comments, children, complete = {}) {
   if (/^\s*\[question\]/i.test(issue?.title || "")) {
     return { stage: "question", label: "Question · read-only", detail: "Owner questions are never executable work.", evidence: [] };
   }
@@ -47,7 +48,8 @@ export function lifecycleOf(issue, comments, children) {
   if (type === "completed") {
     if (!doneResult) return unknown("Marked done in Linear, but no recorded result was found.");
     if (blockedResult && at(blockedResult) > at(doneResult)) return unknown("Marked done, but the latest recorded result says blocked.");
-    if (!Array.isArray(children)) return unknown("Marked done, but its sub-tasks couldn't be read.");
+    if (!Array.isArray(children) || complete.childrenComplete !== true) return unknown("Marked done, but its sub-tasks couldn't all be read.");
+    if (complete.commentsComplete !== true) return unknown("Marked done, but older comments weren't loaded, so the result can't be confirmed.");
     const openKids = children.filter(c => !TERMINAL.includes(c?.state?.type));
     if (openKids.length) return unknown("Marked done, but " + openKids.length + " sub-task(s) are still open.");
     return { stage: "completed", label: "Completed",
