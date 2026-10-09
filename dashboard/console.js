@@ -201,11 +201,29 @@
         ol.appendChild(li);
       });
       body.appendChild(ol);
+      const life = lifecycleBox(t.lifecycle, comments);
+      if (life) body.prepend(life);
     } catch (e) {
       if (seq !== threadSeq) return;
       $("cDetailMeta").textContent = "";
       const m = el("div", "msg err"); m.textContent = e.message; $("cDetailBody").replaceChildren(m);
     }
+  }
+  // ARN-71: command status from recorded Linear evidence only. "Issue created" is never shown as "AI executed".
+  function lifecycleBox(l, comments) {
+    if (!l || typeof l !== "object") return null;
+    const box = el("section", "lifecycle stage-" + String(l.stage || "unknown").replace(/[^a-z]/g, ""));
+    box.setAttribute("aria-label", "Command status");
+    box.append(el("div", "eyebrow", "Command status"), el("strong", null, l.label || "Unknown"), el("p", null, l.detail || ""));
+    (Array.isArray(l.evidence) ? l.evidence : []).forEach(ev => {
+      if (ev && ev.kind === "comment") {
+        const c = comments.find(x => x.id === ev.commentId);
+        if (c) box.append(el("div", "meta", "Recorded by " + (c.author || "Unknown") + " · " + fmtTime(c.createdAt)), el("pre", "desc", c.body || ""));
+      } else if (ev && ev.kind === "issue" && api.isIssueId(ev.issue)) {
+        const b = el("button", "link", "Open sub-task " + ev.issue); b.type = "button"; b.onclick = () => openThread(ev.issue); box.appendChild(b);
+      }
+    });
+    return box;
   }
   function closeThread() {
     threadSeq++;
@@ -235,7 +253,12 @@
       const j = await post("/api/intake", body);
       const ref = j && (j.identifier || j.id);
       pendingKey = null;
-      setMsg($("cSendMsg"), (intent === "question" ? "Question received" : "Command received") + (ref ? " as " + ref : "") + (j && j.duplicate ? " (already filed earlier)" : "") + ".", "ok");
+      setMsg($("cSendMsg"), (intent === "question" ? "Question received" : "Command received") + (ref ? " as " + ref : "") + (j && j.duplicate ? " (already filed earlier)" : "") + "." +
+        (intent === "question" ? "" : " Issue created; AI execution not verified yet."), "ok");
+      if (api.isIssueId(ref)) {
+        const b = el("button", "link", "Check status of " + ref); b.type = "button"; b.onclick = () => openThread(ref);
+        $("cSendMsg").appendChild(b);
+      }
       $("cText").value = "";
       loadOverview();
     } catch (e) { setMsg($("cSendMsg"), e.message, "err"); }
