@@ -274,14 +274,25 @@ test("ACP claims a command for its lead before planning", async () => {
   assert.match(claims[0]!.body, /acp:gemini/);
 });
 
-test("a command claimed by another ACP agent is not planned by the lead", async () => {
+test("a command claimed by another ACP agent is planned only by that recorded agent", async () => {
   const store = new MemoryStore();
   const cmd = store.add({ title: "Do the thing", description: COMMAND_MARKER });
   await store.comment(cmd.id, `${EXECUTOR_MARKER} acp:claude`);
   const seen: ChatMessage[][] = [];
-  const r = await tick(deps(store, { gemini: scripted(["{}"], seen) }, { ACP_DEFAULT_LEAD: "gemini" }));
-  assert.equal(seen.length, 0);
-  assert.ok(r.waiting.some((w) => w.includes("command claimed by another executor")));
+  await tick(deps(store, { gemini: scripted(["{}"], seen) }, { ACP_DEFAULT_LEAD: "gemini" }));
+  assert.equal(seen.length, 0, "the active lead never plans another ACP agent's command");
+  assert.equal(claimsFor(store, cmd.id).length, 1, "no second claim");
+});
+
+test("a planning retry keeps the fallback lead recorded in the claim after the named lead comes online", async () => {
+  const store = new MemoryStore();
+  const cmd = store.add({ title: "[Claude] Do the thing", description: COMMAND_MARKER });
+  await store.comment(cmd.id, `${EXECUTOR_MARKER} acp:gemini`);
+  const claudeSeen: ChatMessage[][] = [];
+  const geminiSeen: ChatMessage[][] = [];
+  await tick(deps(store, { claude: scripted(["{}"], claudeSeen), gemini: scripted(['{"summary":"s","tasks":[]}'], geminiSeen) }, { ACP_DEFAULT_LEAD: "gemini" }));
+  assert.equal(claudeSeen.length, 0);
+  assert.equal(geminiSeen.length, 1);
 });
 
 test("an unclaimed running command is claimed before reconciliation", async () => {

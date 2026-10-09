@@ -107,16 +107,16 @@ export function claimsOn(labels: string[], comments: { body: string; createdAt?:
 
 /**
  * Ownership check for a command, against the agent that would act on it (its active lead). Another ACP agent's
- * claim is foreign before planning; once planned, a command keeps the ACP lead recorded in its claim. A free command is claimed before acting.
+ * claim is not foreign: a command keeps the ACP lead recorded in its winning claim (planning retries and reconciliation). A free command is claimed before acting.
  * Returns the lead that may act on the command, or null when it is fenced off.
  */
-async function commandLead(d: Deps, cmd: Issue, report: TickReport, phase: "plan" | "reconcile", input = cmd.description): Promise<AgentKey | null> {
+async function commandLead(d: Deps, cmd: Issue, report: TickReport, input = cmd.description): Promise<AgentKey | null> {
   let { lead } = activeLead(d, cmd);
   const labels = d.store.getLabels ? await d.store.getLabels(cmd.id) : cmd.labels;
   const claims = claimsOn(labels, await d.store.getComments(cmd.id));
-  // A planned command keeps the ACP lead that claimed it, even if the active lead has since changed (fallback recovery).
+  // A command keeps the ACP lead that claimed it, even if the active lead has since changed (fallback recovery).
   const winner = claims.find((c) => c.source === "comment") ?? claims.find((c) => c.source === "label" && c.executor.startsWith("acp:"));
-  const recorded = phase === "reconcile" && winner?.executor.startsWith("acp:") && !claims.some((c) => c.source === "label" && c.executor !== winner.executor);
+  const recorded = winner?.executor.startsWith("acp:") && !claims.some((c) => c.source === "label" && c.executor !== winner.executor);
   const recordedKey = recorded ? winner!.executor.slice("acp:".length) : undefined;
   if (recordedKey && isAgentKey(recordedKey)) lead = recordedKey;
   const status = recordedKey !== undefined ? (isAgentKey(recordedKey) ? "own" : "foreign") : claimStatus(claims, lead);
@@ -161,8 +161,9 @@ async function callModel(d: Deps, agent: AgentKey, issue: Issue, messages: ChatM
 }
 
 /** Lead turns a command into sub-tasks for the team. */
-async function plan(d: Deps, cmd: Issue, report: TickReport): Promise<void> {
-  const { lead, note } = activeLead(d, cmd);
+async function plan(d: Deps, cmd: Issue, lead: AgentKey, report: TickReport): Promise<void> {
+  const active = activeLead(d, cmd);
+  const note = active.lead === lead ? active.note : "";
   const available = AGENT_LIST.filter((a) => d.clients[a.key]).map((a) => `- ${a.name} (${a.key}): ${a.role}`);
   const roster = available.length ? available.join("\n") : "- (no other agents online)";
   const messages: ChatMessage[] = [
@@ -351,7 +352,10 @@ export async function tick(d: Deps): Promise<TickReport> {
 
   for (const cmd of newCommands) {
     try {
-      if (await commandLead(d, cmd, report, "plan")) await plan(d, cmd, report);
+      {
+        const lead = await commandLead(d, cmd, report);
+        if (lead) await plan(d, cmd, lead, report);
+      }
     } catch (e) {
       report.errors.push(`${cmd.identifier}: ${(e as Error).message}`);
     }
@@ -399,7 +403,7 @@ export async function tick(d: Deps): Promise<TickReport> {
         // Budget preflight must cover the full reconciliation prompt (command plus every child result).
         const results = await childResults(d, children);
         const input = `${cmd.title}\n\n${cmd.description}\n\n${results.join("\n\n")}`;
-        const lead = await commandLead(d, cmd, report, "reconcile", input);
+        const lead = await commandLead(d, cmd, report, input);
         if (lead) await reconcile(d, cmd, lead, children, results, report);
       } catch (e) {
         report.errors.push(`${cmd.identifier}: ${(e as Error).message}`);
