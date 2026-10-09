@@ -1,3 +1,4 @@
+<meta charset="utf-8">
 <title>AI Command Post</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -108,7 +109,26 @@ textarea{width:100%;min-height:84px;resize:vertical;border:1px solid var(--line)
 
 [data-ag="claude"]{--ag:var(--a-claude)} [data-ag="chatgpt"]{--ag:var(--a-chatgpt)} [data-ag="gemini"]{--ag:var(--a-gemini)} [data-ag="perplexity"]{--ag:var(--a-perplexity)} [data-ag="none"]{--ag:var(--a-none)}
 
-@media (max-width:1000px){.roster{grid-template-columns:repeat(3,minmax(0,1fr))}.board{grid-template-columns:minmax(0,1fr)}.console{grid-template-columns:minmax(0,1fr)}.console .right{border-left:0;border-top:1px solid var(--line);border-radius:0 0 8px 8px}}
+/* website console */
+[hidden]{display:none!important}
+.cgrid{display:grid;gap:16px}
+.cmain{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:12px;align-items:start}
+.ctabs{display:flex;flex-wrap:wrap;gap:4px;padding:8px;border-bottom:1px solid var(--line)}
+.ctab{border:1px solid transparent;background:transparent;border-radius:6px;padding:6px 10px;cursor:pointer;display:inline-flex;gap:8px;align-items:baseline;font:600 15px var(--display);text-transform:uppercase;letter-spacing:.03em}
+.ctab b{font:500 12px var(--mono);color:var(--muted)}
+.ctab[aria-selected="true"]{background:var(--accent-soft);border-color:var(--accent)}
+.croster-wrap{display:grid;gap:10px}
+.croster{display:grid;gap:10px}
+.seg button[data-intent]{--ag:var(--accent)}
+.linkbtn{background:none;border:0;padding:0;color:var(--fg);font-weight:500;cursor:pointer;text-align:left;overflow-wrap:anywhere}
+.linkbtn:hover{text-decoration:underline}
+.cdetail{padding:14px 18px;display:grid;gap:8px}
+.cdetail header{display:flex;justify-content:space-between;gap:12px;align-items:start}
+.cdetail h2{font-size:20px;overflow-wrap:anywhere}
+.cdetail .desc{white-space:pre-wrap;overflow-wrap:anywhere;font:13px/1.5 var(--body);margin:0;background:var(--panel-2);padding:10px;border-radius:6px}
+.comments{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.comments .meta{font:12px var(--mono);color:var(--muted)}
+@media (max-width:1000px){.cmain{grid-template-columns:minmax(0,1fr)}.roster{grid-template-columns:repeat(3,minmax(0,1fr))}.board{grid-template-columns:minmax(0,1fr)}.console{grid-template-columns:minmax(0,1fr)}.console .right{border-left:0;border-top:1px solid var(--line);border-radius:0 0 8px 8px}}
 @media (max-width:640px){.roster{grid-template-columns:repeat(2,minmax(0,1fr))}.sitrep{grid-template-columns:repeat(2,minmax(0,1fr))}.sitrep > div:nth-child(3){border-left:0}.sitrep > div:nth-child(n+3){border-top:1px solid var(--line)}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 </style>
@@ -116,14 +136,14 @@ textarea{width:100%;min-height:84px;resize:vertical;border:1px solid var(--line)
 <div class="wrap">
   <div class="bar">
     <h1>AI Command Post</h1>
-    <span id="engineChip" class="chip ok"><span class="dot"></span>Engine live</span>
+    <span id="engineChip" data-legacy class="chip ok"><span class="dot"></span>Engine live</span>
     <span class="grow"></span>
-    <label class="eyebrow" for="teamSel">Workspace</label>
-    <select id="teamSel" class="sel" aria-label="Linear team"><option>Loading…</option></select>
+    <label class="eyebrow" for="teamSel" data-legacy>Workspace</label>
+    <select id="teamSel" data-legacy class="sel" aria-label="Linear team"><option>Loading…</option></select>
     <div class="clock" aria-live="off"><span>LOCAL <b id="clkL">--:--</b></span><span>ZULU <b id="clkZ">--:--Z</b></span></div>
   </div>
 
-  <section class="panel console" aria-labelledby="cmdH">
+  <section class="panel console" aria-labelledby="cmdH" data-legacy>
     <div class="left">
       <div class="leadrow"><span class="eyebrow" id="cmdH">Command authority</span></div>
       <div class="seg" id="leadSeg" role="group" aria-label="Lead AI"></div>
@@ -151,29 +171,70 @@ textarea{width:100%;min-height:84px;resize:vertical;border:1px solid var(--line)
     </aside>
   </section>
 
-  <section class="panel sitrep" aria-label="Situation report">
+  <section class="panel sitrep" aria-label="Situation report" data-legacy>
     <div><span class="eyebrow">In progress</span><span class="n mono" id="nProg">—</span><span class="s">Being worked now</span></div>
     <div><span class="eyebrow">Queued</span><span class="n mono" id="nQueue">—</span><span class="s">Future taskings</span></div>
     <div><span class="eyebrow">Accomplished · 7 days</span><span class="n mono" id="nDone">—</span><span class="s" id="nDoneAll">Completed</span></div>
     <div><span class="eyebrow">Unclaimed</span><span class="n mono" id="nUncl">—</span><span class="s">Open, no AI owner</span></div>
   </section>
 
-  <section aria-labelledby="rosterH" style="display:grid;gap:10px">
+  <section data-legacy aria-labelledby="rosterH" style="display:grid;gap:10px">
     <h2 id="rosterH" class="eyebrow" style="font-family:var(--mono);font-size:11px">Agent roster</h2>
     <div class="roster" id="roster"></div>
   </section>
 
   <div id="pageState" class="panel state" hidden></div>
 
-  <section class="board" aria-label="Taskings">
+  <!-- Website console (ARN-49): shown only outside Claude, driven by console.js via /api/console and /api/intake. -->
+  <div id="eveConsole" class="cgrid" hidden>
+    <section class="panel console" aria-labelledby="cComposeH">
+      <div class="left">
+        <span class="eyebrow" id="cComposeH">POTUS composer</span>
+        <div class="seg" id="cIntent" role="group" aria-label="Intent">
+          <button type="button" data-intent="command" aria-pressed="true">Command</button>
+          <button type="button" data-intent="question" aria-pressed="false">Question <span class="mono note">read-only</span></button>
+        </div>
+        <label class="eyebrow" for="cText">Message</label>
+        <textarea id="cText" maxlength="4000" aria-describedby="cIntentNote cKeys"></textarea>
+        <div class="actions"><button class="btn" id="cSend" type="button">Send command</button><span class="note" id="cKeys">Ctrl+Enter to send</span></div>
+        <div id="cSendMsg" class="msg" role="status" aria-live="polite" hidden></div>
+        <p class="note" id="cIntentNote"></p>
+      </div>
+      <aside class="right" aria-label="Status">
+        <span class="eyebrow">Linear snapshot</span>
+        <p class="mono note" id="cUpdated" aria-live="polite">Loading…</p>
+        <button class="btn ghost" id="cRefresh" type="button">Refresh</button>
+        <p class="note">Read from Linear through /api/console. Agent connections are not verified; the roster shows workload only.</p>
+      </aside>
+    </section>
+    <div id="cOverviewMsg" class="msg" role="status" hidden></div>
+    <div class="cmain">
+      <section class="panel lane" aria-label="Taskings">
+        <div class="ctabs" id="cTabs" role="tablist" aria-label="Task lanes"></div>
+        <ol id="cList" role="tabpanel" tabindex="0"></ol>
+      </section>
+      <section aria-labelledby="cRosterH" class="croster-wrap">
+        <h2 id="cRosterH" class="eyebrow" style="font-family:var(--mono);font-size:11px">Agent roster · workload</h2>
+        <div class="croster" id="cRoster"></div>
+      </section>
+    </div>
+    <section class="panel cdetail" id="cDetail" role="region" aria-labelledby="cDetailTitle" hidden>
+      <header><h2 id="cDetailTitle"></h2><button class="btn ghost" id="cDetailClose" type="button" aria-label="Close thread (Escape)">Close</button></header>
+      <p class="mono note" id="cDetailMeta"></p>
+      <div id="cDetailBody"></div>
+    </section>
+  </div>
+
+  <section class="board" aria-label="Taskings" data-legacy>
     <div class="panel lane"><header><h2>In progress</h2><span class="mono note" id="cProg"></span></header><ol id="lProg"><li class="empty">Loading taskings from Linear…</li></ol></div>
     <div class="panel lane"><header><h2>Queued</h2><span class="mono note" id="cQueue"></span></header><ol id="lQueue"><li class="empty">Loading taskings from Linear…</li></ol></div>
     <div class="panel lane"><header><h2>Accomplished</h2><span class="mono note" id="cDone"></span></header><ol id="lDone"><li class="empty">Loading taskings from Linear…</li></ol></div>
   </section>
 
-  <div class="foot"><span id="fresh">Waiting for Linear…</span><span>Ownership: an AI's name in [brackets] at the start of a title, a label, or the assignee.</span></div>
+  <div class="foot" data-legacy><span id="fresh">Waiting for Linear…</span><span>Ownership: an AI's name in [brackets] at the start of a title, a label, or the assignee.</span></div>
 </div>
 
+<script src="console.js"></script>
 <script>
 (function(){
 const AGENTS=[
@@ -352,7 +413,10 @@ function webMcp(){
 }
 
 const cl=window.claude;
-if((!cl||!cl.use)&&/^https?:$/.test(location.protocol)){mcp=webMcp();loadTeams();return}
+if((!cl||!cl.use)&&/^https?:$/.test(location.protocol)){
+  // Website mode uses the read-only /api/console contract; fall back to the legacy /api/linear board if console.js is missing.
+  if(window.ACPConsole){window.ACPConsole.start();return}
+  mcp=webMcp();loadTeams();return}
 if(!cl||!cl.use){showPage("Open this page in Claude to connect it to Linear.","warn");
   ["lProg","lQueue","lDone"].forEach(id=>$(id).innerHTML='<li class="empty">Not connected to Linear.</li>');return}
 cl.use("db").then(d=>{db=d;if(!db)return;
