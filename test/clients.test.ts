@@ -110,3 +110,20 @@ test("provider HTTP errors become ProviderError", async () => {
   const c = chatCompletionsClient("openai", "https://api.openai.com/v1", "k", "m", fakeFetch({ error: "nope" }, 429));
   await assert.rejects(() => c.chat([{ role: "user", content: "q" }], { maxOutputTokens: 10 }), ProviderError);
 });
+
+test("LinearStore.getComments pages through every comment", async () => {
+  const pages = [
+    { nodes: [{ body: "late", createdAt: "2026-10-08T10:00:02Z" }], pageInfo: { hasNextPage: true, endCursor: "c1" } },
+    { nodes: [{ body: "early", createdAt: "2026-10-08T10:00:00Z" }], pageInfo: { hasNextPage: false, endCursor: null } },
+  ];
+  const afters: unknown[] = [];
+  const f = (async (_u: string, init: { body: string }) => {
+    const v = JSON.parse(init.body).variables;
+    afters.push(v.after);
+    const page = pages[afters.length - 1];
+    return new Response(JSON.stringify({ data: { issue: { comments: page } } }), { status: 200 });
+  }) as unknown as typeof fetch;
+  const all = await new LinearStore("k", f).getComments("i1");
+  assert.deepEqual(all.map((c) => c.body), ["late", "early"]);
+  assert.deepEqual(afters, [null, "c1"]);
+});
