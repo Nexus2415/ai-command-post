@@ -23,6 +23,8 @@ export interface Issue {
 export interface TaskStore {
   listOpenAndRecent(teamKey: string): Promise<Issue[]>;
   getComments(issueId: string): Promise<{ body: string; createdAt: string }[]>;
+  /** Fresh labels for one issue; used for the final claim check. Optional so simple stores can skip it. */
+  getLabels?(issueId: string): Promise<string[]>;
   createIssue(input: { teamKey: string; title: string; description: string; parentId?: string; priority?: number }): Promise<Issue>;
   comment(issueId: string, body: string): Promise<void>;
   setState(issueId: string, teamKey: string, type: StateType): Promise<void>;
@@ -109,6 +111,11 @@ export class LinearStore implements TaskStore {
     return d.issues.nodes.map(toIssue);
   }
 
+  async getLabels(issueId: string) {
+    const d = await this.gql(`query($id:String!){ issue(id:$id){ labels { nodes { name } } } }`, { id: issueId });
+    return (d.issue.labels?.nodes ?? []).map((l: any) => l.name as string);
+  }
+
   async getComments(issueId: string) {
     // Page through every comment: claim ownership depends on the earliest claim, which may not be on page one.
     const out: { body: string; createdAt: string }[] = [];
@@ -169,6 +176,10 @@ export class DryRunStore implements TaskStore {
   listOpenAndRecent(teamKey: string) {
     return this.inner.listOpenAndRecent(teamKey);
   }
+  getLabels(issueId: string) {
+    return this.inner.getLabels ? this.inner.getLabels(issueId) : Promise.resolve([] as string[]);
+  }
+
   getComments(issueId: string) {
     return this.inner.getComments(issueId);
   }

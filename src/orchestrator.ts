@@ -104,6 +104,20 @@ export function claimsOn(labels: string[], comments: { body: string; createdAt?:
   return out;
 }
 
+/** True when any executor other than ACP holds the issue (an `executor:` label or a claim comment). */
+export function fencedFromAcp(claims: ExecutorClaim[]): boolean {
+  if (claims.some((c) => c.source === "label" && !c.executor.startsWith("acp:"))) return true;
+  const first = claims.find((c) => c.source === "comment");
+  return !!first && !first.executor.startsWith("acp:");
+}
+
+async function commandFenced(d: Deps, cmd: Issue, report: TickReport): Promise<boolean> {
+  const labels = d.store.getLabels ? await d.store.getLabels(cmd.id) : cmd.labels;
+  if (!fencedFromAcp(claimsOn(labels, await d.store.getComments(cmd.id)))) return false;
+  report.waiting.push(`${cmd.identifier}: command claimed by another executor; ACP will not plan or reconcile it`);
+  return true;
+}
+
 /** "own" = already claimed by this ACP agent; "foreign" = another executor holds it; "free" = unclaimed. */
 export function claimStatus(claims: ExecutorClaim[], agent: AgentKey): "own" | "foreign" | "free" {
   if (!claims.length) return "free";
@@ -196,7 +210,8 @@ export async function work(d: Deps, task: Issue, agent: AgentKey, report: TickRe
   ];
 
   // Re-read claims immediately before writing ours, to narrow (not close) the race window.
-  const status = claimStatus(claimsOn(task.labels, await d.store.getComments(task.id)), agent);
+  const labels = d.store.getLabels ? await d.store.getLabels(task.id) : task.labels;
+  const status = claimStatus(claimsOn(labels, await d.store.getComments(task.id)), agent);
   if (status === "foreign") {
     report.waiting.push(`${task.identifier}: claimed by another executor; ACP will not run it`);
     return;
@@ -321,7 +336,7 @@ export async function tick(d: Deps): Promise<TickReport> {
 
   for (const cmd of newCommands) {
     try {
-      await plan(d, cmd, report);
+      if (!(await commandFenced(d, cmd, report))) await plan(d, cmd, report);
     } catch (e) {
       report.errors.push(`${cmd.identifier}: ${(e as Error).message}`);
     }
@@ -366,7 +381,7 @@ export async function tick(d: Deps): Promise<TickReport> {
     const children = kids as Issue[];
     if (children.every((c) => DONE.includes(c.stateType))) {
       try {
-        await reconcile(d, cmd, children, report);
+        if (!(await commandFenced(d, cmd, report))) await reconcile(d, cmd, children, report);
       } catch (e) {
         report.errors.push(`${cmd.identifier}: ${(e as Error).message}`);
       }

@@ -39,6 +39,10 @@ class MemoryStore implements TaskStore {
   async getComments(id: string) {
     return this.comments.get(id) ?? [];
   }
+  labelOverride = new Map<string, string[]>();
+  async getLabels(id: string) {
+    return this.labelOverride.get(id) ?? this.issues.find((i) => i.id === id)?.labels ?? [];
+  }
   async createIssue(input: { title: string; description: string; parentId?: string; priority?: number }) {
     return this.add({ title: input.title, description: input.description, parentId: input.parentId ?? null, priority: input.priority ?? 0 });
   }
@@ -231,4 +235,32 @@ test("claim order uses parsed time, not array order or string format", () => {
     { body: `${EXECUTOR_MARKER} acp:claude`, createdAt: "2026-10-08T05:00:00-05:00" },
   ]].reverse());
   assert.equal(claimStatus(reversed, "claude"), "own");
+});
+
+test("a command fenced for another executor is neither planned nor reconciled", async () => {
+  const store = new MemoryStore();
+  const cmd = store.add({ title: "Do the thing", description: COMMAND_MARKER, labels: ["executor:eve"] });
+  const seen: ChatMessage[][] = [];
+  const r = await tick(deps(store, { gemini: scripted(["{}"], seen) }, { ACP_DEFAULT_LEAD: "gemini" }));
+  assert.equal(seen.length, 0, "lead never called");
+  assert.equal(store.issues.filter((i) => i.parentId === cmd.id).length, 0, "no sub-issues");
+  assert.ok(r.waiting.some((w) => w.includes("command claimed by another executor")));
+
+  const running = store.add({ title: "Running", description: COMMAND_MARKER, stateType: "started" });
+  store.add({ title: "[Gemini] a", parentId: running.id, stateType: "completed" });
+  await store.comment(running.id, `${EXECUTOR_MARKER} manual`);
+  const seen2: ChatMessage[][] = [];
+  await tick(deps(store, { gemini: scripted(["summary"], seen2) }));
+  assert.equal(seen2.length, 0, "no reconcile call");
+  assert.equal(store.issues.find((i) => i.id === running.id)!.stateType, "started");
+});
+
+test("a label added after the snapshot still fences the task at the final claim check", async () => {
+  const store = new MemoryStore();
+  const t = store.add({ title: "[Gemini] check docs" });
+  store.labelOverride.set(t.id, ["executor:manual"]);
+  const seen: ChatMessage[][] = [];
+  await tick(deps(store, { gemini: scripted([done], seen) }));
+  assert.equal(seen.length, 0, "model never called");
+  assert.equal(claimsFor(store, t.id).length, 0, "ACP wrote no claim");
 });
