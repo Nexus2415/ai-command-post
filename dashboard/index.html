@@ -1,4 +1,5 @@
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>AI Command Post</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -253,6 +254,7 @@ tick(); setInterval(tick,15000);
 
 function lsGet(k){try{return localStorage.getItem(k)}catch(e){return null}}
 function lsSet(k,v){try{localStorage.setItem(k,v)}catch(e){}}
+let memPw="";
 
 function labelNames(l){return (Array.isArray(l)?l:[]).map(x=>typeof x==="string"?x:(x&&x.name)||"")}
 function personName(p){if(!p)return "";if(typeof p==="string")return p;return p.name||p.displayName||""}
@@ -395,9 +397,9 @@ renderLead(); renderRoster();
 // Website mode: outside Claude, the page talks to Linear through its own /api/linear backend, locked by a password.
 function webMcp(){
   async function call(tool,args,retry){
-    const r=await fetch("/api/linear",{method:"POST",headers:{"content-type":"application/json","x-acp-password":lsGet("acp.pw")||""},body:JSON.stringify({tool:tool,args:args})});
+    const r=await fetch("/api/linear",{method:"POST",headers:{"content-type":"application/json","x-acp-password":memPw},body:JSON.stringify({tool:tool,args:args})});
     const j=await r.json().catch(()=>({}));
-    if(r.status===401&&retry!==false){const pw=window.prompt("Password for AI Command Post");if(pw){lsSet("acp.pw",pw);return call(tool,args,false)}}
+    if(r.status===401&&retry!==false){const pw=window.prompt("Password for AI Command Post");if(pw){memPw=pw;return call(tool,args,false)}}
     if(!r.ok)throw {code:r.status>=500&&r.status!==502?"server_unavailable":"tool_error",server:"Linear",message:j.error||("HTTP "+r.status)};
     return {payload:j};
   }
