@@ -1,5 +1,5 @@
 // Website backend (Vercel serverless function). The dashboard page calls this instead of the Claude Linear connector.
-// Locked by the ACP_SITE_PASSWORD env var; it refuses everything when that isn't set. Only reads issues and creates new commands.
+// Locked by the ACP_SITE_PASSWORD env var; it refuses everything when that isn't set. Legacy read-only adapter. Command creation is handled exclusively by /api/intake.
 import { timingSafeEqual } from "node:crypto";
 
 const LINEAR = "https://api.linear.app/graphql";
@@ -19,13 +19,6 @@ async function gql(env, f, query, variables) {
   const j = await res.json().catch(() => ({}));
   if (!res.ok || j.errors) throw new Error(j.errors?.[0]?.message || `Linear HTTP ${res.status}`);
   return j.data;
-}
-
-async function teamId(env, f, name) {
-  const d = await gql(env, f, `query($n:String!){ teams(filter:{ name:{ eq:$n } }){ nodes{ id } } }`, { n: name });
-  const id = d.teams.nodes[0]?.id;
-  if (!id) throw new Error(`No Linear team named ${name}`);
-  return id;
 }
 
 const TOOLS = {
@@ -51,19 +44,7 @@ const TOOLS = {
     }));
     return { issues, hasNextPage: d.issues.pageInfo.hasNextPage };
   },
-  // Creates a new command issue only; there is no way to edit or delete through the website.
-  async save_issue(env, f, args) {
-    const title = String(args.title || "").trim().slice(0, 200);
-    const description = String(args.description || "").slice(0, 20_000);
-    if (!title) throw new Error("A command needs a title");
-    const priority = [0, 1, 2, 3, 4].includes(Number(args.priority)) ? Number(args.priority) : 0;
-    const d = await gql(
-      env, f,
-      `mutation($i:IssueCreateInput!){ issueCreate(input:$i){ issue{ identifier url } } }`,
-      { i: { teamId: await teamId(env, f, String(args.team || "")), title, description, priority } },
-    );
-    return d.issueCreate.issue;
-  },
+
 };
 
 // Pure request handler, so tests can drive it with a fake fetch.
