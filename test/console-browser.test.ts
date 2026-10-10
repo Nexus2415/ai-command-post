@@ -76,14 +76,43 @@ test('ARN-77 real console DOM: outage, stale refresh, thread recovery and malfor
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address() as import('node:net').AddressInfo;
   try {
-    const child = spawn(browser, ['--headless', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage', '--disable-background-networking', '--remote-debugging-port=0', '--user-data-dir=' + join(dir, 'profile'), 'about:blank'], { env: { ...process.env, XDG_CONFIG_HOME: dir, XDG_CACHE_HOME: dir }, stdio: 'ignore', detached: true });
+    const debugProbe = createServer();
+    await new Promise<void>(resolve => debugProbe.listen(0, '127.0.0.1', resolve));
+    const debugPort = (debugProbe.address() as import('node:net').AddressInfo).port;
+    await new Promise<void>((resolve, reject) => debugProbe.close(err => err ? reject(err) : resolve()));
+
+    const child = spawn(browser, [
+      '--headless',
+      '--no-sandbox',
+      '--disable-gpu',
+      '--disable-dev-shm-usage',
+      '--disable-background-networking',
+      '--remote-debugging-address=127.0.0.1',
+      '--remote-debugging-port=' + debugPort,
+      '--user-data-dir=' + join(dir, 'profile'),
+      'about:blank',
+    ], {
+      env: { ...process.env, XDG_CONFIG_HOME: dir, XDG_CACHE_HOME: dir },
+      stdio: ['ignore', 'ignore', 'pipe'],
+      detached: true,
+    });
+    let browserError = '';
+    child.stderr?.on('data', chunk => { browserError = (browserError + String(chunk)).slice(-4000); });
     let socket: WebSocket | undefined;
     try {
-      const portFile = join(dir, 'profile', 'DevToolsActivePort');
-      for (let i = 0; i < 100 && !existsSync(portFile); i++) await new Promise(r => setTimeout(r, 50));
-      assert.ok(existsSync(portFile), 'Chromium debugging endpoint did not start');
-      const port = readFileSync(portFile, 'utf8').split('\n')[0];
-      const pages = await (await fetch('http://127.0.0.1:' + port + '/json/list')).json() as any[];
+      let pages: any[] | undefined;
+      for (let i = 0; i < 100 && !pages; i++) {
+        if (child.exitCode !== null) break;
+        try {
+          const response = await fetch('http://127.0.0.1:' + debugPort + '/json/list');
+          if (response.ok) pages = await response.json() as any[];
+        } catch {}
+        if (!pages) await new Promise(r => setTimeout(r, 50));
+      }
+      assert.ok(pages?.length, 'Chromium debugging endpoint did not start' + (browserError ? ': ' + browserError : ''));
+      const page = pages.find(p => p.type === 'page');
+      assert.ok(page?.webSocketDebuggerUrl, 'Chromium debugging endpoint exposed no page target');
+      socket = new WebSocket(page.webSocketDebuggerUrl);
       socket = new WebSocket(pages.find(p => p.type === 'page').webSocketDebuggerUrl);
       await new Promise<void>((resolve, reject) => { socket!.onopen = () => resolve(); socket!.onerror = reject; });
       let seq = 0;
