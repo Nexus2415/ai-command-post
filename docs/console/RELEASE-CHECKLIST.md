@@ -64,3 +64,24 @@ Merge to main, activate production, change environment flags or secrets, use met
 ## Next verification
 
 PR #15 and Claude UI PR #18 are available. Reconcile the current API P1 review comments before integrating; verify scoped request/response with synthetic upstream and run the ARN-47 owner journey on an authorized preview. Check the exact combined head and preserve all approval gates. Post exact failures and owner-only decisions under ARN-43. Update this document on material status changes only.
+
+
+## 2026-10-11 current-state correction
+
+This section supersedes stale status/routing statements above where they conflict.
+
+- **Active lanes:** ChatGPT coordinates; Claude Code implements; Codex performs bounded implementation/review; Perplexity Computer performs current-source research/challenge. **Gemini is suspended** by the owner decision recorded in the current operating doctrine and must not be treated as an active fallback merely because older ACP variables/issues mention it.
+- **Owner UI acceptance:** Darius previously reported PASS for password login, scoped Linear task/roster loading, existing thread/result viewing, and blocked InPrivate/Incognito access. That is owner-observed UI evidence only, not model-execution or release proof.
+- **ARN-77 / ACP PR #34:** exact head `5ba189043fa93aa249704826f22736b7508c7e8b`. The receipt guard and synthetic console recovery work exist, but GitHub Validate failed twice at the same real-Chromium case: `Chromium debugging endpoint did not start`. This is a persistent harness/CI blocker, not a transient one-run failure. Codex owns the same PR and has one current correction handoff; do not duplicate the implementation.
+- **Claude GitHub lane:** the real launch task trigger on opsdesk issue #170 reached the Claude action, GitHub App/OIDC setup succeeded, but `claude_code_oauth_token` resolved empty and the action stopped before repository work. The workflow already references `secrets.CLAUDE_CODE_OAUTH_TOKEN`. Do not retry until that exact Actions secret binding is available; do not substitute a paid API-key route.
+- **Stage 3 launch blocker:** ARN-79 now tracks the confirmed Gmail shadow audit-atomicity defect. No client-authorized Stage 3 shadow run should proceed until mandatory proposal/audit evidence cannot become partially durable.
+- **Thread continuity:** ChatGPT chat is not the system of record. Current Linear issues/comments, exact PR heads/checks and source files govern status. Rotate to a fresh Arnexyia Project chat when a conversation becomes long, preserving only compact handoff state.
+
+Current coordinator critical path:
+1. fix/validate ARN-77 PR #34;
+2. restore Claude subscription-backed GitHub execution and complete ARN-79;
+3. independently review stable candidate PRs once, proportionate to risk;
+4. finish owner-facing Command Post acceptance without enabling paid/model execution;
+5. return primary effort to client-authorized Stage 3 shadow and founding-pilot launch gates.
+
+No item in this correction authorizes a merge, production deployment, secret/flag change, model spend, client data, or release-gate transition.
