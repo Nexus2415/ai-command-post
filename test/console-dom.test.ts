@@ -224,3 +224,26 @@ test("stale thread responses don't overwrite a closed or newer thread", async ()
   pending["ARN-1"]!(); await flush();
   assert.match(t.$("cDetailTitle").textContent, /ARN-2/);
 });
+
+test("ARN-77 malformed successful intake preserves the draft and retry key", async () => {
+  for (const intent of ["command", "question"]) {
+    let receipt: any = {};
+    const t = setup(path => path === "/api/intake" ? ok(receipt) : ok(overviewJson));
+    await flush();
+    if (intent === "question") t.intentBtns[1]!.click();
+    t.$("cText").value = "synthetic retry";
+    for (const invalid of [{}, [], { identifier: "invalid" }, { identifier: 77 }, { id: "ARN-77" }]) {
+      receipt = invalid; t.$("cSend").click(); await flush();
+      assert.equal(t.$("cSendMsg").className, "msg err");
+      assert.match(t.$("cSendMsg").textContent, /Nothing was confirmed as received/);
+      assert.doesNotMatch(t.$("cSendMsg").textContent, /received as|Issue created|completed/i);
+      assert.equal(t.$("cText").value, "synthetic retry");
+    }
+    const calls = () => t.calls.filter(c => c.path === "/api/intake");
+    assert.equal(new Set(calls().map(c => c.body.idempotencyKey)).size, 1);
+    receipt = { identifier: "ARN-77", duplicate: true }; t.$("cSend").click(); await flush();
+    assert.equal(new Set(calls().map(c => c.body.idempotencyKey)).size, 1);
+    assert.match(t.$("cSendMsg").textContent, /received as ARN-77.*already filed earlier/);
+    assert.equal(t.$("cText").value, "");
+  }
+});

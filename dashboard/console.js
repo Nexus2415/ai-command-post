@@ -251,7 +251,10 @@
     busy = true; $("cSend").disabled = true; setMsg($("cSendMsg"), "Sending…", "");
     try {
       const j = await post("/api/intake", body);
-      const ref = j && (j.identifier || j.id);
+      if (!j || typeof j !== "object" || Array.isArray(j) || typeof j.identifier !== "string" || !api.isIssueId(j.identifier)) {
+        throw new Error("Invalid receipt from server. Nothing was confirmed as received. Retry with the same draft.");
+      }
+      const ref = j.identifier;
       pendingKey = null;
       setMsg($("cSendMsg"), (intent === "question" ? "Question received" : "Command received") + (ref ? " as " + ref : "") + (j && j.duplicate ? " (already filed earlier)" : "") + "." +
         (intent === "question" ? "" : " Issue created; AI execution not verified yet."), "ok");
