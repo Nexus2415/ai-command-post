@@ -7,11 +7,12 @@ import { createServer } from 'node:http';
 import { join } from 'node:path';
 import { spawnSync, spawn } from 'node:child_process';
 
-const browserCandidates = process.env['ACP_TEST_CHROMIUM']
-  ? [process.env['ACP_TEST_CHROMIUM']]
+const configuredBrowser = process.env['ACP_TEST_CHROMIUM'];
+const browserCandidates: string[] = configuredBrowser
+  ? [configuredBrowser]
   : ['/usr/bin/google-chrome', '/usr/bin/chromium'];
-const browser = browserCandidates.find(candidate => spawnSync(candidate, ['--version']).status === 0) ?? browserCandidates[0];
-const available = Boolean(browser) && spawnSync(browser, ['--version']).status === 0;
+const browser = browserCandidates.find(candidate => spawnSync(candidate, ['--version']).status === 0) ?? '';
+const available = browser !== '';
 test('ARN-77 real console DOM: outage, stale refresh, thread recovery and malformed intake', { skip: !available }, async () => {
   const html = readFileSync(new URL('../dashboard/index.html', import.meta.url), 'utf8').replace(/<script\b[^>]*>[\s\S]*?<\/script>/g, '').replace(/<link\b[^>]*>/g, '');
   const source = readFileSync(new URL('../dashboard/console.js', import.meta.url), 'utf8');
@@ -82,7 +83,7 @@ test('ARN-77 real console DOM: outage, stale refresh, thread recovery and malfor
     const debugProbe = createServer();
     await new Promise<void>(resolve => debugProbe.listen(0, '127.0.0.1', resolve));
     const debugPort = (debugProbe.address() as import('node:net').AddressInfo).port;
-    await new Promise<void>((resolve, reject) => debugProbe.close(err => err ? reject(err) : resolve()));
+    await new Promise<void>(resolve => debugProbe.close(() => resolve()));
 
     const child = spawn(browser, [
       '--headless',
@@ -116,7 +117,6 @@ test('ARN-77 real console DOM: outage, stale refresh, thread recovery and malfor
       const page = pages.find(p => p.type === 'page');
       assert.ok(page?.webSocketDebuggerUrl, 'Chromium debugging endpoint exposed no page target');
       socket = new WebSocket(page.webSocketDebuggerUrl);
-      socket = new WebSocket(pages.find(p => p.type === 'page').webSocketDebuggerUrl);
       await new Promise<void>((resolve, reject) => { socket!.onopen = () => resolve(); socket!.onerror = reject; });
       let seq = 0;
       const rpc = (method: string, params: any = {}) => new Promise<any>((resolve, reject) => {
