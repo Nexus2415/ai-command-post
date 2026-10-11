@@ -100,7 +100,8 @@ export type ClaimStatus = { ok: true; attemptId: string; fence: number; state: A
 /**
  * Durable transactional claim-and-budget broker. Shape follows the ARN-65 `ExecutionBroker`. Contract the manager
  * relies on: `markDispatched` succeeds only for the claim's latest attempt while it is `claimed`, so an attempt that
- * was already dispatched, settled, failed or released can never be dispatched (and its worker run) again.
+ * was already dispatched, settled, failed or released can never be dispatched (and its worker run) again. `settle` and
+ * `markFailed` are idempotent for an attempt already in that state, so a reconciliation can re-record an outcome.
  */
 export interface AdmissionBroker {
   /** Latest attempt of a claim and its state. The source of truth for a job recovered after a restart. */
@@ -119,7 +120,12 @@ export interface AdmissionBroker {
  * broker or kill-switch stop, or a crash): a redelivery of the same event resumes admission. `admitted` and `staged`
  * carry the job, including its claim reference, so a redelivery recovers it even after the manager restarts.
  */
-export type LedgerEntry = { status: "pending"; job: null } | { status: "admitted" | "staged"; job: Job };
+export type LedgerEntry = { status: "pending"; job: null } | { status: "admitted" | "staged"; job: Job; outcome?: LedgerOutcome };
+/**
+ * A terminal outcome, recorded only after its broker acknowledgment AND its audit entry exist, for one attempt (fence).
+ * The broker proves an attempt was settled or failed; only this record proves the matching audit evidence was written.
+ */
+export type LedgerOutcome = { state: "complete" | "failed"; fence: number };
 export type LedgerVerdict = { verdict: "new" } | { verdict: "out_of_order" } | { verdict: "duplicate"; entry: LedgerEntry };
 /** Durable per-task event ledger. */
 export interface EventLedger {
@@ -127,6 +133,8 @@ export interface EventLedger {
   record(e: { tenantId: string; taskId: string; eventId: string; seq: number }): Promise<LedgerVerdict>;
   /** Durably moves a pending receipt to its admission outcome. Throwing means it was not recorded. */
   resolve(e: { tenantId: string; eventId: string; status: "admitted" | "staged"; job: Job }): Promise<void>;
+  /** Durably records an admitted job's terminal outcome for one attempt. Throwing means it was not recorded. */
+  recordOutcome(e: { tenantId: string; eventId: string; outcome: LedgerOutcome }): Promise<void>;
 }
 
 export interface AuditEntry {
@@ -190,7 +198,7 @@ export function inertPorts(): Ports {
   return {
     killSwitch: () => "error",
     broker: UNAVAILABLE_BROKER,
-    ledger: { record: down("event ledger"), resolve: down("event ledger") },
+    ledger: { record: down("event ledger"), resolve: down("event ledger"), recordOutcome: down("event ledger") },
     audit: { append: down("audit sink") },
     worker: { run: down("worker") },
     verifier: { verify: down("verifier") },
@@ -386,7 +394,7 @@ export class Manager {
       if (!durable || durable.idempotencyKey !== idempotencyKey) return { status: "BLOCKED", reason: "ledger_entry_unrecoverable" };
       const local = this.jobs.get(durable.jobId);
       if (local) return { status: "DUPLICATE", reason: `event already ${recorded.entry.status}; nothing dispatched`, job: local };
-      const recovered = await this.recover(structuredClone(durable));
+      const recovered = await this.recover(structuredClone(durable), recorded.entry.status === "admitted" ? recorded.entry.outcome : undefined);
       if ("blocked" in recovered) return { status: "BLOCKED", reason: recovered.blocked };
       return { status: "DUPLICATE", reason: `event already ${recorded.entry.status}; recovered as ${recovered.job.state}; nothing dispatched`, job: recovered.job };
     }
@@ -481,10 +489,11 @@ export class Manager {
   /**
    * Rebuilds a job this manager has not seen (after a restart) from its ledger snapshot plus the broker's current
    * state, never from the snapshot alone: the snapshot is the admission record, and every later transition is the
-   * broker's. Work that may have run comes back `unknown` for independent reconciliation, finished work comes back
-   * finished, and only an attempt that is still `claimed` comes back dispatchable.
+   * broker's. Work that may have run comes back `unknown` for independent reconciliation, and only an attempt that is
+   * still `claimed` comes back dispatchable. A settled or failed attempt comes back `complete` or `failed` only when the
+   * ledger holds that same outcome for that same fence (proof its audit evidence was written); otherwise `unknown`.
    */
-  private async recover(job: Job): Promise<{ job: Job } | { blocked: string }> {
+  private async recover(job: Job, outcome: LedgerOutcome | undefined): Promise<{ job: Job } | { blocked: string }> {
     if (job.state === "awaiting_owner" && job.claimId === null) return { job: this.adopt(job) };
     if (job.state !== "admitted" || job.claimId === null) return { blocked: "ledger_entry_unrecoverable" };
     let st: ClaimStatus;
@@ -500,19 +509,34 @@ export class Manager {
     // Every attempt takes a fresh fence, so the fence bounds how many attempts were made: retries stay bounded.
     job.attempt = Math.max(job.attempt, st.fence);
     job.replayId = `${job.jobId}#${job.attempt}`;
-    const recoveredState: Record<AttemptState, JobState> = {
-      claimed: "admitted",
-      dispatched: "unknown",
-      unknown: "unknown",
-      settled: "complete",
-      failed: "failed",
-      released: "halted",
+    const proven = (state: "complete" | "failed"): JobState => (outcome?.state === state && outcome.fence === st.fence ? state : "unknown");
+    const recoveredState: Record<AttemptState, () => JobState> = {
+      claimed: () => "admitted",
+      dispatched: () => "unknown",
+      unknown: () => "unknown",
+      settled: () => proven("complete"),
+      failed: () => proven("failed"),
+      released: () => "halted",
     };
-    job.state = recoveredState[st.state];
+    job.state = recoveredState[st.state]();
     this.adopt(job);
-    if (job.state === "unknown") this.queue({ eventId: job.eventId, jobId: job.jobId, needs: "reconciliation", reason: `recovered after restart with attempt ${st.state}` });
+    if (job.state === "unknown") {
+      const why = st.state === "settled" || st.state === "failed" ? `attempt ${st.state} at the broker but its outcome evidence is not recorded` : `attempt ${st.state}`;
+      this.queue({ eventId: job.eventId, jobId: job.jobId, needs: "reconciliation", reason: `recovered after restart: ${why}` });
+    }
     if (job.state === "halted") this.queue({ eventId: job.eventId, jobId: job.jobId, needs: "attention", reason: "recovered after restart with a released attempt" });
     return { job };
+  }
+
+  /** Records a terminal outcome for the job's current attempt. Called only after the broker ack and the audit entry. */
+  private async recordOutcome(job: Job, state: "complete" | "failed"): Promise<boolean> {
+    if (job.fence === null) return false;
+    try {
+      await this.p.ledger.recordOutcome({ tenantId: job.tenantId, eventId: job.eventId, outcome: { state, fence: job.fence } });
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /** Puts a job (new, or recovered from the ledger after a restart) into the local index. */
@@ -597,6 +621,7 @@ export class Manager {
       if (!(await this.audit(job.eventId, job, "verification_failed", v.ref))) return this.ambiguous(job, "audit_failed_on_rejected_result");
       const f = await this.p.broker.markFailed(attemptId, fence).catch(() => ({ ok: false as const, reason: "unavailable" }));
       if (!f.ok) return this.ambiguous(job, `mark_failed_refused:${f.reason}`);
+      if (!(await this.recordOutcome(job, "failed"))) return this.ambiguous(job, "ledger_failed_after_mark_failed");
       this.move(job, "failed");
       return { status: "BLOCKED", reason: "result_failed_independent_check", job };
     }
@@ -610,6 +635,7 @@ export class Manager {
       return this.ambiguous(job, "settle_unavailable");
     }
     if (!(await this.audit(job.eventId, job, "complete", v.ref))) return this.ambiguous(job, "audit_failed_after_settle");
+    if (!(await this.recordOutcome(job, "complete"))) return this.ambiguous(job, "ledger_failed_after_settle");
     this.move(job, "complete");
     return { status: "ADMITTED", reason: "complete and independently checked", job };
   }
@@ -652,7 +678,12 @@ export class Manager {
       this.queue({ eventId: job.eventId, jobId: job.jobId, needs: "attention", reason: `broker recorded ${r.outcome} but the reconciliation audit entry failed` });
       return { status: "BLOCKED", reason: "audit_failed_after_reconcile", job };
     }
-    this.move(job, r.outcome === "completed" ? "complete" : "failed");
+    const to = r.outcome === "completed" ? "complete" : "failed";
+    if (!(await this.recordOutcome(job, to))) {
+      this.queue({ eventId: job.eventId, jobId: job.jobId, needs: "attention", reason: `broker recorded ${r.outcome} but the ledger outcome could not be recorded` });
+      return { status: "BLOCKED", reason: "ledger_failed_after_reconcile", job };
+    }
+    this.move(job, to);
     const i = this.ownerQueue.findIndex((q) => q.jobId === job.jobId && q.needs === "reconciliation");
     if (i >= 0) this.ownerQueue.splice(i, 1);
     return { status: "ADMITTED", reason: `reconciled as ${r.outcome}`, job };

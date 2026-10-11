@@ -80,7 +80,7 @@ class FakeBroker implements AdmissionBroker {
   }
   async markDispatched(a: string, f: number) { return this.step("markDispatched", a, f, "dispatched", ["claimed"]); }
   async markUnknown(a: string, f: number) { return this.step("markUnknown", a, f, "unknown", ["dispatched"]); }
-  async markFailed(a: string, f: number) { return this.step("markFailed", a, f, "failed", ["claimed", "dispatched", "unknown"]); }
+  async markFailed(a: string, f: number) { return this.step("markFailed", a, f, "failed", ["claimed", "dispatched", "unknown", "failed"]); }
   async release(a: string, f: number) { return this.step("release", a, f, "released", ["claimed"]); }
   async settle(a: string, _micros: number, _evidence: string): Promise<BrokerStep> {
     this.gate("settle");
@@ -108,7 +108,7 @@ interface Rig {
   kill: { state: KillState | "throw"; reads: number; after: number | null; firstKillAt: number | null };
   worker: { calls: number; mode: "ok" | "throw" | "garbage" | "hang"; micros: number };
   verifier: { calls: number; mode: "ok" | "reject" | "self" | "throw" };
-  flags: { auditDown: boolean; ledgerDown: boolean; resolveDown: boolean; auditFailAfter: number | null; auditFailSteps: Set<string> };
+  flags: { auditDown: boolean; ledgerDown: boolean; resolveDown: boolean; outcomeDown: boolean; auditFailAfter: number | null; auditFailSteps: Set<string> };
   ledger: Map<string, LedgerEntry>;
   ports: Ports;
 }
@@ -131,7 +131,7 @@ function rig(o: { executors?: ExecutorProfile[]; authority?: StandingAuthority; 
   const kill: Rig["kill"] = { state: "off", reads: 0, after: o.killAfter ?? null, firstKillAt: null };
   const worker: Rig["worker"] = { calls: 0, mode: "ok", micros: 0 };
   const verifier: Rig["verifier"] = { calls: 0, mode: "ok" };
-  const flags: Rig["flags"] = { auditDown: false, ledgerDown: false, resolveDown: false, auditFailAfter: null, auditFailSteps: new Set() };
+  const flags: Rig["flags"] = { auditDown: false, ledgerDown: false, resolveDown: false, outcomeDown: false, auditFailAfter: null, auditFailSteps: new Set() };
   const seen = new Map<string, number>();
   // Durable ledger stand-in: survives a manager restart because the rig's ports are reused.
   const entries = new Map<string, LedgerEntry>();
@@ -174,6 +174,12 @@ function rig(o: { executors?: ExecutorProfile[]; authority?: StandingAuthority; 
         const key = `${e.tenantId}:${e.eventId}`;
         if (entries.get(key)?.status !== "pending") throw new Error("not pending");
         entries.set(key, { status: e.status, job: structuredClone(e.job) });
+      },
+      async recordOutcome(e) {
+        if (flags.ledgerDown || flags.outcomeDown) throw new Error("ledger down");
+        const entry = entries.get(`${e.tenantId}:${e.eventId}`);
+        if (entry?.status !== "admitted") throw new Error("not admitted");
+        entry.outcome = { ...e.outcome };
       },
     },
     audit: {
@@ -867,7 +873,10 @@ test("SYNTHETIC restart: redelivery recovers the broker's current outcome, never
       { name: "failed (rejected result)", prep: async (r, id) => { r.verifier.mode = "reject"; await r.m.dispatch(id); }, want: "failed" },
       { name: "unknown (worker threw)", prep: async (r, id) => { r.worker.mode = "throw"; await r.m.dispatch(id); }, want: "unknown", queue: "reconciliation" },
       { name: "dispatched, then the manager died mid-run", prep: async (r, id) => { r.worker.mode = "hang"; void r.m.dispatch(id); await new Promise((x) => setTimeout(x, 10)); }, want: "unknown", queue: "reconciliation" },
-      { name: "settled but the completion audit failed", prep: async (r, id) => { r.flags.auditFailSteps.add("complete"); await r.m.dispatch(id); r.flags.auditFailSteps.clear(); }, want: "complete" },
+      { name: "settled but the completion audit failed", prep: async (r, id) => { r.flags.auditFailSteps.add("complete"); await r.m.dispatch(id); r.flags.auditFailSteps.clear(); }, want: "unknown", queue: "reconciliation" },
+      { name: "settled and audited but the ledger outcome failed", prep: async (r, id) => { r.flags.outcomeDown = true; await r.m.dispatch(id); r.flags.outcomeDown = false; }, want: "unknown", queue: "reconciliation" },
+      { name: "failed but the ledger outcome failed", prep: async (r, id) => { r.verifier.mode = "reject"; r.flags.outcomeDown = true; await r.m.dispatch(id); r.flags.outcomeDown = false; }, want: "unknown", queue: "reconciliation" },
+      { name: "reconciled as not executed but the result audit failed", prep: async (r, id) => { r.worker.mode = "throw"; await r.m.dispatch(id); r.flags.auditFailSteps.add("reconciled"); await r.m.reconcile(id, { checkedBy: "owner", outcome: "not_executed", ref: "x" }); r.flags.auditFailSteps.clear(); }, want: "unknown", queue: "reconciliation" },
       { name: "halted before dispatch (reservation released)", prep: async (r, id) => { r.kill.state = "on"; await r.m.dispatch(id); r.kill.state = "off"; }, want: "halted", queue: "attention" },
     ];
     for (const s of setups) {
@@ -932,5 +941,67 @@ test("SYNTHETIC restart: if the broker cannot report the claim's state, a redeli
     const d2 = await new Manager(r.ports).handleEvent(e);
     assert.deepEqual([d2.status, d2.reason], ["BLOCKED", "broker_refused:not_found"]);
     assert.equal(r.worker.calls, 0);
+  });
+});
+
+test("SYNTHETIC restart: a settled attempt is complete only with recorded evidence; reconciliation closes the gap durably", async () => {
+  await offline(async () => {
+    const r = rig();
+    const e = ev({ eventId: "restart-evidence" });
+    const job = (await r.m.handleEvent(e)).job!;
+    r.flags.auditFailSteps.add("complete");
+    await r.m.dispatch(job.jobId);
+    assert.equal(job.state, "unknown");
+    r.flags.auditFailSteps.clear();
+    const entry = r.ledger.get("tenant-a:restart-evidence");
+    assert.ok(entry?.status === "admitted" && entry.outcome === undefined, "no outcome is recorded without its audit");
+
+    // Restart: the broker says settled, but nothing proves the completion audit, so it stays unknown and owner-queued.
+    const m1 = new Manager(r.ports);
+    const rec = (await m1.handleEvent(e)).job!;
+    assert.equal(rec.state, "unknown");
+    assert.ok(m1.ownerQueue.some((q) => q.jobId === rec.jobId && q.needs === "reconciliation" && /evidence is not recorded/.test(q.reason)));
+    assert.equal(m1.nextEligible(), null);
+    // An independent reconciliation records the missing evidence (settle is an idempotent replay at the broker).
+    const ok = await m1.reconcile(rec.jobId, { checkedBy: "owner", outcome: "completed", ref: "owner-audit-fix" });
+    assert.deepEqual([ok.status, rec.state], ["ADMITTED", "complete"]);
+    assert.deepEqual(r.audit.filter((a) => a.jobId === rec.jobId).map((a) => a.step).slice(-2), ["reconcile_decided", "reconciled"]);
+    // Only now does a further restart recover it as complete.
+    const m2 = new Manager(r.ports);
+    assert.equal((await m2.handleEvent(e)).job!.state, "complete");
+    assert.equal(m2.ownerQueue.length, 0);
+    assert.equal(r.worker.calls, 1);
+
+    // A normal completion records its outcome, so a restart recovers it as complete with no owner work.
+    const n = rig();
+    const e2 = ev({ eventId: "restart-clean" });
+    await n.m.dispatch((await n.m.handleEvent(e2)).job!.jobId);
+    const m3 = new Manager(n.ports);
+    assert.equal((await m3.handleEvent(e2)).job!.state, "complete");
+    assert.equal(m3.ownerQueue.length, 0);
+    // A recorded outcome for an older fence does not vouch for a newer attempt.
+    const o = rig();
+    o.verifier.mode = "reject";
+    const e3 = ev({ eventId: "restart-old-fence" });
+    const j3 = (await o.m.handleEvent(e3)).job!;
+    await o.m.dispatch(j3.jobId); // failed, outcome recorded at fence 1
+    await o.m.retry(j3.jobId); // fence 2
+    o.verifier.mode = "ok";
+    o.flags.outcomeDown = true;
+    await o.m.dispatch(j3.jobId); // settled at fence 2, outcome not recorded
+    o.flags.outcomeDown = false;
+    assert.equal((await new Manager(o.ports).handleEvent(e3)).job!.state, "unknown");
+    // Same outcome, older fence: a failure recorded for attempt 1 does not vouch for an unrecorded failure of attempt 2.
+    const q = rig();
+    q.verifier.mode = "reject";
+    const e4 = ev({ eventId: "restart-same-outcome-old-fence" });
+    const j4 = (await q.m.handleEvent(e4)).job!;
+    await q.m.dispatch(j4.jobId); // failed, outcome recorded at fence 1
+    await q.m.retry(j4.jobId);
+    q.flags.outcomeDown = true;
+    await q.m.dispatch(j4.jobId); // failed at fence 2, outcome not recorded
+    q.flags.outcomeDown = false;
+    const rec4 = (await new Manager(q.ports).handleEvent(e4)).job!;
+    assert.equal(rec4.state, "unknown", "not retryable until reconciled");
   });
 });
