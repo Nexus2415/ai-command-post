@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { loadConfig, type AgentKey } from "../src/config.ts";
 import {
   EVENT_INTENTS, MAX_ATTEMPTS, Manager, UNAVAILABLE_BROKER, inertPorts, rosterFromConfig,
-  type AdmissionBroker, type AuditEntry, type BrokerResult, type BrokerStep, type ExecutorProfile, type Job, type KillState, type ManagerEvent, type Ports, type StandingAuthority, type Verification, type WorkerResult,
+  type AdmissionBroker, type AuditEntry, type BrokerResult, type LedgerEntry, type BrokerStep, type ExecutorProfile, type Job, type KillState, type ManagerEvent, type Ports, type StandingAuthority, type Verification, type WorkerResult,
 } from "../src/manager.ts";
 
 const NOW = new Date("2026-10-11T21:00:00Z");
@@ -31,12 +31,18 @@ class FakeBroker implements AdmissionBroker {
     const existing = this.claims.get(req.claimKey);
     if (existing) {
       if (existing.executor !== req.executor) return { ok: false, reason: "claimed_elsewhere" };
-      return { ok: true, created: false, claimId: existing.id, attemptId: `a${this.seq}`, fence: existing.fence, operationId: `op-${existing.id}-${existing.fence}` };
+      // A released latest attempt is re-claimed with a fresh fence (as the ARN-88 RPC does); otherwise the held one is returned.
+      if (this.attempts.get(`attempt-${existing.id}-${existing.fence}`)!.state === "released" && existing.idem === req.idempotencyKey) {
+        existing.fence += 1;
+        this.attempts.set(`attempt-${existing.id}-${existing.fence}`, { claim: existing.id, fence: existing.fence, state: "claimed" });
+      }
+      const f = existing.fence;
+      return { ok: true, created: false, claimId: existing.id, attemptId: `attempt-${existing.id}-${f}`, fence: f, operationId: `op-${existing.id}-${f}`, idempotencyKey: existing.idem };
     }
     const id = `claim-${++this.seq}`;
     this.claims.set(req.claimKey, { id, executor: req.executor, fence: 1, state: "claimed", idem: req.idempotencyKey });
     this.attempts.set(`attempt-${id}-1`, { claim: id, fence: 1, state: "claimed" });
-    return { ok: true, created: true, claimId: id, attemptId: `attempt-${id}-1`, fence: 1, operationId: `op-${id}-1` };
+    return { ok: true, created: true, claimId: id, attemptId: `attempt-${id}-1`, fence: 1, operationId: `op-${id}-1`, idempotencyKey: req.idempotencyKey };
   }
   async takeover(claimId: string, expectedFence: number): Promise<BrokerResult> {
     this.gate("takeover");
@@ -46,7 +52,7 @@ class FakeBroker implements AdmissionBroker {
     if (latest.state !== "failed" && latest.state !== "released") return { ok: false, reason: "takeover_blocked" };
     c.fence += 1;
     this.attempts.set(`attempt-${c.id}-${c.fence}`, { claim: c.id, fence: c.fence, state: "claimed" });
-    return { ok: true, created: true, claimId: c.id, attemptId: `attempt-${c.id}-${c.fence}`, fence: c.fence, operationId: `op-${c.id}-${c.fence}` };
+    return { ok: true, created: true, claimId: c.id, attemptId: `attempt-${c.id}-${c.fence}`, fence: c.fence, operationId: `op-${c.id}-${c.fence}`, idempotencyKey: c.idem };
   }
   private step(name: string, attemptId: string, fence: number, to: string): BrokerStep {
     this.gate(name);
@@ -56,6 +62,10 @@ class FakeBroker implements AdmissionBroker {
     if (fence !== c.fence || a.fence !== c.fence) return { ok: false, reason: "stale_fence" };
     a.state = to;
     return { ok: true };
+  }
+  /** State of an attempt, for assertions. */
+  attemptState(attemptId: string): string | undefined {
+    return this.attempts.get(attemptId)?.state;
   }
   async markDispatched(a: string, f: number) { return this.step("markDispatched", a, f, "dispatched"); }
   async markUnknown(a: string, f: number) { return this.step("markUnknown", a, f, "unknown"); }
@@ -82,7 +92,8 @@ interface Rig {
   kill: { state: KillState | "throw"; reads: number; after: number | null; firstKillAt: number | null };
   worker: { calls: number; mode: "ok" | "throw" | "garbage"; micros: number };
   verifier: { calls: number; mode: "ok" | "reject" | "self" | "throw" };
-  flags: { auditDown: boolean; ledgerDown: boolean; auditFailAfter: number | null };
+  flags: { auditDown: boolean; ledgerDown: boolean; resolveDown: boolean; auditFailAfter: number | null; auditFailSteps: Set<string> };
+  ledger: Map<string, LedgerEntry>;
   ports: Ports;
 }
 
@@ -104,8 +115,10 @@ function rig(o: { executors?: ExecutorProfile[]; authority?: StandingAuthority; 
   const kill: Rig["kill"] = { state: "off", reads: 0, after: o.killAfter ?? null, firstKillAt: null };
   const worker: Rig["worker"] = { calls: 0, mode: "ok", micros: 0 };
   const verifier: Rig["verifier"] = { calls: 0, mode: "ok" };
-  const flags: Rig["flags"] = { auditDown: false, ledgerDown: false, auditFailAfter: null };
-  const seen = new Map<string, { seq: number; ids: Set<string> }>();
+  const flags: Rig["flags"] = { auditDown: false, ledgerDown: false, resolveDown: false, auditFailAfter: null, auditFailSteps: new Set() };
+  const seen = new Map<string, number>();
+  // Durable ledger stand-in: survives a manager restart because the rig's ports are reused.
+  const entries = new Map<string, LedgerEntry>();
   // Wrap the broker so every call lands in one ordered log together with kill-switch reads.
   const logged = new Proxy(broker, {
     get(t, prop, r) {
@@ -133,19 +146,25 @@ function rig(o: { executors?: ExecutorProfile[]; authority?: StandingAuthority; 
       async record(e) {
         if (flags.ledgerDown) throw new Error("ledger down");
         const k = `${e.tenantId}:${e.taskId}`;
-        const s = seen.get(k) ?? { seq: -1, ids: new Set<string>() };
-        if (s.ids.has(e.eventId)) return "duplicate";
-        if (e.seq <= s.seq) return "out_of_order";
-        s.seq = e.seq;
-        s.ids.add(e.eventId);
-        seen.set(k, s);
-        return "new";
+        const entry = entries.get(`${e.tenantId}:${e.eventId}`);
+        if (entry) return { verdict: "duplicate", entry: structuredClone(entry) };
+        if (e.seq <= (seen.get(k) ?? -1)) return { verdict: "out_of_order" };
+        seen.set(k, e.seq);
+        entries.set(`${e.tenantId}:${e.eventId}`, { status: "pending", job: null });
+        return { verdict: "new" };
+      },
+      async resolve(e) {
+        if (flags.ledgerDown || flags.resolveDown) throw new Error("ledger down");
+        const key = `${e.tenantId}:${e.eventId}`;
+        if (entries.get(key)?.status !== "pending") throw new Error("not pending");
+        entries.set(key, { status: e.status, job: structuredClone(e.job) });
       },
     },
     audit: {
       async append(entry) {
         if (flags.auditDown) throw new Error("audit down");
         if (flags.auditFailAfter !== null && audit.length >= flags.auditFailAfter) throw new Error("audit full");
+        if (flags.auditFailSteps.has(entry.step)) throw new Error(`audit refused ${entry.step}`);
         audit.push(entry);
       },
     },
@@ -171,7 +190,7 @@ function rig(o: { executors?: ExecutorProfile[]; authority?: StandingAuthority; 
     authority: o.authority ?? authority(),
     now: () => NOW,
   };
-  return { m: new Manager(ports), broker, log, audit, kill, worker, verifier, flags, ports };
+  return { m: new Manager(ports), broker, log, audit, kill, worker, verifier, flags, ports, ledger: entries };
 }
 
 let n = 0;
@@ -231,7 +250,7 @@ test("SYNTHETIC end to end: event -> admitted job -> one worker -> independent c
     assert.equal(r.verifier.calls, 1);
     assert.notEqual(done.job!.result, null);
     assert.deepEqual(r.log.filter((x) => x !== "kill:on"), ["claimAndReserve", "claimAndReserve", "markDispatched", "worker.run", "verifier.verify", "settle"]);
-    assert.deepEqual(r.audit.filter((x) => x.jobId === job.jobId).map((x) => x.step), ["admitted", "dispatched", "complete"]);
+    assert.deepEqual(r.audit.filter((x) => x.jobId === job.jobId).map((x) => x.step), ["admitted", "dispatched", "verified", "complete"]);
     // Next-eligible selection moves on to the other task's job.
     assert.equal(r.m.nextEligible()?.jobId, b.job!.jobId);
     assert.equal(r.m.ownerQueue.length, 0);
@@ -392,9 +411,11 @@ test("SYNTHETIC idempotency: duplicate event, out-of-order event and a second ex
     assert.equal(r.log.filter((x) => x === "claimAndReserve").length, 1, "the duplicate never reached the broker");
     assert.equal((await r.m.handleEvent(ev({ eventId: "e0", seq: 4 }))).reason, "out_of_order");
     assert.equal((await r.m.handleEvent(ev({ eventId: "e5b", seq: 5 }))).reason, "out_of_order");
-    // A newer event for the same task and intent hits the same claim: idempotent at the broker, still one job.
+    // A newer event for the same task and intent hits the claim another event holds: refused and surfaced, never a
+    // second job and never a silent duplicate.
     const again = await r.m.handleEvent(ev({ eventId: "e2", seq: 6 }));
-    assert.equal(again.status, "DUPLICATE");
+    assert.deepEqual([again.status, again.reason], ["BLOCKED", "claim_held_by_another_event"]);
+    assert.ok(r.m.ownerQueue.some((q) => q.eventId === "e2" && q.needs === "attention"));
     assert.equal(r.m.jobs.size, 1);
     // The same claim asked for by a different executor is refused by the broker.
     const second = await r.m.handleEvent(ev({ eventId: "e3", seq: 7, preferredExecutor: "chatgpt" }));
@@ -573,7 +594,7 @@ test("SYNTHETIC broker steps: a refused settle or a non-monotonic takeover does 
     t.verifier.mode = "reject";
     const j = (await t.m.handleEvent(ev())).job!;
     await t.m.dispatch(j.jobId);
-    t.broker.takeover = async (claimId, fence) => ({ ok: true, created: true, claimId, attemptId: "again", fence, operationId: "op" });
+    t.broker.takeover = async (claimId, fence) => ({ ok: true, created: true, claimId, attemptId: "again", fence, operationId: "op", idempotencyKey: j.idempotencyKey });
     const out = await t.m.retry(j.jobId);
     assert.equal(out.reason, "non_monotonic_fence");
     assert.equal(j.state, "failed");
@@ -627,4 +648,196 @@ test("SYNTHETIC wiring: the seam is not imported by the engine, CLI or workflows
   for (const f of [...readdirSync("src").filter((x) => x !== "manager.ts").map((x) => `src/${x}`), ...readdirSync("api").filter((x) => x.endsWith(".js")).map((x) => `api/${x}`), ...readdirSync(".github/workflows").map((x) => `.github/workflows/${x}`)]) {
     assert.doesNotMatch(readFileSync(f, "utf8"), /\bmanager\.ts\b|\.\/manager\b|src\/manager/, `${f} must not reference the manager seam`);
   }
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// Review fixes (ChatGPT, head 0082408): durable admission recovery, and no state advance without broker + audit acks.
+// ---------------------------------------------------------------------------------------------------------------
+
+/** Each way admission can be interrupted after the receipt is recorded, and how to undo the fault. */
+const INTERRUPTIONS: { name: string; reason: RegExp; set: (r: Rig) => void; clear: (r: Rig) => void }[] = [
+  { name: "audit unavailable", reason: /^audit_unavailable$/, set: (r) => { r.flags.auditDown = true; }, clear: (r) => { r.flags.auditDown = false; } },
+  { name: "broker unavailable", reason: /^broker_unavailable$/, set: (r) => { r.broker.down = true; }, clear: (r) => { r.broker.down = false; } },
+  { name: "broker refused", reason: /^broker_refused:budget_frozen$/, set: (r) => { r.broker.refuse = "budget_frozen"; }, clear: (r) => { r.broker.refuse = null; } },
+  { name: "audit lost after the claim", reason: /^audit_failed_after_claim/, set: (r) => { r.flags.auditFailSteps.add("admitted"); }, clear: (r) => { r.flags.auditFailSteps.clear(); } },
+  { name: "ledger lost after the claim", reason: /^ledger_unavailable_after_claim/, set: (r) => { r.flags.resolveDown = true; }, clear: (r) => { r.flags.resolveDown = false; } },
+  { name: "kill switch at audit", reason: /kill switch on or unreadable at audit/, set: (r) => { r.kill.after = 3; }, clear: (r) => { r.kill.after = null; } },
+  { name: "kill switch at claim", reason: /kill switch on or unreadable at claim/, set: (r) => { r.kill.after = 4; }, clear: (r) => { r.kill.after = null; } },
+];
+
+test("SYNTHETIC recovery: an interrupted admission is resumed by a retry of the same event, in the same manager and after a restart", async () => {
+  await offline(async () => {
+    for (const restart of [false, true]) {
+      for (const f of INTERRUPTIONS) {
+        const r = rig();
+        const e = ev({ eventId: `rec-${f.name}-${restart}` });
+        f.set(r);
+        const first = await r.m.handleEvent(e);
+        assert.match(first.reason, f.reason, `${f.name}: ${first.reason}`);
+        assert.notEqual(first.status, "ADMITTED");
+        assert.equal(r.ledger.get(`tenant-a:${e.eventId}`)?.status, "pending", `${f.name}: the receipt stays pending, not consumed`);
+        assert.equal(r.worker.calls, 0);
+        f.clear(r);
+        r.kill.reads = 0;
+        const m = restart ? new Manager(r.ports) : r.m;
+        const again = await m.handleEvent(e);
+        assert.equal(again.status, "ADMITTED", `${f.name} (restart=${restart}): ${again.status} ${again.reason}`);
+        const job = again.job!;
+        assert.notEqual(job.claimId, null);
+        assert.equal(r.broker.attemptState(job.attemptId!), "claimed", `${f.name}: the job holds a live attempt`);
+        const entry = r.ledger.get(`tenant-a:${e.eventId}`)!;
+        assert.equal(entry.status, "admitted");
+        assert.deepEqual([entry.job?.claimId, entry.job?.attemptId, entry.job?.fence], [job.claimId, job.attemptId, job.fence], "the ledger holds the claim reference");
+        // A third delivery is a true duplicate and returns the same job, not a second one.
+        const third = await m.handleEvent(e);
+        assert.deepEqual([third.status, third.job?.jobId], ["DUPLICATE", job.jobId]);
+        assert.equal(m.jobs.size, 1);
+        assert.equal((await m.dispatch(job.jobId)).job!.state, "complete", f.name);
+        assert.equal(r.worker.calls, 1);
+      }
+    }
+  });
+});
+
+test("SYNTHETIC recovery: a duplicate is benign only when the durable job is recovered, including after a restart", async () => {
+  await offline(async () => {
+    const r = rig();
+    const green = await r.m.handleEvent(ev({ eventId: "g1", taskId: "t-g" }));
+    const yellow = await r.m.handleEvent(ev({ eventId: "y1", taskId: "t-y", kind: "task_exception" }));
+    assert.deepEqual([green.status, yellow.status], ["ADMITTED", "AWAITING_OWNER"]);
+    assert.equal(r.ledger.get("tenant-a:y1")?.status, "staged");
+
+    const fresh = new Manager(r.ports);
+    assert.equal(fresh.jobs.size, 0);
+    const g = await fresh.handleEvent(ev({ eventId: "g1", taskId: "t-g" }));
+    assert.deepEqual([g.status, g.job?.jobId, g.job?.claimId, g.job?.state], ["DUPLICATE", green.job!.jobId, green.job!.claimId, "admitted"]);
+    const y = await fresh.handleEvent(ev({ eventId: "y1", taskId: "t-y", kind: "task_exception" }));
+    assert.deepEqual([y.status, y.job?.state], ["DUPLICATE", "awaiting_owner"]);
+    assert.equal(r.log.filter((x) => x === "claimAndReserve").length, 1, "recovery never claims again");
+    // The recovered job is the same job: it dispatches once on its original claim.
+    assert.equal((await fresh.dispatch(g.job!.jobId)).job!.state, "complete");
+    assert.equal(r.worker.calls, 1);
+
+    // A durable entry that does not hold a recoverable job is never reported as a benign duplicate.
+    r.ledger.set("tenant-a:broken", { status: "admitted", job: { ...green.job!, idempotencyKey: "tenant-a:someone-else" } });
+    const broken = await fresh.handleEvent(ev({ eventId: "broken", taskId: "t-b" }));
+    assert.deepEqual([broken.status, broken.reason], ["BLOCKED", "ledger_entry_unrecoverable"]);
+    // A yellow staging that cannot be recorded is not staged and stays pending for a retry.
+    const lost = rig();
+    lost.flags.resolveDown = true;
+    const s = await lost.m.handleEvent(ev({ eventId: "y2", kind: "task_exception" }));
+    assert.deepEqual([s.status, s.reason, lost.m.jobs.size, lost.m.ownerQueue.length], ["BLOCKED", "ledger_unavailable", 0, 0]);
+    lost.flags.resolveDown = false;
+    assert.equal((await lost.m.handleEvent(ev({ eventId: "y2", kind: "task_exception" }))).status, "AWAITING_OWNER");
+  });
+});
+
+test("SYNTHETIC acknowledgments: a rejected result becomes failed only after both its audit entry and the broker", async () => {
+  await offline(async () => {
+    const cases: { name: string; set: (r: Rig) => void; why: RegExp }[] = [
+      { name: "audit refuses verification_failed", set: (r) => { r.flags.auditFailSteps.add("verification_failed"); }, why: /audit_failed_on_rejected_result/ },
+      { name: "broker refuses markFailed", set: (r) => { r.broker.markFailed = async () => ({ ok: false, reason: "stale_fence" }); }, why: /mark_failed_refused:stale_fence/ },
+      { name: "broker down at markFailed", set: (r) => { r.broker.markFailed = async () => { throw new Error("down"); }; }, why: /mark_failed_refused:unavailable/ },
+    ];
+    for (const c of cases) {
+      const r = rig();
+      r.verifier.mode = "reject";
+      const job = (await r.m.handleEvent(ev())).job!;
+      c.set(r);
+      const d = await r.m.dispatch(job.jobId);
+      assert.match(d.reason, c.why, c.name);
+      assert.equal(job.state, "unknown", `${c.name}: never failed (retryable) without both acks`);
+      assert.equal((await r.m.retry(job.jobId)).reason, "job_not_retryable:unknown");
+      assert.ok(r.m.ownerQueue.some((q) => q.needs === "reconciliation"));
+      assert.ok(!r.log.includes("settle"));
+    }
+  });
+});
+
+test("SYNTHETIC acknowledgments: a result is complete only after the verified audit, the settle and the completion audit", async () => {
+  await offline(async () => {
+    // Evidence of the check cannot be recorded: never settled, unknown.
+    const before = rig();
+    const j1 = (await before.m.handleEvent(ev())).job!;
+    before.flags.auditFailSteps.add("verified");
+    const d1 = await before.m.dispatch(j1.jobId);
+    assert.match(d1.reason, /audit_failed_before_settle/);
+    assert.equal(j1.state, "unknown");
+    assert.ok(!before.log.includes("settle"), "nothing is settled without the verified audit entry");
+
+    // Settled but the completion cannot be recorded: unknown and queued, not complete.
+    const after = rig();
+    const j2 = (await after.m.handleEvent(ev())).job!;
+    after.flags.auditFailSteps.add("complete");
+    const d2 = await after.m.dispatch(j2.jobId);
+    assert.match(d2.reason, /audit_failed_after_settle/);
+    assert.equal(j2.state, "unknown");
+    assert.ok(after.log.includes("settle"));
+    assert.ok(after.m.ownerQueue.some((q) => q.jobId === j2.jobId && q.needs === "reconciliation"));
+    // Once audit works, an independent reconciliation completes it (the broker settle is idempotent).
+    after.flags.auditFailSteps.clear();
+    const ok = await after.m.reconcile(j2.jobId, { checkedBy: "owner", outcome: "completed", ref: "owner-check" });
+    assert.deepEqual([ok.status, j2.state], ["ADMITTED", "complete"]);
+    assert.equal(after.m.ownerQueue.filter((q) => q.needs === "reconciliation").length, 0);
+  });
+});
+
+test("SYNTHETIC acknowledgments: reconciliation leaves a job unknown unless its decision, the broker and its result are all recorded", async () => {
+  await offline(async () => {
+    const unknownJob = async () => {
+      const r = rig();
+      r.worker.mode = "throw";
+      const job = (await r.m.handleEvent(ev())).job!;
+      await r.m.dispatch(job.jobId);
+      assert.equal(job.state, "unknown");
+      r.log.length = 0;
+      return { r, job };
+    };
+    for (const outcome of ["completed", "not_executed"] as const) {
+      // Decision not audited: the broker is never asked.
+      const a = await unknownJob();
+      a.r.flags.auditFailSteps.add("reconcile_decided");
+      const da = await a.r.m.reconcile(a.job.jobId, { checkedBy: "owner", outcome, ref: "r1" });
+      assert.deepEqual([da.reason, a.job.state], ["audit_unavailable", "unknown"]);
+      assert.deepEqual(a.r.log.filter((x) => x === "settle" || x === "markFailed"), []);
+
+      // Broker refuses or is down: unknown.
+      const b = await unknownJob();
+      b.r.broker.down = true;
+      const db = await b.r.m.reconcile(b.job.jobId, { checkedBy: "owner", outcome, ref: "r2" });
+      assert.deepEqual([db.reason, b.job.state], ["broker_refused:unavailable", "unknown"]);
+
+      // Broker acknowledged but the result is not audited: unknown, with an owner attention item.
+      const c = await unknownJob();
+      c.r.flags.auditFailSteps.add("reconciled");
+      const dc = await c.r.m.reconcile(c.job.jobId, { checkedBy: "owner", outcome, ref: "r3" });
+      assert.deepEqual([dc.reason, c.job.state], ["audit_failed_after_reconcile", "unknown"]);
+      assert.ok(c.r.m.ownerQueue.some((q) => q.needs === "attention" && q.jobId === c.job.jobId));
+      // Nothing can retry or dispatch it meanwhile.
+      assert.equal((await c.r.m.retry(c.job.jobId)).reason, "job_not_retryable:unknown");
+    }
+  });
+});
+
+test("SYNTHETIC acknowledgments: a retry is admitted only once audited; otherwise its fresh attempt is released", async () => {
+  await offline(async () => {
+    const r = rig();
+    r.verifier.mode = "reject";
+    const job = (await r.m.handleEvent(ev())).job!;
+    await r.m.dispatch(job.jobId);
+    assert.equal(job.state, "failed");
+    r.flags.auditFailSteps.add("retry_admitted");
+    const out = await r.m.retry(job.jobId);
+    assert.equal(out.status, "BLOCKED");
+    assert.match(out.reason, /audit_unavailable/);
+    assert.deepEqual([job.state, job.attempt, job.replayId], ["failed", 1, `${job.jobId}#1`], "not admitted, attempt count unchanged");
+    assert.equal(r.broker.attemptState(job.attemptId!), "released", "the fresh attempt does not keep a reservation");
+    assert.equal(r.m.nextEligible(), null);
+    // Audit back: the retry admits attempt 2 on a newer fence.
+    r.flags.auditFailSteps.clear();
+    const fence = job.fence!;
+    const again = await r.m.retry(job.jobId);
+    assert.deepEqual([again.status, job.state, job.attempt], ["ADMITTED", "admitted", 2]);
+    assert.ok(job.fence! > fence);
+  });
 });

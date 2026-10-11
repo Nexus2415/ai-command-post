@@ -86,7 +86,11 @@ export interface StandingAuthority {
 }
 
 export type BrokerRefusal = string;
-export type BrokerGrant = { claimId: string; attemptId: string; fence: number; operationId: string; created: boolean };
+/**
+ * `created: false` means the claim already existed. `idempotencyKey` names the request that created it, so the manager
+ * can tell its own earlier, interrupted admission (which it resumes) from another event's claim (which it refuses).
+ */
+export type BrokerGrant = { claimId: string; attemptId: string; fence: number; operationId: string; created: boolean; idempotencyKey: string };
 export type BrokerResult = ({ ok: true } & BrokerGrant) | { ok: false; reason: BrokerRefusal };
 export type BrokerStep = { ok: true } | { ok: false; reason: BrokerRefusal };
 
@@ -101,10 +105,19 @@ export interface AdmissionBroker {
   settle(attemptId: string, actualMicros: number, evidence: string): Promise<BrokerStep>;
 }
 
-export type LedgerVerdict = "new" | "duplicate" | "out_of_order";
+/**
+ * Durable admission status of one event. `pending` means receipt was recorded but admission did not finish (an audit,
+ * broker or kill-switch stop, or a crash): a redelivery of the same event resumes admission. `admitted` and `staged`
+ * carry the job, including its claim reference, so a redelivery recovers it even after the manager restarts.
+ */
+export type LedgerEntry = { status: "pending"; job: null } | { status: "admitted" | "staged"; job: Job };
+export type LedgerVerdict = { verdict: "new" } | { verdict: "out_of_order" } | { verdict: "duplicate"; entry: LedgerEntry };
 /** Durable per-task event ledger. */
 export interface EventLedger {
+  /** Records receipt as `pending`, atomically with the duplicate and out-of-order checks. */
   record(e: { tenantId: string; taskId: string; eventId: string; seq: number }): Promise<LedgerVerdict>;
+  /** Durably moves a pending receipt to its admission outcome. Throwing means it was not recorded. */
+  resolve(e: { tenantId: string; eventId: string; status: "admitted" | "staged"; job: Job }): Promise<void>;
 }
 
 export interface AuditEntry {
@@ -167,7 +180,7 @@ export function inertPorts(): Ports {
   return {
     killSwitch: () => "error",
     broker: UNAVAILABLE_BROKER,
-    ledger: { record: down("event ledger") },
+    ledger: { record: down("event ledger"), resolve: down("event ledger") },
     audit: { append: down("audit sink") },
     worker: { run: down("worker") },
     verifier: { verify: down("verifier") },
@@ -264,7 +277,6 @@ export class Manager {
   readonly ownerQueue: OwnerQueueItem[] = [];
   /** Every kill-switch check, by boundary name, in order. Lets tests prove the switch is read at each boundary. */
   readonly boundaries: string[] = [];
-  private byIdem = new Map<string, string>();
   private n = 0;
 
   private readonly p: Ports;
@@ -348,17 +360,22 @@ export class Manager {
 
     // 4. Durable event ledger (duplicate and out-of-order refusal). Unavailable ledger means no dispatch.
     if (!this.live("ledger")) return this.halted(null, "ledger");
-    let verdict: LedgerVerdict;
+    let recorded: LedgerVerdict;
     try {
-      verdict = await this.p.ledger.record({ tenantId: e.tenantId, taskId: e.taskId, eventId: e.eventId, seq: e.seq as number });
+      recorded = await this.p.ledger.record({ tenantId: e.tenantId, taskId: e.taskId, eventId: e.eventId, seq: e.seq as number });
     } catch {
       return { status: "BLOCKED", reason: "ledger_unavailable" };
     }
     const idempotencyKey = `${e.tenantId}:${e.eventId}`;
-    if (verdict === "out_of_order") return { status: "REJECTED", reason: "out_of_order" };
-    if (verdict === "duplicate") {
-      const existing = this.jobs.get(this.byIdem.get(idempotencyKey) ?? "");
-      return { status: "DUPLICATE", reason: "event already recorded; nothing dispatched", ...(existing ? { job: existing } : {}) };
+    if (recorded.verdict === "out_of_order") return { status: "REJECTED", reason: "out_of_order" };
+    // A duplicate is benign only when its outcome is durably recoverable. A pending receipt (admission was interrupted)
+    // falls through and resumes admission; the broker's idempotency makes the resumed claim the same claim.
+    const resuming = recorded.verdict === "duplicate";
+    if (recorded.verdict === "duplicate" && recorded.entry.status !== "pending") {
+      const durable = recorded.entry.job;
+      if (!durable || durable.idempotencyKey !== idempotencyKey) return { status: "BLOCKED", reason: "ledger_entry_unrecoverable" };
+      const known = this.jobs.get(durable.jobId) ?? this.adopt(structuredClone(durable));
+      return { status: "DUPLICATE", reason: `event already ${recorded.entry.status}; nothing dispatched`, job: known };
     }
 
     const job: Job = {
@@ -384,18 +401,18 @@ export class Manager {
       attemptId: null,
       fence: null,
       result: null,
-      order: ++this.n,
+      order: 0,
     };
     job.replayId = `${job.jobId}#1`;
 
-    // 5. Audit before any claim. A missing audit trail blocks the job.
+    // 5. Audit before any claim. A missing audit trail blocks the job (the receipt stays pending, so a retry resumes).
     if (!this.live("audit")) return this.halted(null, "audit");
     if (!(await this.audit(e.eventId, null, "admission_decided", `${spec.tier}:${spec.intent}:${executor}`))) return { status: "BLOCKED", reason: "audit_unavailable" };
 
     // Yellow work is staged: recorded for the owner, with no claim, no reservation and no dispatch.
     if (spec.tier === "yellow") {
-      this.jobs.set(job.jobId, job);
-      this.byIdem.set(idempotencyKey, job.jobId);
+      if (!(await this.resolve(job, "staged"))) return { status: "BLOCKED", reason: "ledger_unavailable" };
+      this.adopt(job);
       this.queue({ eventId: e.eventId, jobId: job.jobId, needs: "approval", reason: `${spec.intent} staged for owner approval` });
       return { status: "AWAITING_OWNER", reason: "yellow-tier work is staged until the owner approves", job };
     }
@@ -411,9 +428,16 @@ export class Manager {
     }
     if (!claim.ok) return { status: "BLOCKED", reason: `broker_refused:${claim.reason}` };
     if (!claim.created) {
-      // Second request for the same claim key: idempotent, never a second job or dispatch.
-      const existing = this.jobs.get(this.byIdem.get(idempotencyKey) ?? "");
-      return { status: "DUPLICATE", reason: "claim already held; nothing dispatched", ...(existing ? { job: existing } : {}) };
+      // The claim already exists. Only this event's own interrupted admission may take it over; another event's claim
+      // on the same task and intent is never a second job, and never a silent "duplicate" either.
+      if (claim.idempotencyKey !== idempotencyKey) {
+        this.queue({ eventId: e.eventId, jobId: null, needs: "attention", reason: `claim ${claim.claimId} is held by another event` });
+        return { status: "BLOCKED", reason: "claim_held_by_another_event" };
+      }
+      if (!resuming) {
+        this.queue({ eventId: e.eventId, jobId: null, needs: "attention", reason: `claim ${claim.claimId} exists without a ledger receipt` });
+        return { status: "BLOCKED", reason: "claim_without_ledger_receipt" };
+      }
     }
     job.claimId = claim.claimId;
     job.attemptId = claim.attemptId;
@@ -422,9 +446,30 @@ export class Manager {
       await this.p.broker.release(claim.attemptId, claim.fence).catch(() => undefined);
       return { status: "BLOCKED", reason: "audit_failed_after_claim; reservation released" };
     }
-    this.jobs.set(job.jobId, job);
-    this.byIdem.set(idempotencyKey, job.jobId);
+    // The receipt becomes `admitted` with the claim reference only after the claim and its audit entry exist.
+    if (!(await this.resolve(job, "admitted"))) {
+      await this.p.broker.release(claim.attemptId, claim.fence).catch(() => undefined);
+      await this.audit(e.eventId, job, "admission_rolled_back", "ledger_unavailable");
+      return { status: "BLOCKED", reason: "ledger_unavailable_after_claim; reservation released" };
+    }
+    this.adopt(job);
     return { status: "ADMITTED", reason: "claimed and reserved", job };
+  }
+
+  private async resolve(job: Job, status: "admitted" | "staged"): Promise<boolean> {
+    try {
+      await this.p.ledger.resolve({ tenantId: job.tenantId, eventId: job.eventId, status, job: structuredClone(job) });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Puts a job (new, or recovered from the ledger after a restart) into the local index. */
+  private adopt(job: Job): Job {
+    job.order = ++this.n;
+    this.jobs.set(job.jobId, job);
+    return job;
   }
 
   private route(spec: IntentSpec, preferred: string | undefined, grant: StandingGrant): { executor: AgentKey } | { blocked: string } {
@@ -496,22 +541,26 @@ export class Manager {
       return this.ambiguous(job, "verifier_unavailable");
     }
     if (!v || v.checkedBy === job.executor) return this.ambiguous(job, "verifier_not_independent");
+    // From here the worker has run. A job moves to `failed` or `complete` only after the audit entry and the broker both
+    // acknowledge; if either cannot, the outcome is unknown and goes to an independent reconciliation.
     if (!v.ok) {
+      if (!(await this.audit(job.eventId, job, "verification_failed", v.ref))) return this.ambiguous(job, "audit_failed_on_rejected_result");
+      const f = await this.p.broker.markFailed(attemptId, fence).catch(() => ({ ok: false as const, reason: "unavailable" }));
+      if (!f.ok) return this.ambiguous(job, `mark_failed_refused:${f.reason}`);
       this.move(job, "failed");
-      await this.p.broker.markFailed(attemptId, fence).catch(() => undefined);
-      await this.audit(job.eventId, job, "verification_failed", v.ref);
       return { status: "BLOCKED", reason: "result_failed_independent_check", job };
     }
 
     if (!this.live("settle")) return this.stop(job, "settle");
+    if (!(await this.audit(job.eventId, job, "verified", v.ref))) return this.ambiguous(job, "audit_failed_before_settle");
     try {
       const s = await this.p.broker.settle(attemptId, result.actualMicros, v.ref);
       if (!s.ok) return this.ambiguous(job, `settle_refused:${s.reason}`);
     } catch {
       return this.ambiguous(job, "settle_unavailable");
     }
+    if (!(await this.audit(job.eventId, job, "complete", v.ref))) return this.ambiguous(job, "audit_failed_after_settle");
     this.move(job, "complete");
-    if (!(await this.audit(job.eventId, job, "complete", v.ref))) this.queue({ eventId: job.eventId, jobId: job.jobId, needs: "attention", reason: "completed but the completion audit entry failed" });
     return { status: "ADMITTED", reason: "complete and independently checked", job };
   }
 
@@ -542,18 +591,20 @@ export class Manager {
     if (r.checkedBy === job.executor || !str(r.ref)) return { status: "REJECTED", reason: "reconciliation_not_independent_or_unreferenced", job };
     if (!this.live("reconcile")) return this.halted(job, "reconcile");
     const { attemptId, fence } = job;
-    if (r.outcome === "completed") {
-      const s = await this.p.broker.settle(attemptId, job.result?.actualMicros ?? 0, r.ref).catch(() => ({ ok: false as const, reason: "unavailable" }));
-      if (!s.ok) return { status: "BLOCKED", reason: `settle_refused:${s.reason}`, job };
-      this.move(job, "complete");
-    } else {
-      const f = await this.p.broker.markFailed(attemptId, fence).catch(() => ({ ok: false as const, reason: "unavailable" }));
-      if (!f.ok) return { status: "BLOCKED", reason: `broker_refused:${f.reason}`, job };
-      this.move(job, "failed");
+    // The job stays unknown unless the decision is audited, the broker acknowledges it, and the result is audited.
+    if (!(await this.audit(job.eventId, job, "reconcile_decided", `${r.outcome}:${r.checkedBy}:${r.ref}`))) return { status: "BLOCKED", reason: "audit_unavailable", job };
+    const step: BrokerStep =
+      r.outcome === "completed"
+        ? await this.p.broker.settle(attemptId, job.result?.actualMicros ?? 0, r.ref).catch(() => ({ ok: false as const, reason: "unavailable" }))
+        : await this.p.broker.markFailed(attemptId, fence).catch(() => ({ ok: false as const, reason: "unavailable" }));
+    if (!step.ok) return { status: "BLOCKED", reason: `broker_refused:${step.reason}`, job };
+    if (!(await this.audit(job.eventId, job, "reconciled", `${r.outcome}:${r.ref}`))) {
+      this.queue({ eventId: job.eventId, jobId: job.jobId, needs: "attention", reason: `broker recorded ${r.outcome} but the reconciliation audit entry failed` });
+      return { status: "BLOCKED", reason: "audit_failed_after_reconcile", job };
     }
+    this.move(job, r.outcome === "completed" ? "complete" : "failed");
     const i = this.ownerQueue.findIndex((q) => q.jobId === job.jobId && q.needs === "reconciliation");
     if (i >= 0) this.ownerQueue.splice(i, 1);
-    await this.audit(job.eventId, job, "reconciled", `${r.outcome}:${r.ref}`);
     return { status: "ADMITTED", reason: `reconciled as ${r.outcome}`, job };
   }
 
@@ -577,13 +628,18 @@ export class Manager {
     }
     if (!t.ok) return { status: "BLOCKED", reason: `broker_refused:${t.reason}`, job };
     if (t.fence <= job.fence) return { status: "BLOCKED", reason: "non_monotonic_fence", job };
-    job.attempt += 1;
-    job.replayId = `${job.jobId}#${job.attempt}`;
+    // The claim has moved to the fresh attempt either way; the job only becomes admitted once that is audited.
     job.attemptId = t.attemptId;
     job.fence = t.fence;
+    if (!(await this.audit(job.eventId, job, "retry_admitted", `${job.jobId}#${job.attempt + 1}`))) {
+      const rel = await this.p.broker.release(t.attemptId, t.fence).catch(() => ({ ok: false as const, reason: "unavailable" }));
+      if (!rel.ok) this.queue({ eventId: job.eventId, jobId: job.jobId, needs: "attention", reason: "retry not audited and its fresh attempt could not be released" });
+      return { status: "BLOCKED", reason: "audit_unavailable; fresh attempt released", job };
+    }
+    job.attempt += 1;
+    job.replayId = `${job.jobId}#${job.attempt}`;
     job.result = null;
     this.move(job, "admitted");
-    await this.audit(job.eventId, job, "retry_admitted", job.replayId);
     return { status: "ADMITTED", reason: `attempt ${job.attempt} admitted`, job };
   }
 
