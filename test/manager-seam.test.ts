@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { loadConfig, type AgentKey } from "../src/config.ts";
 import {
   EVENT_INTENTS, MAX_ATTEMPTS, Manager, UNAVAILABLE_BROKER, inertPorts, rosterFromConfig,
-  type AdmissionBroker, type AuditEntry, type BrokerResult, type LedgerEntry, type BrokerStep, type ExecutorProfile, type Job, type KillState, type ManagerEvent, type Ports, type StandingAuthority, type Verification, type WorkerResult,
+  type AdmissionBroker, type AttemptState, type AuditEntry, type ClaimStatus, type BrokerResult, type LedgerEntry, type BrokerStep, type ExecutorProfile, type Job, type KillState, type ManagerEvent, type Ports, type StandingAuthority, type Verification, type WorkerResult,
 } from "../src/manager.ts";
 
 const NOW = new Date("2026-10-11T21:00:00Z");
@@ -54,12 +54,14 @@ class FakeBroker implements AdmissionBroker {
     this.attempts.set(`attempt-${c.id}-${c.fence}`, { claim: c.id, fence: c.fence, state: "claimed" });
     return { ok: true, created: true, claimId: c.id, attemptId: `attempt-${c.id}-${c.fence}`, fence: c.fence, operationId: `op-${c.id}-${c.fence}`, idempotencyKey: c.idem };
   }
-  private step(name: string, attemptId: string, fence: number, to: string): BrokerStep {
+  /** Attempt transitions follow the ARN-62 state machine: a step is refused unless the attempt is in an allowed state. */
+  private step(name: string, attemptId: string, fence: number, to: string, from: string[]): BrokerStep {
     this.gate(name);
     const a = this.attempts.get(attemptId);
     if (!a) return { ok: false, reason: "not_found" };
     const c = [...this.claims.values()].find((x) => x.id === a.claim)!;
     if (fence !== c.fence || a.fence !== c.fence) return { ok: false, reason: "stale_fence" };
+    if (!from.includes(a.state)) return { ok: false, reason: `attempt_${a.state}` };
     a.state = to;
     return { ok: true };
   }
@@ -67,13 +69,27 @@ class FakeBroker implements AdmissionBroker {
   attemptState(attemptId: string): string | undefined {
     return this.attempts.get(attemptId)?.state;
   }
-  async markDispatched(a: string, f: number) { return this.step("markDispatched", a, f, "dispatched"); }
-  async markUnknown(a: string, f: number) { return this.step("markUnknown", a, f, "unknown"); }
-  async markFailed(a: string, f: number) { return this.step("markFailed", a, f, "failed"); }
-  async release(a: string, f: number) { return this.step("release", a, f, "released"); }
+  async claimStatus(claimId: string): Promise<ClaimStatus> {
+    this.gate("claimStatus");
+    const c = [...this.claims.values()].find((x) => x.id === claimId);
+    if (!c) return { ok: false, reason: "not_found" };
+    const attemptId = `attempt-${c.id}-${c.fence}`;
+    const a = this.attempts.get(attemptId);
+    if (!a) return { ok: false, reason: "not_found" };
+    return { ok: true, attemptId, fence: c.fence, state: a.state as AttemptState };
+  }
+  async markDispatched(a: string, f: number) { return this.step("markDispatched", a, f, "dispatched", ["claimed"]); }
+  async markUnknown(a: string, f: number) { return this.step("markUnknown", a, f, "unknown", ["dispatched"]); }
+  async markFailed(a: string, f: number) { return this.step("markFailed", a, f, "failed", ["claimed", "dispatched", "unknown"]); }
+  async release(a: string, f: number) { return this.step("release", a, f, "released", ["claimed"]); }
   async settle(a: string, _micros: number, _evidence: string): Promise<BrokerStep> {
     this.gate("settle");
-    return this.attempts.has(a) ? { ok: true } : { ok: false, reason: "not_found" };
+    const at = this.attempts.get(a);
+    if (!at) return { ok: false, reason: "not_found" };
+    if (at.state === "settled") return { ok: true }; // idempotent replay
+    if (at.state !== "dispatched" && at.state !== "unknown") return { ok: false, reason: `attempt_${at.state}` };
+    at.state = "settled";
+    return { ok: true };
   }
   /** Simulates another actor moving the fence (a stale worker's view). */
   bumpFence(claimId: string): void {
@@ -90,7 +106,7 @@ interface Rig {
   log: string[];
   audit: AuditEntry[];
   kill: { state: KillState | "throw"; reads: number; after: number | null; firstKillAt: number | null };
-  worker: { calls: number; mode: "ok" | "throw" | "garbage"; micros: number };
+  worker: { calls: number; mode: "ok" | "throw" | "garbage" | "hang"; micros: number };
   verifier: { calls: number; mode: "ok" | "reject" | "self" | "throw" };
   flags: { auditDown: boolean; ledgerDown: boolean; resolveDown: boolean; auditFailAfter: number | null; auditFailSteps: Set<string> };
   ledger: Map<string, LedgerEntry>;
@@ -174,6 +190,7 @@ function rig(o: { executors?: ExecutorProfile[]; authority?: StandingAuthority; 
         worker.calls++;
         if (worker.mode === "throw") throw new Error("worker crashed");
         if (worker.mode === "garbage") return undefined as unknown as WorkerResult;
+        if (worker.mode === "hang") return new Promise<WorkerResult>(() => undefined); // the process dies mid-run
         return { summary: "SYNTHETIC result", actualMicros: worker.micros };
       },
     },
@@ -839,5 +856,81 @@ test("SYNTHETIC acknowledgments: a retry is admitted only once audited; otherwis
     const again = await r.m.retry(job.jobId);
     assert.deepEqual([again.status, job.state, job.attempt], ["ADMITTED", "admitted", 2]);
     assert.ok(job.fence! > fence);
+  });
+});
+
+test("SYNTHETIC restart: redelivery recovers the broker's current outcome, never the admission snapshot, and the worker never runs twice", async () => {
+  await offline(async () => {
+    type Setup = { name: string; prep: (r: Rig, jobId: string) => Promise<void>; want: string; queue?: "reconciliation" | "attention" };
+    const setups: Setup[] = [
+      { name: "complete", prep: async (r, id) => { await r.m.dispatch(id); }, want: "complete" },
+      { name: "failed (rejected result)", prep: async (r, id) => { r.verifier.mode = "reject"; await r.m.dispatch(id); }, want: "failed" },
+      { name: "unknown (worker threw)", prep: async (r, id) => { r.worker.mode = "throw"; await r.m.dispatch(id); }, want: "unknown", queue: "reconciliation" },
+      { name: "dispatched, then the manager died mid-run", prep: async (r, id) => { r.worker.mode = "hang"; void r.m.dispatch(id); await new Promise((x) => setTimeout(x, 10)); }, want: "unknown", queue: "reconciliation" },
+      { name: "settled but the completion audit failed", prep: async (r, id) => { r.flags.auditFailSteps.add("complete"); await r.m.dispatch(id); r.flags.auditFailSteps.clear(); }, want: "complete" },
+      { name: "halted before dispatch (reservation released)", prep: async (r, id) => { r.kill.state = "on"; await r.m.dispatch(id); r.kill.state = "off"; }, want: "halted", queue: "attention" },
+    ];
+    for (const s of setups) {
+      const r = rig();
+      const e = ev({ eventId: `restart-${s.name}` });
+      const job = (await r.m.handleEvent(e)).job!;
+      await s.prep(r, job.jobId);
+      const runs = r.worker.calls;
+      r.worker.mode = "ok";
+      r.verifier.mode = "ok";
+
+      const fresh = new Manager(r.ports);
+      const d = await fresh.handleEvent(e);
+      assert.equal(d.status, "DUPLICATE", s.name);
+      const rec = d.job!;
+      assert.equal(rec.state, s.want, `${s.name}: recovered as ${rec.state}`);
+      if (s.queue) assert.ok(fresh.ownerQueue.some((q) => q.jobId === rec.jobId && q.needs === s.queue), s.name);
+      // Nothing can run the work again: not dispatch, not a retry of ambiguous work, not next-eligible selection.
+      const again = await fresh.dispatch(rec.jobId);
+      assert.notEqual(again.status, "ADMITTED", s.name);
+      if (s.want === "unknown") assert.equal((await fresh.retry(rec.jobId)).reason, "job_not_retryable:unknown", s.name);
+      assert.equal(fresh.nextEligible(), null, s.name);
+      assert.equal(r.worker.calls, runs, `${s.name}: the worker was not invoked again`);
+    }
+  });
+});
+
+test("SYNTHETIC restart: retries stay bounded and a recovered job uses the claim's latest attempt", async () => {
+  await offline(async () => {
+    const r = rig();
+    r.verifier.mode = "reject";
+    const e = ev({ eventId: "restart-retry" });
+    const job = (await r.m.handleEvent(e)).job!;
+    await r.m.dispatch(job.jobId);
+    await r.m.retry(job.jobId); // attempt 2 admitted, fence 2
+    assert.deepEqual([job.state, job.attempt, job.fence], ["admitted", 2, 2]);
+
+    const fresh = new Manager(r.ports);
+    const rec = (await fresh.handleEvent(e)).job!;
+    // The ledger snapshot says attempt 1 / fence 1; the broker's latest attempt wins.
+    assert.deepEqual([rec.state, rec.attempt, rec.fence, rec.attemptId], ["admitted", 2, 2, job.attemptId]);
+    await fresh.dispatch(rec.jobId); // fails verification again
+    assert.equal(rec.state, "failed");
+    assert.equal((await fresh.retry(rec.jobId)).status, "ADMITTED");
+    assert.equal(rec.attempt, MAX_ATTEMPTS);
+    await fresh.dispatch(rec.jobId);
+    assert.equal((await fresh.retry(rec.jobId)).reason, "retries_exhausted", "a restart does not reset the retry budget");
+    assert.equal(r.worker.calls, MAX_ATTEMPTS);
+  });
+});
+
+test("SYNTHETIC restart: if the broker cannot report the claim's state, a redelivery is blocked, not a benign duplicate", async () => {
+  await offline(async () => {
+    const r = rig();
+    const e = ev({ eventId: "restart-no-status" });
+    (await r.m.handleEvent(e)).job!;
+    r.broker.down = true;
+    const d = await new Manager(r.ports).handleEvent(e);
+    assert.deepEqual([d.status, d.reason, d.job], ["BLOCKED", "broker_unavailable", undefined]);
+    r.broker.down = false;
+    r.broker.claimStatus = async () => ({ ok: false, reason: "not_found" });
+    const d2 = await new Manager(r.ports).handleEvent(e);
+    assert.deepEqual([d2.status, d2.reason], ["BLOCKED", "broker_refused:not_found"]);
+    assert.equal(r.worker.calls, 0);
   });
 });

@@ -93,9 +93,18 @@ export type BrokerRefusal = string;
 export type BrokerGrant = { claimId: string; attemptId: string; fence: number; operationId: string; created: boolean; idempotencyKey: string };
 export type BrokerResult = ({ ok: true } & BrokerGrant) | { ok: false; reason: BrokerRefusal };
 export type BrokerStep = { ok: true } | { ok: false; reason: BrokerRefusal };
+/** Broker-side state of a claim's latest attempt (ARN-62 attempt states). */
+export type AttemptState = "claimed" | "dispatched" | "unknown" | "settled" | "released" | "failed";
+export type ClaimStatus = { ok: true; attemptId: string; fence: number; state: AttemptState } | { ok: false; reason: BrokerRefusal };
 
-/** Durable transactional claim-and-budget broker. Shape follows the ARN-65 `ExecutionBroker`. */
+/**
+ * Durable transactional claim-and-budget broker. Shape follows the ARN-65 `ExecutionBroker`. Contract the manager
+ * relies on: `markDispatched` succeeds only for the claim's latest attempt while it is `claimed`, so an attempt that
+ * was already dispatched, settled, failed or released can never be dispatched (and its worker run) again.
+ */
 export interface AdmissionBroker {
+  /** Latest attempt of a claim and its state. The source of truth for a job recovered after a restart. */
+  claimStatus(claimId: string): Promise<ClaimStatus>;
   claimAndReserve(req: { tenantId: string; claimKey: string; idempotencyKey: string; executor: AgentKey; tariffId: string; worstCaseMicros: number }): Promise<BrokerResult>;
   takeover(claimId: string, expectedFence: number, worstCaseMicros: number): Promise<BrokerResult>;
   markDispatched(attemptId: string, fence: number): Promise<BrokerStep>;
@@ -166,6 +175,7 @@ const down = (what: string) => async (): Promise<never> => {
   throw new Error(`${what} unavailable`);
 };
 export const UNAVAILABLE_BROKER: AdmissionBroker = {
+  claimStatus: down("broker"),
   claimAndReserve: down("broker"),
   takeover: down("broker"),
   markDispatched: down("broker"),
@@ -374,8 +384,11 @@ export class Manager {
     if (recorded.verdict === "duplicate" && recorded.entry.status !== "pending") {
       const durable = recorded.entry.job;
       if (!durable || durable.idempotencyKey !== idempotencyKey) return { status: "BLOCKED", reason: "ledger_entry_unrecoverable" };
-      const known = this.jobs.get(durable.jobId) ?? this.adopt(structuredClone(durable));
-      return { status: "DUPLICATE", reason: `event already ${recorded.entry.status}; nothing dispatched`, job: known };
+      const local = this.jobs.get(durable.jobId);
+      if (local) return { status: "DUPLICATE", reason: `event already ${recorded.entry.status}; nothing dispatched`, job: local };
+      const recovered = await this.recover(structuredClone(durable));
+      if ("blocked" in recovered) return { status: "BLOCKED", reason: recovered.blocked };
+      return { status: "DUPLICATE", reason: `event already ${recorded.entry.status}; recovered as ${recovered.job.state}; nothing dispatched`, job: recovered.job };
     }
 
     const job: Job = {
@@ -463,6 +476,43 @@ export class Manager {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * Rebuilds a job this manager has not seen (after a restart) from its ledger snapshot plus the broker's current
+   * state, never from the snapshot alone: the snapshot is the admission record, and every later transition is the
+   * broker's. Work that may have run comes back `unknown` for independent reconciliation, finished work comes back
+   * finished, and only an attempt that is still `claimed` comes back dispatchable.
+   */
+  private async recover(job: Job): Promise<{ job: Job } | { blocked: string }> {
+    if (job.state === "awaiting_owner" && job.claimId === null) return { job: this.adopt(job) };
+    if (job.state !== "admitted" || job.claimId === null) return { blocked: "ledger_entry_unrecoverable" };
+    let st: ClaimStatus;
+    try {
+      st = await this.p.broker.claimStatus(job.claimId);
+    } catch {
+      return { blocked: "broker_unavailable" };
+    }
+    if (!st.ok) return { blocked: `broker_refused:${st.reason}` };
+    if (job.fence !== null && st.fence < job.fence) return { blocked: "non_monotonic_fence" };
+    job.attemptId = st.attemptId;
+    job.fence = st.fence;
+    // Every attempt takes a fresh fence, so the fence bounds how many attempts were made: retries stay bounded.
+    job.attempt = Math.max(job.attempt, st.fence);
+    job.replayId = `${job.jobId}#${job.attempt}`;
+    const recoveredState: Record<AttemptState, JobState> = {
+      claimed: "admitted",
+      dispatched: "unknown",
+      unknown: "unknown",
+      settled: "complete",
+      failed: "failed",
+      released: "halted",
+    };
+    job.state = recoveredState[st.state];
+    this.adopt(job);
+    if (job.state === "unknown") this.queue({ eventId: job.eventId, jobId: job.jobId, needs: "reconciliation", reason: `recovered after restart with attempt ${st.state}` });
+    if (job.state === "halted") this.queue({ eventId: job.eventId, jobId: job.jobId, needs: "attention", reason: "recovered after restart with a released attempt" });
+    return { job };
   }
 
   /** Puts a job (new, or recovered from the ledger after a restart) into the local index. */
