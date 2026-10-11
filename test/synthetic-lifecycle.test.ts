@@ -149,15 +149,16 @@ function world(scripts: Partial<Record<AgentKey, (string | Error)[]>> = {}, opts
     store, calls, budget, cmd, env, fetchCalls: 0,
     deps: () => ({
       cfg: loadConfig(w.env), store, clients, budget,
+      // The only source of "terminated" trace entries: what the production tick() itself emits to its run log.
+      log: (line) => {
+        const j = JSON.parse(line) as { active: boolean; waiting: string[] };
+        if (!j.active) store.log(cmd, "terminated", j.waiting[0] ?? "engine off");
+      },
       // No tokens are configured, so no tool that needs the network is offered to a worker.
       toolEnv: (issue) => ({ dryRun: false, policy: { allowPullRequests: false, allowedRepos: [] }, comment: (b) => store.comment(issue.id, b), requestApproval: (r) => store.comment(issue.id, `APPROVAL: ${r}`) }),
     }),
     // Each run re-reads the environment, as each scheduled engine run does. Flipping w.env between runs is the synthetic kill switch.
-    async run() {
-      const report = await tick(w.deps());
-      if (!report.active) store.log(cmd, "terminated", report.waiting[0] ?? "engine off");
-      return report;
-    },
+    run: () => tick(w.deps()),
   };
   return w;
 }
