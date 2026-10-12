@@ -135,6 +135,31 @@ async function offline<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
+test("ARN-89 misbound tenant or command refuses before the broker RPC", () => offline(async () => {
+  for (const bad of [
+    { tenantRef: "99999999-9999-4999-8999-999999999999" },
+    { commandKey: "unrelated-task:review_result" },
+  ]) {
+    const r = rig({ broker_claim_and_reserve: [R.claimed()] });
+    r.flags.binding = binding(bad);
+    const decision = await r.m.handleEvent(event());
+    assert.equal(decision.status, "BLOCKED");
+    assert.equal(decision.reason, "broker_refused:unbound_command");
+    assert.deepEqual(r.calls, [], "misbound command never reaches the broker");
+    assert.equal(r.worker.runs, 0);
+  }
+}));
+
+test("ARN-89 empty positive lifecycle acknowledgment is not accepted", () => offline(async () => {
+  const r = rig({ broker_claim_and_reserve: [R.claimed()], broker_mark_dispatched: [R.dispatched()], broker_mark_unknown: [{ ok: true }] });
+  const d = await r.m.handleEvent(event());
+  assert.equal(d.status, "ADMITTED");
+  r.worker.mode = "throw";
+  const x = await r.m.dispatch(d.job!.jobId);
+  assert.notEqual(x.job?.state, "complete", "no success can be inferred from malformed broker acknowledgments");
+  assert.equal(r.worker.runs, 1);
+}));
+
 test("ARN-89 happy path: zero-cost internal event -> one claim -> audit -> simulated worker -> settle -> durable recovery", () => offline(async () => {
   const r = rig({ broker_claim_and_reserve: [R.claimed()], broker_mark_dispatched: [R.dispatched()], broker_settle: [R.settled] });
   const d = await r.m.handleEvent(event());
