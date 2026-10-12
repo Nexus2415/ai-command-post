@@ -113,6 +113,9 @@ export function createBrokerAdapter(deps: BrokerAdapterDeps): AdmissionBroker {
     if (!r) return MALFORMED;
     if ("refusal" in r) return refuse(r.refusal);
     if (check && !check(r.body)) return MALFORMED;
+    // The SQL lifecycle acknowledgments that do not carry attempt/fence return
+    // an explicit 'changed' boolean. A bare {ok:true} is not an acknowledgment.
+    if (!check && typeof r.body.changed !== "boolean") return MALFORMED;
     return { ok: true };
   };
 
@@ -168,6 +171,9 @@ export function createBrokerAdapter(deps: BrokerAdapterDeps): AdmissionBroker {
       if (req.tariffId !== "free" || req.worstCaseMicros !== 0) return refuse(ADAPTER_REFUSALS.cost);
       const b = await deps.binding({ tenantId: req.tenantId, claimKey: req.claimKey });
       if (!validBinding(b)) return refuse(ADAPTER_REFUSALS.unbound);
+      // A lookup is a separate injected trust boundary. Never let a stale or misbound
+      // command redirect the manager's admission to another tenant or task/intent.
+      if (b.tenantRef !== req.tenantId || req.claimKey !== `${req.tenantId}:${b.commandKey}`) return refuse(ADAPTER_REFUSALS.unbound);
       // Only the admission the command was recorded for may claim it; another event on the same task is refused here,
       // before the broker is asked, so it can never take the claim first.
       if (b.idempotencyKey !== req.idempotencyKey) return refuse(ADAPTER_REFUSALS.boundElsewhere);
