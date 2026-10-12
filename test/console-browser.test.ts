@@ -105,7 +105,9 @@ test('ARN-77 real console DOM: outage, stale refresh, thread recovery and malfor
     let socket: WebSocket | undefined;
     try {
       let pages: any[] | undefined;
-      for (let i = 0; i < 100 && !pages; i++) {
+      // Cold Chromium start on a busy CI runner can exceed 5s while other test files run in parallel.
+      const startupDeadline = Date.now() + 30000;
+      while (!pages && Date.now() < startupDeadline) {
         if (child.exitCode !== null) break;
         try {
           const response = await fetch('http://127.0.0.1:' + debugPort + '/json/list');
