@@ -82,7 +82,7 @@ const refuse = (reason: string) => ({ ok: false as const, reason });
 const MALFORMED = refuse(ADAPTER_REFUSALS.malformed);
 
 /** The reply fields the adapter reads. Anything else the broker returns is ignored. */
-type Json = Partial<Record<"ok" | "reason" | "created" | "claim_id" | "attempt_id" | "operation_id" | "fence" | "reserved_micros" | "state" | "actual_micros", unknown>>;
+type Json = Partial<Record<"ok" | "reason" | "created" | "changed" | "claim_id" | "attempt_id" | "operation_id" | "fence" | "reserved_micros" | "state" | "actual_micros", unknown>>;
 /** `{ok:false, reason}` from the broker, a plain object with `ok:true`, or null for anything else. */
 function read(r: unknown): { refusal: string } | { body: Json } | null {
   if (typeof r !== "object" || r === null || Array.isArray(r)) return null;
