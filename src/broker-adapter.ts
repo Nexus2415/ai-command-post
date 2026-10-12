@@ -39,7 +39,9 @@ export type BrokerRpc = (fn: BrokerFunction, args: RpcArgs) => Promise<unknown>;
  * that is in the manager's request, so it comes from here.
  */
 export interface CommandBinding {
+  /** Must equal the manager's tenant id: a binding for another tenant is refused before any RPC. */
   tenantRef: string;
+  /** Must equal the manager's claim key (one command per tenant, task and intent), or the binding is refused. */
   commandKey: string;
   actionRef: string;
   /** Must be an all-zero tariff while the budget is $0. A priced tariff reserves above zero and is refused. */
@@ -67,6 +69,8 @@ export const ADAPTER_REFUSALS = Object.freeze({
   boundElsewhere: "command_bound_to_another_event",
   unknownAttempt: "unknown_attempt",
   unboundClaim: "unbound_claim",
+  bindingMismatch: "binding_mismatch",
+  unconfirmed: "unconfirmed_acknowledgment",
   noUsage: "no_usage_evidence",
   stale: "stale",
   notReclaimable: "not_reclaimable",
@@ -82,7 +86,19 @@ const refuse = (reason: string) => ({ ok: false as const, reason });
 const MALFORMED = refuse(ADAPTER_REFUSALS.malformed);
 
 /** The reply fields the adapter reads. Anything else the broker returns is ignored. */
-type Json = Partial<Record<"ok" | "reason" | "created" | "claim_id" | "attempt_id" | "operation_id" | "fence" | "reserved_micros" | "state" | "actual_micros", unknown>>;
+type Json = Partial<Record<"ok" | "reason" | "created" | "claim_id" | "attempt_id" | "operation_id" | "fence" | "reserved_micros" | "state" | "actual_micros" | "changed" | "charged_micros" | "frozen", unknown>>;
+
+/**
+ * Every key each acknowledgment may carry, from the SQL's own `jsonb_build_object` calls. These replies do not echo the
+ * attempt, so a key outside the list, or a missing or mistyped one, makes the reply unreadable rather than a success.
+ */
+const ACK_KEYS = Object.freeze({
+  broker_mark_unknown: ["ok", "changed"],
+  broker_release: ["ok", "changed"],
+  broker_mark_failed: ["ok", "changed", "charged_micros"],
+  broker_settle: ["ok", "changed", "actual_micros", "frozen"],
+} as const);
+type AckFunction = keyof typeof ACK_KEYS;
 /** `{ok:false, reason}` from the broker, a plain object with `ok:true`, or null for anything else. */
 function read(r: unknown): { refusal: string } | { body: Json } | null {
   if (typeof r !== "object" || r === null || Array.isArray(r)) return null;
@@ -99,6 +115,7 @@ function validBinding(b: CommandBinding | null): b is CommandBinding {
 /** Builds the adapter. There is no default instance and no default transport. */
 export function createBrokerAdapter(deps: BrokerAdapterDeps): AdmissionBroker {
   const ops = new Map<string, string>(); // attempt id -> operation id
+  const owners = new Map<string, { claimId: string; fence: number }>(); // attempt id -> its claim and fence
   const claims = new Map<string, CommandBinding>(); // claim id -> binding
 
   const call = (fn: BrokerFunction, args: RpcArgs): Promise<unknown> => {
@@ -124,11 +141,32 @@ export function createBrokerAdapter(deps: BrokerAdapterDeps): AdmissionBroker {
     const b = r.body;
     if (b.claim_id !== claimId || !isUuid(b.attempt_id) || !isFence(b.fence) || !isText(b.operation_id) || !ATTEMPT_STATES.includes(b.state as AttemptState)) return MALFORMED;
     ops.set(b.attempt_id, b.operation_id);
+    owners.set(b.attempt_id, { claimId, fence: b.fence });
     return { ok: true, attemptId: b.attempt_id, fence: b.fence, state: b.state as AttemptState };
   };
 
+  /**
+   * A positive acknowledgment that does not echo the attempt is believed only when its shape is exactly the SQL's AND
+   * the read-only status RPC then shows this same attempt, at this same fence, in the state the step produces. A
+   * forged, mismatched or unconfirmable "ok" is a refusal, so the manager never advances on it.
+   */
+  const ack = async (fn: AckFunction, args: RpcArgs, attemptId: string, fence: number, valid: (o: Json) => boolean, expect: AttemptState): Promise<BrokerStep> => {
+    const owner = owners.get(attemptId);
+    if (!owner) return refuse(ADAPTER_REFUSALS.unknownAttempt);
+    const raw = await call(fn, args);
+    const r = read(raw);
+    if (!r) return MALFORMED;
+    if ("refusal" in r) return refuse(r.refusal);
+    const allowed: readonly string[] = ACK_KEYS[fn];
+    if (Object.keys(raw as object).some((k) => !allowed.includes(k)) || !valid(r.body)) return MALFORMED;
+    const st = await status(owner.claimId);
+    if (!st.ok) return st;
+    if (st.attemptId !== attemptId || st.fence !== fence || st.state !== expect) return refuse(ADAPTER_REFUSALS.unconfirmed);
+    return { ok: true };
+  };
+
   const release = (attemptId: string, fence: number, reason: string): Promise<BrokerStep> =>
-    step("broker_release", { p_attempt: attemptId, p_fence: fence, p_reason: reason });
+    ack("broker_release", { p_attempt: attemptId, p_fence: fence, p_reason: reason }, attemptId, fence, (o) => o.changed === true, "released");
 
   /** `broker_claim_and_reserve` for a binding. Also the SQL's takeover path when the latest attempt is released/failed. */
   const reserve = async (b: CommandBinding, expectAttempt: "any" | "new_attempt"): Promise<BrokerResult> => {
@@ -153,6 +191,7 @@ export function createBrokerAdapter(deps: BrokerAdapterDeps): AdmissionBroker {
     if (!isUuid(o.attempt_id) || !isText(o.operation_id) || !isFence(o.fence) || !isCount(o.reserved_micros)) return MALFORMED;
     claims.set(claimId, b);
     ops.set(o.attempt_id, o.operation_id);
+    owners.set(o.attempt_id, { claimId, fence: o.fence });
     if (o.reserved_micros !== 0) {
       // A priced tariff: the broker reserved real money. Hand it back before anything can dispatch, then refuse.
       await release(o.attempt_id, o.fence, ADAPTER_REFUSALS.cost).catch(() => undefined);
@@ -168,6 +207,9 @@ export function createBrokerAdapter(deps: BrokerAdapterDeps): AdmissionBroker {
       if (req.tariffId !== "free" || req.worstCaseMicros !== 0) return refuse(ADAPTER_REFUSALS.cost);
       const b = await deps.binding({ tenantId: req.tenantId, claimKey: req.claimKey });
       if (!validBinding(b)) return refuse(ADAPTER_REFUSALS.unbound);
+      // The lookup is an outside dependency too: a binding for another tenant or another claim key would redirect this
+      // admission to someone else's command, so it is refused before the broker is asked, whatever its idempotency key.
+      if (b.tenantRef !== req.tenantId || b.commandKey !== req.claimKey) return refuse(ADAPTER_REFUSALS.bindingMismatch);
       // Only the admission the command was recorded for may claim it; another event on the same task is refused here,
       // before the broker is asked, so it can never take the claim first.
       if (b.idempotencyKey !== req.idempotencyKey) return refuse(ADAPTER_REFUSALS.boundElsewhere);
@@ -195,9 +237,13 @@ export function createBrokerAdapter(deps: BrokerAdapterDeps): AdmissionBroker {
     },
 
     markDispatched: (attemptId, fence) =>
-      step("broker_mark_dispatched", { p_attempt: attemptId, p_fence: fence }, (o) => o.attempt_id === attemptId && o.fence === fence),
-    markUnknown: (attemptId, fence) => step("broker_mark_unknown", { p_attempt: attemptId, p_fence: fence }),
-    markFailed: (attemptId, fence) => step("broker_mark_failed", { p_attempt: attemptId, p_fence: fence, p_reason: "acp_manager_failed" }),
+      step("broker_mark_dispatched", { p_attempt: attemptId, p_fence: fence }, (o) => o.attempt_id === attemptId && o.fence === fence && o.operation_id === ops.get(attemptId)),
+    markUnknown: (attemptId, fence) =>
+      ack("broker_mark_unknown", { p_attempt: attemptId, p_fence: fence }, attemptId, fence, (o) => o.changed === true, "unknown"),
+    // A first failure reports what it charged (always 0 at a $0 budget); a replay reports `changed: false` and no charge.
+    markFailed: (attemptId, fence) =>
+      ack("broker_mark_failed", { p_attempt: attemptId, p_fence: fence, p_reason: "acp_manager_failed" }, attemptId, fence,
+        (o) => (o.changed === true && o.charged_micros === 0) || (o.changed === false && o.charged_micros === undefined), "failed"),
     release: (attemptId, fence) => release(attemptId, fence, "acp_manager_release"),
 
     async settle(attemptId, actualMicros) {
@@ -205,10 +251,12 @@ export function createBrokerAdapter(deps: BrokerAdapterDeps): AdmissionBroker {
       // gateway measured, and with a $0 budget only a zero amount may be settled.
       if (actualMicros !== 0) return refuse(ADAPTER_REFUSALS.cost);
       const op = ops.get(attemptId);
-      if (!op) return refuse(ADAPTER_REFUSALS.unknownAttempt);
+      const owner = owners.get(attemptId);
+      if (!op || !owner) return refuse(ADAPTER_REFUSALS.unknownAttempt);
       const evidence = await deps.usageEvidence(attemptId);
       if (!isText(evidence)) return refuse(ADAPTER_REFUSALS.noUsage);
-      return step("broker_settle", { p_attempt: attemptId, p_operation_id: op, p_actual: 0, p_usage_evidence: evidence }, (o) => o.actual_micros === 0);
+      return ack("broker_settle", { p_attempt: attemptId, p_operation_id: op, p_actual: 0, p_usage_evidence: evidence }, attemptId, owner.fence,
+        (o) => typeof o.changed === "boolean" && o.actual_micros === 0 && (o.frozen === undefined || typeof o.frozen === "boolean"), "settled");
     },
   };
 }

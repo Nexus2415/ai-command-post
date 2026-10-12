@@ -18,6 +18,7 @@ const A2 = "66666666-6666-4666-8666-666666666666";
 const OP1 = `op:${CLAIM}:1`;
 const OP2 = `op:${CLAIM}:2`;
 const KEY = `${T}:evt-1`;
+const CK = `${T}:task-1:review_result`; // the manager's claim key for event() below
 
 // Replies, as the SQL builds them.
 const R = {
@@ -37,7 +38,7 @@ type Reply = unknown | { throws: string };
 interface Call { fn: BrokerFunction; args: RpcArgs }
 
 const binding = (over: Partial<CommandBinding> = {}): CommandBinding => ({
-  tenantRef: T, commandKey: "task-1:review_result", actionRef: CMD, tariffRef: TF, maxInputTokens: 100, maxCachedInputTokens: 50, maxOutputTokens: 40, idempotencyKey: KEY, ...over,
+  tenantRef: T, commandKey: CK, actionRef: CMD, tariffRef: TF, maxInputTokens: 100, maxCachedInputTokens: 50, maxOutputTokens: 40, idempotencyKey: KEY, ...over,
 });
 
 interface Rig {
@@ -136,16 +137,16 @@ async function offline<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 test("ARN-89 happy path: zero-cost internal event -> one claim -> audit -> simulated worker -> settle -> durable recovery", () => offline(async () => {
-  const r = rig({ broker_claim_and_reserve: [R.claimed()], broker_mark_dispatched: [R.dispatched()], broker_settle: [R.settled] });
+  const r = rig({ broker_claim_and_reserve: [R.claimed()], broker_mark_dispatched: [R.dispatched()], broker_settle: [R.settled], broker_claim_status: [R.status("settled")] });
   const d = await r.m.handleEvent(event());
   assert.equal(d.status, "ADMITTED", d.reason);
-  assert.deepEqual(r.calls[0], { fn: "broker_claim_and_reserve", args: { p_tenant: T, p_command_key: "task-1:review_result", p_action_ref: CMD, p_tariff_ref: TF, p_max_input: 100, p_max_cached: 50, p_max_output: 40 } });
+  assert.deepEqual(r.calls[0], { fn: "broker_claim_and_reserve", args: { p_tenant: T, p_command_key: CK, p_action_ref: CMD, p_tariff_ref: TF, p_max_input: 100, p_max_cached: 50, p_max_output: 40 } });
   assert.deepEqual(r.audit.map((a) => a.step), ["admission_decided", "admitted"], "audited before and after the claim");
   const done = await r.m.dispatch(d.job!.jobId);
   assert.equal(done.status, "ADMITTED", done.reason);
   assert.equal(done.job!.state, "complete");
   assert.equal(r.worker.runs, 1);
-  assert.deepEqual(fns(r), ["broker_claim_and_reserve", "broker_mark_dispatched", "broker_settle"]);
+  assert.deepEqual(fns(r), ["broker_claim_and_reserve", "broker_mark_dispatched", "broker_settle", "broker_claim_status"], "the settlement is confirmed read-only");
   assert.deepEqual(r.calls[2]?.args, { p_attempt: A1, p_operation_id: OP1, p_actual: 0, p_usage_evidence: "a".repeat(64) }, "settles $0 against the gateway's usage hash and the grant's operation id");
   assert.deepEqual((r.ledger.get(`${T}:evt-1`) as { outcome?: unknown } | undefined)?.outcome, { state: "complete", fence: 1 });
 
@@ -183,7 +184,7 @@ test("ARN-89 concurrent claims: a live claim resolves to its existing attempt; a
     binding: async () => binding(),
     usageEvidence: async () => null,
   });
-  const got = await a.claimAndReserve({ tenantId: T, claimKey: "c", idempotencyKey: KEY, executor: "claude", tariffId: "free", worstCaseMicros: 0 });
+  const got = await a.claimAndReserve({ tenantId: T, claimKey: CK, idempotencyKey: KEY, executor: "claude", tariffId: "free", worstCaseMicros: 0 });
   assert.deepEqual(got, { ok: true, claimId: CLAIM, attemptId: A1, fence: 1, operationId: OP1, created: false, idempotencyKey: KEY });
 
   // A different event on the same task and intent: refused before the broker is asked, so it cannot win the race.
@@ -196,21 +197,21 @@ test("ARN-89 concurrent claims: a live claim resolves to its existing attempt; a
 
 test("ARN-89 provider cost above $0 fails closed at every step that could spend", () => offline(async () => {
   const a = createBrokerAdapter({ rpc: async () => assert.fail("no rpc for a priced request"), binding: async () => binding(), usageEvidence: async () => "h" });
-  const base = { tenantId: T, claimKey: "c", idempotencyKey: KEY, executor: "claude" as const };
+  const base = { tenantId: T, claimKey: CK, idempotencyKey: KEY, executor: "claude" as const };
   assert.deepEqual(await a.claimAndReserve({ ...base, tariffId: "paid", worstCaseMicros: 0 }), { ok: false, reason: ADAPTER_REFUSALS.cost });
   assert.deepEqual(await a.claimAndReserve({ ...base, tariffId: "free", worstCaseMicros: 1 }), { ok: false, reason: ADAPTER_REFUSALS.cost });
   assert.deepEqual(await a.takeover(CLAIM, 1, 5), { ok: false, reason: ADAPTER_REFUSALS.cost });
   assert.deepEqual(await a.settle(A1, 7, "ref"), { ok: false, reason: ADAPTER_REFUSALS.cost });
 
   // The broker priced it anyway (a non-zero tariff behind the binding): the reservation is handed straight back.
-  const r = rig({ broker_claim_and_reserve: [R.claimed({ reserved_micros: 1500 })], broker_release: [R.changed] });
+  const r = rig({ broker_claim_and_reserve: [R.claimed({ reserved_micros: 1500 })], broker_release: [R.changed], broker_claim_status: [R.status("released")] });
   const d = await r.m.handleEvent(event());
   assert.equal(d.reason, `broker_refused:${ADAPTER_REFUSALS.cost}`);
   assert.deepEqual(r.calls[1], { fn: "broker_release", args: { p_attempt: A1, p_fence: 1, p_reason: ADAPTER_REFUSALS.cost } });
   assert.equal(r.worker.runs, 0);
 
   // A worker that reports a cost: never settled; the outcome is unknown and goes to reconciliation.
-  const w = rig({ broker_claim_and_reserve: [R.claimed()], broker_mark_dispatched: [R.dispatched()], broker_mark_unknown: [R.changed] });
+  const w = rig({ broker_claim_and_reserve: [R.claimed()], broker_mark_dispatched: [R.dispatched()], broker_mark_unknown: [R.changed], broker_claim_status: [R.status("unknown")] });
   w.worker.micros = 250;
   const j = await w.m.handleEvent(event());
   const x = await w.m.dispatch(j.job!.jobId);
@@ -269,7 +270,7 @@ test("ARN-89 missing or malformed broker replies are refusals, never successes",
 
   // A settle reply that is not a $0 settlement leaves the outcome unknown.
   for (const bad of [{ ok: true }, { ok: true, changed: true, actual_micros: 5 }, "settled"]) {
-    const r = rig({ broker_claim_and_reserve: [R.claimed()], broker_mark_dispatched: [R.dispatched()], broker_settle: [bad], broker_mark_unknown: [R.changed] });
+    const r = rig({ broker_claim_and_reserve: [R.claimed()], broker_mark_dispatched: [R.dispatched()], broker_settle: [bad], broker_mark_unknown: [R.changed], broker_claim_status: [R.status("unknown")] });
     const d = await r.m.handleEvent(event());
     const x = await r.m.dispatch(d.job!.jobId);
     assert.equal(x.job!.state, "unknown");
@@ -278,7 +279,7 @@ test("ARN-89 missing or malformed broker replies are refusals, never successes",
 }));
 
 test("ARN-89 broken audit after the claim releases the reservation through the broker", () => offline(async () => {
-  const r = rig({ broker_claim_and_reserve: [R.claimed()], broker_release: [R.changed] });
+  const r = rig({ broker_claim_and_reserve: [R.claimed()], broker_release: [R.changed], broker_claim_status: [R.status("released")] });
   r.flags.auditFailSteps.add("admitted");
   const d = await r.m.handleEvent(event());
   assert.equal(d.status, "BLOCKED");
@@ -287,16 +288,16 @@ test("ARN-89 broken audit after the claim releases the reservation through the b
 }));
 
 test("ARN-89 ambiguous completion: a worker that throws is marked unknown, never settled or failed", () => offline(async () => {
-  const r = rig({ broker_claim_and_reserve: [R.claimed()], broker_mark_dispatched: [R.dispatched()], broker_mark_unknown: [R.changed] });
+  const r = rig({ broker_claim_and_reserve: [R.claimed()], broker_mark_dispatched: [R.dispatched()], broker_mark_unknown: [R.changed], broker_claim_status: [R.status("unknown")] });
   r.worker.mode = "throw";
   const d = await r.m.handleEvent(event());
   const x = await r.m.dispatch(d.job!.jobId);
   assert.equal(x.job!.state, "unknown");
-  assert.deepEqual(fns(r), ["broker_claim_and_reserve", "broker_mark_dispatched", "broker_mark_unknown"]);
+  assert.deepEqual(fns(r), ["broker_claim_and_reserve", "broker_mark_dispatched", "broker_mark_unknown", "broker_claim_status"]);
   assert.deepEqual(r.calls[2]?.args, { p_attempt: A1, p_fence: 1 });
 
   // Missing usage evidence is the same: the broker cannot settle without the gateway's measurement.
-  const n = rig({ broker_claim_and_reserve: [R.claimed()], broker_mark_dispatched: [R.dispatched()], broker_mark_unknown: [R.changed] });
+  const n = rig({ broker_claim_and_reserve: [R.claimed()], broker_mark_dispatched: [R.dispatched()], broker_mark_unknown: [R.changed], broker_claim_status: [R.status("unknown")] });
   n.flags.usage = null;
   const j = await n.m.handleEvent(event());
   assert.equal((await n.m.dispatch(j.job!.jobId)).reason, `unknown_outcome:settle_refused:${ADAPTER_REFUSALS.noUsage}`);
@@ -318,7 +319,7 @@ test("ARN-89 read-only claim-status recovery: work that may have run comes back 
 }));
 
 test("ARN-89 idempotent failure finalization: a rejected result fails once, and a replay changes nothing", () => offline(async () => {
-  const r = rig({ broker_claim_and_reserve: [R.claimed()], broker_mark_dispatched: [R.dispatched()], broker_mark_failed: [R.failed, R.failedReplay, R.no("stale")] });
+  const r = rig({ broker_claim_and_reserve: [R.claimed()], broker_mark_dispatched: [R.dispatched()], broker_mark_failed: [R.failed, R.failedReplay, R.no("stale")], broker_claim_status: [R.status("failed"), R.status("failed")] });
   r.verifier.ok = false;
   const d = await r.m.handleEvent(event());
   const x = await r.m.dispatch(d.job!.jobId);
@@ -334,7 +335,7 @@ test("ARN-89 takeover: checks the expected fence read-only first, and refuses a 
     rpc: async (fn, args) => { calls.push({ fn, args }); return replies[fn]!.shift(); },
     binding: async () => b, usageEvidence: async () => null,
   });
-  const claimReq = { tenantId: T, claimKey: "c", idempotencyKey: KEY, executor: "claude" as const, tariffId: "free", worstCaseMicros: 0 };
+  const claimReq = { tenantId: T, claimKey: CK, idempotencyKey: KEY, executor: "claude" as const, tariffId: "free", worstCaseMicros: 0 };
 
   assert.deepEqual(await make({}).takeover(CLAIM, 1, 0), { ok: false, reason: ADAPTER_REFUSALS.unboundClaim }, "a claim it never saw is refused");
 
@@ -353,10 +354,10 @@ test("ARN-89 takeover: checks the expected fence read-only first, and refuses a 
   assert.deepEqual(await live.takeover(CLAIM, 1, 0), { ok: false, reason: ADAPTER_REFUSALS.notReclaimable });
 
   const jumpCalls: Call[] = [];
-  const jump = make({ broker_claim_and_reserve: [R.claimed(), R.takeover({ fence: 3 })], broker_claim_status: [R.status("released")], broker_release: [R.changed] }, jumpCalls);
+  const jump = make({ broker_claim_and_reserve: [R.claimed(), R.takeover({ fence: 3 })], broker_claim_status: [R.status("released"), R.status("released", A2, 3)], broker_release: [R.changed] }, jumpCalls);
   await jump.claimAndReserve(claimReq);
   assert.deepEqual(await jump.takeover(CLAIM, 1, 0), { ok: false, reason: "stale" });
-  assert.deepEqual(jumpCalls.at(-1), { fn: "broker_release", args: { p_attempt: A2, p_fence: 3, p_reason: "stale_takeover" } }, "the surprise attempt is handed back");
+  assert.deepEqual(jumpCalls.at(-2), { fn: "broker_release", args: { p_attempt: A2, p_fence: 3, p_reason: "stale_takeover" } }, "the surprise attempt is handed back");
 }));
 
 test("ARN-89 an unbound or malformed command binding never reaches the broker", () => offline(async () => {
@@ -377,7 +378,7 @@ test("ARN-89 every RPC is called with exactly the parameters the SQL declares", 
     },
     binding: async () => binding(), usageEvidence: async () => "h",
   });
-  await a.claimAndReserve({ tenantId: T, claimKey: "c", idempotencyKey: KEY, executor: "claude", tariffId: "free", worstCaseMicros: 0 });
+  await a.claimAndReserve({ tenantId: T, claimKey: CK, idempotencyKey: KEY, executor: "claude", tariffId: "free", worstCaseMicros: 0 });
   await a.claimStatus(CLAIM);
   await a.markDispatched(A1, 1);
   await a.markUnknown(A1, 1);
@@ -402,3 +403,85 @@ test("ARN-89 disabled: the adapter is reachable from no live API, scheduler, web
   ].filter((f) => { try { readFileSync(f); return true; } catch { return false; } });
   for (const f of live) assert.doesNotMatch(readFileSync(f, "utf8"), /broker-adapter|createBrokerAdapter/, `${f} must not reach the adapter`);
 });
+
+// ---------------------------------------------------------------------------------------------------------------
+// Review fixes (ChatGPT, head d393464): an unchecked binding, and positive acknowledgments believed without checks.
+// ---------------------------------------------------------------------------------------------------------------
+
+test("ARN-89 a binding for another tenant or claim key is refused before any RPC, even with this event's idempotency key", () => offline(async () => {
+  const OTHER = "77777777-7777-4777-8777-777777777777";
+  for (const bad of [binding({ tenantRef: OTHER }), binding({ commandKey: `${T}:task-2:review_result` }), binding({ commandKey: `${OTHER}:task-1:review_result` }), binding({ tenantRef: OTHER, commandKey: `${OTHER}:task-1:review_result` })]) {
+    assert.equal(bad.idempotencyKey, KEY, "the idempotency key matches, so only the tenant/command check stops it");
+    const r = rig();
+    r.flags.binding = bad;
+    const d = await r.m.handleEvent(event());
+    assert.equal(d.status, "BLOCKED");
+    assert.equal(d.reason, `broker_refused:${ADAPTER_REFUSALS.bindingMismatch}`);
+    assert.deepEqual(r.calls, [], "no RPC");
+    assert.equal(r.worker.runs, 0, "no worker");
+  }
+}));
+
+test("ARN-89 forged or mismatched positive acknowledgments are refusals, and the manager never advances on them", () => offline(async () => {
+  // markFailed after a rejected result: a reply that is not exactly the SQL's shape, or a state the read-only status
+  // does not confirm for this attempt and fence, leaves the job unknown (reconciliation), never failed.
+  const forgedFailed: [string, unknown, unknown?][] = [
+    ["missing changed", { ok: true }],
+    ["missing charge on a first failure", { ok: true, changed: true }],
+    ["charged above $0", { ok: true, changed: true, charged_micros: 5 }],
+    ["changed as string", { ok: true, changed: "true", charged_micros: 0 }],
+    ["extra attempt id", { ok: true, changed: true, charged_micros: 0, attempt_id: A2 }],
+    ["replay with a charge", { ok: true, changed: false, charged_micros: 0 }],
+    ["status shows it still dispatched", R.failed, R.status("dispatched")],
+    ["status shows another attempt", R.failed, R.status("failed", A2, 2)],
+    ["status fence differs", R.failed, { ...R.status("failed"), fence: 2 }],
+  ];
+  for (const [name, reply, confirm] of forgedFailed) {
+    const r = rig({ broker_claim_and_reserve: [R.claimed()], broker_mark_dispatched: [R.dispatched()], broker_mark_failed: [reply], broker_mark_unknown: [R.changed], broker_claim_status: [...(confirm ? [confirm] : []), R.status("unknown")] });
+    r.verifier.ok = false;
+    const d = await r.m.handleEvent(event());
+    const x = await r.m.dispatch(d.job!.jobId);
+    assert.equal(x.job!.state, "unknown", name);
+    assert.match(x.reason, /^unknown_outcome:mark_failed_refused:(malformed_broker_response|unconfirmed_acknowledgment)$/, name);
+    assert.equal(r.ledger.get(`${T}:evt-1`)?.status, "admitted", `${name}: no failed outcome recorded`);
+    assert.equal((r.ledger.get(`${T}:evt-1`) as { outcome?: unknown }).outcome, undefined, name);
+  }
+
+  // settle: the same, and the job is never complete.
+  const forgedSettled: [string, unknown, unknown?][] = [
+    ["extra attempt id", { ...R.settled, attempt_id: A2 }],
+    ["frozen as string", { ...R.settled, frozen: "no" }],
+    ["status shows it still dispatched", R.settled, R.status("dispatched")],
+    ["status shows another attempt", R.settled, R.status("settled", A2, 2)],
+  ];
+  for (const [name, reply, confirm] of forgedSettled) {
+    const r = rig({ broker_claim_and_reserve: [R.claimed()], broker_mark_dispatched: [R.dispatched()], broker_settle: [reply], broker_mark_unknown: [R.changed], broker_claim_status: [...(confirm ? [confirm] : []), R.status("unknown")] });
+    const d = await r.m.handleEvent(event());
+    const x = await r.m.dispatch(d.job!.jobId);
+    assert.equal(x.job!.state, "unknown", name);
+    assert.match(x.reason, /^unknown_outcome:settle_refused:(malformed_broker_response|unconfirmed_acknowledgment)$/, name);
+  }
+
+  // release and markUnknown, directly: the same shape and confirmation rules.
+  const cases: [string, "release" | "markUnknown", unknown, unknown?][] = [
+    ["release extra key", "release", { ok: true, changed: true, fence: 1 }],
+    ["release unchanged", "release", { ok: true, changed: false }],
+    ["release not confirmed", "release", R.changed, R.status("claimed")],
+    ["unknown extra key", "markUnknown", { ok: true, changed: true, attempt_id: A1 }],
+    ["unknown not confirmed", "markUnknown", R.changed, R.status("dispatched")],
+    ["unknown other attempt", "markUnknown", R.changed, R.status("unknown", A2, 2)],
+  ];
+  for (const [name, method, reply, confirm] of cases) {
+    const q: unknown[] = [R.claimed(), reply, ...(confirm ? [confirm] : [])];
+    const a = createBrokerAdapter({ rpc: async () => q.shift(), binding: async () => binding(), usageEvidence: async () => null });
+    await a.claimAndReserve({ tenantId: T, claimKey: CK, idempotencyKey: KEY, executor: "claude", tariffId: "free", worstCaseMicros: 0 });
+    const got = await a[method](A1, 1);
+    assert.equal(got.ok, false, name);
+  }
+
+  // An attempt the adapter never saw (no claim, status or takeover returned it) is refused with no RPC at all.
+  const none = createBrokerAdapter({ rpc: async () => assert.fail("no rpc for an unknown attempt"), binding: async () => binding(), usageEvidence: async () => "h" });
+  for (const step of [() => none.markFailed(A2, 1), () => none.markUnknown(A2, 1), () => none.release(A2, 1), () => none.settle(A2, 0, "ref")]) {
+    assert.deepEqual(await step(), { ok: false, reason: ADAPTER_REFUSALS.unknownAttempt });
+  }
+}));
