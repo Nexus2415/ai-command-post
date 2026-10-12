@@ -208,7 +208,7 @@ test("ARN-89 concurrent claims: a live claim resolves to its existing attempt; a
     binding: async () => binding(),
     usageEvidence: async () => null,
   });
-  const got = await a.claimAndReserve({ tenantId: T, claimKey: "c", idempotencyKey: KEY, executor: "claude", tariffId: "free", worstCaseMicros: 0 });
+  const got = await a.claimAndReserve({ tenantId: T, claimKey: `${T}:task-1:review_result`, idempotencyKey: KEY, executor: "claude", tariffId: "free", worstCaseMicros: 0 });
   assert.deepEqual(got, { ok: true, claimId: CLAIM, attemptId: A1, fence: 1, operationId: OP1, created: false, idempotencyKey: KEY });
 
   // A different event on the same task and intent: refused before the broker is asked, so it cannot win the race.
@@ -221,7 +221,7 @@ test("ARN-89 concurrent claims: a live claim resolves to its existing attempt; a
 
 test("ARN-89 provider cost above $0 fails closed at every step that could spend", () => offline(async () => {
   const a = createBrokerAdapter({ rpc: async () => assert.fail("no rpc for a priced request"), binding: async () => binding(), usageEvidence: async () => "h" });
-  const base = { tenantId: T, claimKey: "c", idempotencyKey: KEY, executor: "claude" as const };
+  const base = { tenantId: T, claimKey: `${T}:task-1:review_result`, idempotencyKey: KEY, executor: "claude" as const };
   assert.deepEqual(await a.claimAndReserve({ ...base, tariffId: "paid", worstCaseMicros: 0 }), { ok: false, reason: ADAPTER_REFUSALS.cost });
   assert.deepEqual(await a.claimAndReserve({ ...base, tariffId: "free", worstCaseMicros: 1 }), { ok: false, reason: ADAPTER_REFUSALS.cost });
   assert.deepEqual(await a.takeover(CLAIM, 1, 5), { ok: false, reason: ADAPTER_REFUSALS.cost });
@@ -359,7 +359,7 @@ test("ARN-89 takeover: checks the expected fence read-only first, and refuses a 
     rpc: async (fn, args) => { calls.push({ fn, args }); return replies[fn]!.shift(); },
     binding: async () => b, usageEvidence: async () => null,
   });
-  const claimReq = { tenantId: T, claimKey: "c", idempotencyKey: KEY, executor: "claude" as const, tariffId: "free", worstCaseMicros: 0 };
+  const claimReq = { tenantId: T, claimKey: `${T}:task-1:review_result`, idempotencyKey: KEY, executor: "claude" as const, tariffId: "free", worstCaseMicros: 0 };
 
   assert.deepEqual(await make({}).takeover(CLAIM, 1, 0), { ok: false, reason: ADAPTER_REFUSALS.unboundClaim }, "a claim it never saw is refused");
 
@@ -402,7 +402,7 @@ test("ARN-89 every RPC is called with exactly the parameters the SQL declares", 
     },
     binding: async () => binding(), usageEvidence: async () => "h",
   });
-  await a.claimAndReserve({ tenantId: T, claimKey: "c", idempotencyKey: KEY, executor: "claude", tariffId: "free", worstCaseMicros: 0 });
+  await a.claimAndReserve({ tenantId: T, claimKey: `${T}:task-1:review_result`, idempotencyKey: KEY, executor: "claude", tariffId: "free", worstCaseMicros: 0 });
   await a.claimStatus(CLAIM);
   await a.markDispatched(A1, 1);
   await a.markUnknown(A1, 1);
