@@ -71,7 +71,7 @@ function pgRpc(tenants: string[], settings: Record<string, string> = {}) {
 interface World { t: string; tf: string; cmd: string; key: string }
 /**
  * A fresh synthetic tenant with $0 budgets, a tariff (all-zero unless priced) and one approved, recorded command whose
- * command key is the manager's claim key for event() below (`<tenant>:task-1:review_result`).
+ * command key is the tenant-scoped part of the manager's claim key for event() below (`<tenant>:task-1:review_result`).
  */
 async function world(o: { priced?: boolean; cap?: number } = {}): Promise<World> {
   const out = await psql(`
@@ -81,7 +81,7 @@ SELECT arn88_test.reset_world();
 WITH t AS (SELECT arn88_test.mk_tenant('acp89') AS id),
      tf AS (SELECT CASE WHEN :'priced' = 'yes' THEN arn88_test.mk_tariff('priced') ELSE arn88_test.mk_tariff('free', 0, 0, 0) END AS id),
      b AS (SELECT arn88_test.mk_budgets(t.id, :'cap'::bigint, :'cap'::bigint) FROM t)
-SELECT json_build_object('t', t.id, 'tf', tf.id, 'cmd', arn88_test.mk_command(t.id, t.id::text || ':task-1:review_result') ->> 'command', 'key', t.id::text || ':task-1:review_result')::text FROM t, tf, b;`,
+SELECT json_build_object('t', t.id, 'tf', tf.id, 'cmd', arn88_test.mk_command(t.id, 'task-1:review_result') ->> 'command', 'key', 'task-1:review_result')::text FROM t, tf, b;`,
     { priced: o.priced ? "yes" : "no", cap: String(o.cap ?? 0) });
   return JSON.parse(out) as World;
 }

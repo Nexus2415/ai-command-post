@@ -41,7 +41,7 @@ export type BrokerRpc = (fn: BrokerFunction, args: RpcArgs) => Promise<unknown>;
 export interface CommandBinding {
   /** Must equal the manager's tenant id: a binding for another tenant is refused before any RPC. */
   tenantRef: string;
-  /** Must equal the manager's claim key (one command per tenant, task and intent), or the binding is refused. */
+  /** The tenant-scoped key: the manager's claim key must be exactly `${tenantRef}:${commandKey}`, or the binding is refused. */
   commandKey: string;
   actionRef: string;
   /** Must be an all-zero tariff while the budget is $0. A priced tariff reserves above zero and is refused. */
@@ -69,7 +69,6 @@ export const ADAPTER_REFUSALS = Object.freeze({
   boundElsewhere: "command_bound_to_another_event",
   unknownAttempt: "unknown_attempt",
   unboundClaim: "unbound_claim",
-  bindingMismatch: "binding_mismatch",
   unconfirmed: "unconfirmed_acknowledgment",
   noUsage: "no_usage_evidence",
   stale: "stale",
@@ -130,6 +129,9 @@ export function createBrokerAdapter(deps: BrokerAdapterDeps): AdmissionBroker {
     if (!r) return MALFORMED;
     if ("refusal" in r) return refuse(r.refusal);
     if (check && !check(r.body)) return MALFORMED;
+    // The SQL lifecycle acknowledgments that do not carry attempt/fence return
+    // an explicit 'changed' boolean. A bare {ok:true} is not an acknowledgment.
+    if (!check && typeof r.body.changed !== "boolean") return MALFORMED;
     return { ok: true };
   };
 
@@ -207,9 +209,9 @@ export function createBrokerAdapter(deps: BrokerAdapterDeps): AdmissionBroker {
       if (req.tariffId !== "free" || req.worstCaseMicros !== 0) return refuse(ADAPTER_REFUSALS.cost);
       const b = await deps.binding({ tenantId: req.tenantId, claimKey: req.claimKey });
       if (!validBinding(b)) return refuse(ADAPTER_REFUSALS.unbound);
-      // The lookup is an outside dependency too: a binding for another tenant or another claim key would redirect this
-      // admission to someone else's command, so it is refused before the broker is asked, whatever its idempotency key.
-      if (b.tenantRef !== req.tenantId || b.commandKey !== req.claimKey) return refuse(ADAPTER_REFUSALS.bindingMismatch);
+      // A lookup is a separate injected trust boundary. Never let a stale or misbound
+      // command redirect the manager's admission to another tenant or task/intent.
+      if (b.tenantRef !== req.tenantId || req.claimKey !== `${req.tenantId}:${b.commandKey}`) return refuse(ADAPTER_REFUSALS.unbound);
       // Only the admission the command was recorded for may claim it; another event on the same task is refused here,
       // before the broker is asked, so it can never take the claim first.
       if (b.idempotencyKey !== req.idempotencyKey) return refuse(ADAPTER_REFUSALS.boundElsewhere);
