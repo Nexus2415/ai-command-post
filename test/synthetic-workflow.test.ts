@@ -179,7 +179,8 @@ SELECT jsonb_build_object('tenant',:'t','tariff',:'tariff','action',:'action','a
   });
   test("eight concurrent deliveries reserve once; concurrent dispatch runs one worker", async () => {
     const w = await world("arn94-race"), e = w.event("race");
-    assert.equal((await w.intake(w.token(), e)).status, "recorded");
+    const delivered = await Promise.all(Array.from({ length: 8 }, () => w.intake(w.token(), e)));
+    assert.ok(delivered.every(d => d.status === "recorded"));
     const managers = Array.from({ length: 8 }, () => w.make().manager);
     await Promise.all(managers.map(m => m.handleEvent(w.managerEvent(e))));
     assert.equal(await pg("SELECT count(*) FROM public.execution_claims WHERE tenant_id=:'t'::uuid;", { t: w.tenant }), "1");
@@ -208,6 +209,16 @@ SELECT jsonb_build_object('tenant',:'t','tariff',:'tariff','action',:'action','a
     assert.equal((await w.verification(r.job!))["verified"], true);
     const end = await m2.reconcile(r.job!.jobId, { checkedBy: "chatgpt", outcome: "completed", ref: `synthetic-proof-${e.eventId}` });
     assert.equal(end.job?.state, "complete", end.reason); assert.equal(w.runs(), 1);
+  });
+  test("crash after broker dispatch recovers unknown without executing or automatically retrying", async () => {
+    const w = await world("arn94-crash"), first = w.make(), e = w.event("crash");
+    const d = await w.receive(first.manager, e); assert.ok(d.job);
+    assert.equal((await first.ports.broker.markDispatched(d.job.attemptId!, d.job.fence!)).ok, true);
+    // Simulate loss of all Manager memory after dispatch authority was committed.
+    const second = w.make(), r = await second.manager.handleEvent(w.managerEvent(e));
+    assert.equal(r.job?.state, "unknown"); assert.equal(second.manager.nextEligible(), null);
+    assert.equal((await second.manager.dispatch(r.job!.jobId)).status, "REJECTED");
+    assert.equal((await second.manager.retry(r.job!.jobId)).status, "REJECTED"); assert.equal(w.runs(), 0);
   });
   test("forged identity, wrong tenant, red intent, kill and missing verification cannot complete", async () => {
     const w = await world("arn94-negative"), { manager: m } = w.make(), e = w.event("negative");
@@ -245,7 +256,8 @@ SELECT jsonb_build_object('tenant',:'t','tariff',:'tariff','action',:'action','a
     const commandId = await pg("SELECT action_ref FROM public.execution_claims WHERE id=:'c'::uuid;", { c: d.job.claimId! });
     const args: Record<string, readonly [unknown, string]> = { p_tenant: [w.tenant, "uuid"], p_command_key: [d.job.claimKey, "text"], p_action_ref: [commandId, "uuid"], p_tariff_ref: [w.tariff, "uuid"], p_max_input: [0, "integer"], p_max_cached: [0, "integer"], p_max_output: [1, "integer"] };
     const later = await rpc("broker_claim_and_reserve", args, w.tenant); assert.equal(later["ok"], true); assert.equal(later["fence"], 2);
-    assert.equal((await rpc("broker_claim_manager_event", { ...args, p_event: [e.eventId, "text"] }, w.tenant))["ok"], false);
+    await assert.rejects(rpc("broker_claim_manager_event", { ...args, p_event: [e.eventId, "text"] }, w.tenant), /manager_denied:unrecorded_manager_event/);
+    assert.equal((await w.make().manager.handleEvent(w.managerEvent(e))).status, "BLOCKED");
     const expired = await world("arn94-expired"), fresh = expired.make();
     fresh.ports.authority.grants[0]!.expiresAt = "2000-01-01T00:00:00Z";
     assert.equal((await expired.receive(fresh.manager, expired.event("expired"))).reason, "permission_expired");
