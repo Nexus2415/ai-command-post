@@ -87,6 +87,10 @@ test("ARN-92 duplicate job snapshot must retain tenant, event, task, internal or
     { ...job, maxBudgetMicros: 1 },
     { ...job, source: "external_webhook" as Job["source"] },
     { ...job, idempotencyKey: "other" },
+    { ...job, claimKey: `${T}:other-task:review_result` },
+    { ...job, permissions: ["review_result", "deploy"] },
+    { ...job, replayId: "job-1#9" },
+    { ...job, trigger: { ...job.trigger, seq: -1 } },
   ];
   for (const forged of corrupt) {
     const { p } = scripted([ok({ verdict: "duplicate", taskId: TASK, entry: { status: "admitted", job: forged } })]);
