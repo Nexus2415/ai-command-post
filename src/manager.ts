@@ -128,9 +128,23 @@ export type LedgerEntry = { status: "pending"; job: null } | { status: "admitted
 export type LedgerOutcome = { state: "complete" | "failed"; fence: number };
 export type LedgerVerdict = { verdict: "new" } | { verdict: "out_of_order" } | { verdict: "duplicate"; entry: LedgerEntry };
 /** Durable per-task event ledger. */
+export interface AdmissionExpectation {
+  /** Derived from the manager's fixed event-kind policy and owner grant, never the persisted snapshot. */
+  kind: string;
+  intent: string;
+  tier: "green" | "yellow";
+  executor: AgentKey;
+  claimKey: string;
+  bodyDigest: string;
+  permissionsExpireAt: string;
+  maxBudgetMicros: number;
+}
+
 export interface EventLedger {
-  /** Records receipt as `pending`, atomically with the duplicate and out-of-order checks. */
-  record(e: { tenantId: string; taskId: string; eventId: string; seq: number }): Promise<LedgerVerdict>;
+  /** Records receipt as `pending`, atomically with the duplicate and out-of-order checks.
+   * The optional expectation retains compatibility with inert test doubles; a real durable adapter MUST require it.
+   */
+  record(e: { tenantId: string; taskId: string; eventId: string; seq: number; expectation?: AdmissionExpectation }): Promise<LedgerVerdict>;
   /** Durably moves a pending receipt to its admission outcome. Throwing means it was not recorded. */
   resolve(e: { tenantId: string; eventId: string; status: "admitted" | "staged"; job: Job }): Promise<void>;
   /** Durably records an admitted job's terminal outcome for one attempt. Throwing means it was not recorded. */
@@ -383,7 +397,15 @@ export class Manager {
     if (!this.live("ledger")) return this.halted(null, "ledger");
     let recorded: LedgerVerdict;
     try {
-      recorded = await this.p.ledger.record({ tenantId: e.tenantId, taskId: e.taskId, eventId: e.eventId, seq: e.seq as number });
+      recorded = await this.p.ledger.record({
+        tenantId: e.tenantId, taskId: e.taskId, eventId: e.eventId, seq: e.seq as number,
+        expectation: {
+          kind: e.kind, intent: spec.intent, tier: spec.tier as "green" | "yellow", executor,
+          claimKey: `${e.tenantId}:${e.taskId}:${spec.intent}`,
+          bodyDigest: sha(typeof e.body === "string" ? e.body : ""),
+          permissionsExpireAt: grant.expiresAt, maxBudgetMicros: grant.maxBudgetMicros,
+        },
+      });
     } catch {
       return { status: "BLOCKED", reason: "ledger_unavailable" };
     }
