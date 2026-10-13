@@ -17,7 +17,16 @@ const job: Job = {
   maxBudgetMicros: 0, state: "admitted", attempt: 1, replayId: "job-1#1",
   claimId: "claim-1", attemptId: "attempt-1", fence: 1, result: null, order: 1,
 };
-const receipt = { tenantId: T, taskId: TASK, eventId: E, seq: 1 };
+const expectation = {
+  kind: "task_completed", intent: "review_result", tier: "green" as const, executor: "claude" as const,
+  claimKey: `${T}:${TASK}:review_result`, bodyDigest: "digest",
+  permissionsExpireAt: "2030-01-01T00:00:00Z", maxBudgetMicros: 0,
+};
+const receipt = { tenantId: T, taskId: TASK, eventId: E, seq: 1, expectation };
+const claimProof = {
+  verified: true, claimId: "claim-1", tenantId: T,
+  claimKey: expectation.claimKey, idempotencyKey: `${T}:${E}`, executor: "claude",
+};
 const audit: AuditEntry = {
   at: "2026-10-12T00:00:00Z", tenantId: T, taskId: TASK,
   eventId: E, jobId: null, step: "admission_decided", outcome: "green:review_result:claude",
@@ -75,7 +84,7 @@ test("ARN-92 reject missing commit, malformed acknowledgment, wrong task and una
 }));
 
 test("ARN-92 duplicate job snapshot must retain tenant, event, task, internal origin and zero-spend", () => offline(async () => {
-  const good = scripted([ok({ verdict: "duplicate", taskId: TASK, entry: { status: "admitted", job } })]);
+  const good = scripted([ok({ verdict: "duplicate", taskId: TASK, entry: { status: "admitted", job }, claimProof })]);
   const out = await good.p.ledger.record(receipt);
   assert.equal(out.verdict, "duplicate");
   if (out.verdict === "duplicate") assert.deepEqual(out.entry.job, job);
@@ -93,9 +102,52 @@ test("ARN-92 duplicate job snapshot must retain tenant, event, task, internal or
     { ...job, trigger: { ...job.trigger, seq: -1 } },
   ];
   for (const forged of corrupt) {
-    const { p } = scripted([ok({ verdict: "duplicate", taskId: TASK, entry: { status: "admitted", job: forged } })]);
+    const { p } = scripted([ok({ verdict: "duplicate", taskId: TASK, entry: { status: "admitted", job: forged }, claimProof })]);
     await assert.rejects(p.ledger.record(receipt), /cross-tenant receipt/);
   }
+}));
+
+test("ARN-92 fail closed on self-consistent forged deploy intent or foreign claim proof", () => offline(async () => {
+  const forged = {
+    ...job, intent: "deploy", permissions: ["deploy"], claimKey: `${T}:${TASK}:deploy`,
+  };
+  const falseIntent = scripted([ok({ verdict: "duplicate", taskId: TASK, entry: { status: "admitted", job: forged }, claimProof })]);
+  await assert.rejects(falseIntent.p.ledger.record(receipt), /cross-tenant receipt/);
+
+  for (const proof of [
+    { ...claimProof, tenantId: "other-tenant" },
+    { ...claimProof, claimId: "foreign-claim" },
+    { ...claimProof, idempotencyKey: "other-event" },
+    { ...claimProof, claimKey: `${T}:${TASK}:deploy` },
+    { ...claimProof, verified: false },
+    undefined,
+  ]) {
+    const r = scripted([ok({ verdict: "duplicate", taskId: TASK, entry: { status: "admitted", job }, claimProof: proof })]);
+    await assert.rejects(r.p.ledger.record(receipt), /cross-tenant receipt/);
+  }
+}));
+
+test("ARN-92 allows a terminal outcome on a later retry fence only with matching scope proof", () => offline(async () => {
+  const r = scripted([ok({
+    verdict: "duplicate", taskId: TASK,
+    entry: { status: "admitted", job, outcome: { state: "complete", fence: 2 } }, claimProof,
+  })]);
+  const d = await r.p.ledger.record(receipt);
+  assert.equal(d.verdict, "duplicate");
+  if (d.verdict === "duplicate" && d.entry.status === "admitted") {
+    assert.deepEqual(d.entry.outcome, { state: "complete", fence: 2 });
+  }
+  const bad = scripted([ok({
+    verdict: "duplicate", taskId: TASK,
+    entry: { status: "admitted", job, outcome: { state: "complete", fence: 0 } }, claimProof,
+  })]);
+  await assert.rejects(bad.p.ledger.record(receipt), /cross-tenant receipt/);
+}));
+
+test("ARN-92 durable adapter requires event-derived expectation before any persistence RPC", () => offline(async () => {
+  const { p, calls } = scripted([ok({ verdict: "new", taskId: TASK })]);
+  await assert.rejects(p.ledger.record({ tenantId: T, taskId: TASK, eventId: E, seq: 1 }), /invalid receipt/);
+  assert.equal(calls.length, 0);
 }));
 
 test("ARN-92 audits never accept missing tenant, missing task, or an unconfirmed write", () => offline(async () => {
