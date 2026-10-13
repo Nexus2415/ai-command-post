@@ -240,6 +240,22 @@ const noSideEffects = (r: Rig) => {
 
 // ---------------------------------------------------------------------------------------------------------------
 
+test("ARN-92 audit records retain verified tenant/task scope even before the job is created", async () => {
+  await offline(async () => {
+    const r = rig();
+    const d = await r.m.handleEvent(ev({ eventId: "shared-event-id", tenantId: "tenant-2", taskId: "task-7" }));
+    assert.equal(d.status, "ADMITTED");
+    assert.ok(r.audit.length >= 2);
+    assert.equal(r.audit[0]?.jobId, null, "pre-claim decision is audited without a job");
+    for (const entry of r.audit) {
+      assert.equal(entry.tenantId, "tenant-2");
+      assert.equal(entry.taskId, "task-7");
+      assert.equal(entry.eventId, "shared-event-id");
+    }
+    assert.deepEqual(r.audit.map((a) => a.step), ["admission_decided", "admitted"]);
+  });
+});
+
 test("SYNTHETIC end to end: event -> admitted job -> one worker -> independent check -> next eligible job", async () => {
   await offline(async () => {
     const r = rig();
