@@ -36,8 +36,11 @@ function validJob(v: unknown, tenantId: string, eventId: string, taskId?: string
   if (taskId !== undefined && v.taskId !== taskId) return false;
   if (!nonempty(v.taskId) || !nonempty(v.jobId) || !nonempty(v.claimKey) || !nonempty(v.idempotencyKey)) return false;
   if (v.idempotencyKey !== `${tenantId}:${eventId}`) return false;
-  if (!nonempty(v.intent) || !Array.isArray(v.permissions) || !v.permissions.includes(v.intent)) return false;
-  if (v.maxBudgetMicros !== 0 || !positive(v.attempt) || v.attempt > 3) return false;
+  if (!nonempty(v.intent) || v.claimKey !== `${tenantId}:${v.taskId}:${v.intent}`) return false;
+  if (!Array.isArray(v.permissions) || v.permissions.length !== 1 || v.permissions[0] !== v.intent) return false;
+  if (!nonempty(v.correlationId) || !nonempty(v.replayId) || !whole(v.order)) return false;
+  if (!object(v.trigger) || !nonempty(v.trigger.kind) || !whole(v.trigger.seq) || !nonempty(v.trigger.bodyDigest)) return false;
+  if (v.maxBudgetMicros !== 0 || !positive(v.attempt) || v.attempt > 3 || v.replayId !== `${v.jobId}#${v.attempt}`) return false;
   if (!["green", "yellow"].includes(String(v.tier))) return false;
   if (!["claude", "chatgpt", "perplexity", "gemini"].includes(String(v.executor))) return false;
   if (!["admitted", "dispatched", "awaiting_verification", "complete", "failed", "unknown", "halted", "awaiting_owner"].includes(String(v.state))) return false;
