@@ -19,7 +19,12 @@ export interface ManagerPersistencePorts {
   audit: AuditSink;
 }
 
-type Obj = Record<string, unknown>;
+type Key = "ok" | "tenantId" | "eventId" | "committed" | "source" | "taskId" | "jobId"
+  | "claimKey" | "idempotencyKey" | "intent" | "permissions" | "correlationId" | "replayId"
+  | "order" | "trigger" | "kind" | "seq" | "bodyDigest" | "maxBudgetMicros" | "attempt"
+  | "tier" | "executor" | "state" | "permissionsExpireAt" | "claimId" | "attemptId"
+  | "fence" | "status" | "job" | "outcome" | "verdict" | "entry" | "auditId";
+type Obj = Partial<Record<Key, unknown>> & Record<string, unknown>;
 const object = (v: unknown): v is Obj => typeof v === "object" && v !== null && !Array.isArray(v);
 const nonempty = (v: unknown): v is string => typeof v === "string" && v.length > 0 && v.length <= 1024;
 const whole = (v: unknown): v is number => Number.isSafeInteger(v) && (v as number) >= 0;
@@ -108,7 +113,7 @@ export function createManagerPersistencePorts(rpc: ManagerPersistenceRpc): Manag
           || Number.isNaN(Date.parse(entry.at)) || (entry.jobId !== null && !nonempty(entry.jobId))) {
           throw new Error("invalid scoped audit");
         }
-        const r = await call("manager_append_audit", entry);
+        const r = await call("manager_append_audit", { ...entry });
         assertScope(r, entry.tenantId, entry.eventId);
         if (r.taskId !== entry.taskId || !nonempty(r.auditId)) throw new Error("audit not committed");
       },
