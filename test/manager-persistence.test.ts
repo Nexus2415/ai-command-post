@@ -56,8 +56,8 @@ test("ARN-92 commit-backed receipt, audit, admission and terminal writes require
   assert.deepEqual(calls.map((x) => x.op), [
     "manager_record_receipt", "manager_append_audit", "manager_resolve_receipt", "manager_record_terminal",
   ]);
-  assert.equal(calls[1]?.args.tenantId, T);
-  assert.equal(calls[1]?.args.taskId, TASK);
+  assert.equal(calls[1]?.args["tenantId"], T);
+  assert.equal(calls[1]?.args["taskId"], TASK);
 }));
 
 test("ARN-92 same event ID under another tenant is not a successful acknowledgment", () => offline(async () => {
