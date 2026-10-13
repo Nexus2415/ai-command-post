@@ -4,7 +4,7 @@
 // Callers must inject a tenant-enforcing, authenticated store whose individual operations commit atomically
 // with their audit writes. Until that SQL/transport is independently verified, this is synthetic-only.
 // No default connection, provider, worker, env read, scheduler, or network path exists here.
-import type { AuditSink, EventLedger, Job, LedgerEntry, LedgerOutcome, LedgerVerdict } from "./manager.ts";
+import type { AdmissionExpectation, AuditSink, EventLedger, Job, LedgerEntry, LedgerVerdict } from "./manager.ts";
 
 export type ManagerPersistenceOperation =
   | "manager_record_receipt"
@@ -23,7 +23,8 @@ type Key = "ok" | "tenantId" | "eventId" | "committed" | "source" | "taskId" | "
   | "claimKey" | "idempotencyKey" | "intent" | "permissions" | "correlationId" | "replayId"
   | "order" | "trigger" | "kind" | "seq" | "bodyDigest" | "maxBudgetMicros" | "attempt"
   | "tier" | "executor" | "state" | "permissionsExpireAt" | "claimId" | "attemptId"
-  | "fence" | "status" | "job" | "outcome" | "verdict" | "entry" | "auditId";
+  | "fence" | "status" | "job" | "outcome" | "verdict" | "entry" | "auditId"
+  | "claimProof" | "verified" | "expectation";
 type Obj = Partial<Record<Key, unknown>> & Record<string, unknown>;
 const object = (v: unknown): v is Obj => typeof v === "object" && v !== null && !Array.isArray(v);
 const nonempty = (v: unknown): v is string => typeof v === "string" && v.length > 0 && v.length <= 1024;
@@ -36,7 +37,15 @@ function assertScope(v: Obj, tenantId: string, eventId: string): void {
   }
 }
 
-function validJob(v: unknown, tenantId: string, eventId: string, taskId?: string): v is Job {
+function validExpectation(v: unknown, tenantId: string, taskId: string): v is AdmissionExpectation {
+  return object(v) && nonempty(v.kind) && nonempty(v.intent) && ["green", "yellow"].includes(String(v.tier))
+    && ["claude", "chatgpt", "perplexity", "gemini"].includes(String(v.executor))
+    && nonempty(v.claimKey) && v.claimKey === `${tenantId}:${taskId}:${v.intent}`
+    && nonempty(v.bodyDigest) && nonempty(v.permissionsExpireAt)
+    && !Number.isNaN(Date.parse(v.permissionsExpireAt)) && v.maxBudgetMicros === 0;
+}
+
+function validJob(v: unknown, tenantId: string, eventId: string, taskId?: string, expected?: AdmissionExpectation): v is Job {
   if (!object(v) || v.tenantId !== tenantId || v.eventId !== eventId || v.source !== "internal") return false;
   if (taskId !== undefined && v.taskId !== taskId) return false;
   if (!nonempty(v.taskId) || !nonempty(v.jobId) || !nonempty(v.claimKey) || !nonempty(v.idempotencyKey)) return false;
@@ -54,18 +63,36 @@ function validJob(v: unknown, tenantId: string, eventId: string, taskId?: string
   if (v.claimId !== null && !nonempty(v.claimId)) return false;
   if (v.attemptId !== null && !nonempty(v.attemptId)) return false;
   if (v.fence !== null && !positive(v.fence)) return false;
+  if (expected) {
+    if (v.intent !== expected.intent || v.tier !== expected.tier || v.executor !== expected.executor
+      || v.claimKey !== expected.claimKey || v.maxBudgetMicros !== expected.maxBudgetMicros
+      || v.permissionsExpireAt !== expected.permissionsExpireAt || v.trigger.kind !== expected.kind
+      || v.trigger.bodyDigest !== expected.bodyDigest) return false;
+  }
   return true;
 }
 
-function validLedgerEntry(v: unknown, tenantId: string, eventId: string, taskId: string): v is LedgerEntry {
+function claimProofMatches(proof: unknown, job: Job, expected: AdmissionExpectation): boolean {
+  // The future SQL RPC MUST derive this proof from a tenant-authorized JOIN to execution_claims,
+  // not from caller-provided JSON. Without proof, no admitted job can be recovered.
+  return object(proof) && proof.verified === true && proof.claimId === job.claimId
+    && proof.tenantId === job.tenantId && proof.claimKey === expected.claimKey
+    && proof.idempotencyKey === job.idempotencyKey && proof.executor === expected.executor;
+}
+
+function validLedgerEntry(v: unknown, tenantId: string, eventId: string, taskId: string,
+  expected: AdmissionExpectation, proof: unknown): v is LedgerEntry {
   if (!object(v)) return false;
   if (v.status === "pending") return v.job === null;
   if (v.status !== "admitted" && v.status !== "staged") return false;
-  if (!validJob(v.job, tenantId, eventId, taskId)) return false;
-  if (v.status === "staged" && v.job.state !== "awaiting_owner") return false;
+  if (!validJob(v.job, tenantId, eventId, taskId, expected)) return false;
+  if (v.status === "staged") return v.job.state === "awaiting_owner" && v.job.claimId === null && v.outcome === undefined;
+  if (v.job.state !== "admitted" || !nonempty(v.job.claimId) || !claimProofMatches(proof, v.job, expected)) return false;
   if (v.outcome !== undefined) {
     if (!object(v.outcome) || !["complete", "failed"].includes(String(v.outcome.state)) || !positive(v.outcome.fence)) return false;
-    if (v.status !== "admitted" || v.job.fence !== v.outcome.fence) return false;
+    // A retry advances broker fence without rewriting the admission snapshot. The eventual
+    // terminal fence may exceed the snapshot fence, but must never predate it or exceed retries.
+    if (v.job.fence === null || v.outcome.fence < v.job.fence || v.outcome.fence > 3) return false;
   }
   return true;
 }
@@ -81,12 +108,13 @@ export function createManagerPersistencePorts(rpc: ManagerPersistenceRpc): Manag
   return {
     ledger: {
       async record(e): Promise<LedgerVerdict> {
-        if (!nonempty(e.tenantId) || !nonempty(e.taskId) || !nonempty(e.eventId) || !whole(e.seq)) throw new Error("invalid receipt");
+        if (!nonempty(e.tenantId) || !nonempty(e.taskId) || !nonempty(e.eventId) || !whole(e.seq)
+          || !validExpectation(e.expectation, e.tenantId, e.taskId)) throw new Error("invalid receipt");
         const r = await call("manager_record_receipt", e);
         assertScope(r, e.tenantId, e.eventId);
         if (r.taskId !== e.taskId) throw new Error("receipt task mismatch");
         if (r.verdict === "new" || r.verdict === "out_of_order") return { verdict: r.verdict };
-        if (r.verdict !== "duplicate" || !validLedgerEntry(r.entry, e.tenantId, e.eventId, e.taskId)) {
+        if (r.verdict !== "duplicate" || !validLedgerEntry(r.entry, e.tenantId, e.eventId, e.taskId, e.expectation, r.claimProof)) {
           throw new Error("malformed or cross-tenant receipt");
         }
         return { verdict: "duplicate", entry: structuredClone(r.entry) };
