@@ -684,7 +684,13 @@ test("SYNTHETIC wiring: the seam is not imported by the engine, CLI or workflows
   const src = readFileSync("src/manager.ts", "utf8");
   assert.doesNotMatch(src, /\bfetch\s*\(|process\.env|XMLHttpRequest|WebSocket|child_process|node:(http|https|net|dns)/);
   assert.doesNotMatch(src, /from\s+"\.\/(providers|tools|linear|orchestrator|cli)\.ts"/);
-  for (const f of [...readdirSync("src").filter((x) => x !== "manager.ts").map((x) => `src/${x}`), ...readdirSync("api").filter((x) => x.endsWith(".js")).map((x) => `api/${x}`), ...readdirSync(".github/workflows").map((x) => `.github/workflows/${x}`)]) {
+  // The only permitted typed consumers are inert adapters. They may reference manager.ts
+  // but must contain no ambient network, secrets, runtime config or provider dispatch.
+  for (const f of readdirSync("src").filter((x) => ["manager-persistence.ts", "broker-adapter.ts"].includes(x))) {
+    const body = readFileSync(`src/${f}`, "utf8");
+    assert.doesNotMatch(body, /\bfetch\s*\(|process\.env|XMLHttpRequest|WebSocket|child_process|node:(http|https|net|dns)/, `${f} must remain inert`);
+  }
+  for (const f of [...readdirSync("src").filter((x) => !["manager.ts", "manager-persistence.ts", "broker-adapter.ts"].includes(x)).map((x) => `src/${x}`), ...readdirSync("api").filter((x) => x.endsWith(".js")).map((x) => `api/${x}`), ...readdirSync(".github/workflows").map((x) => `.github/workflows/${x}`)]) {
     assert.doesNotMatch(readFileSync(f, "utf8"), /\bmanager\.ts\b|\.\/manager\b|src\/manager/, `${f} must not reference the manager seam`);
   }
 });
