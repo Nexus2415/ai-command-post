@@ -506,7 +506,7 @@ test("ARN-89 forged or mismatched positive acknowledgments are refusals, and the
 
   // An attempt the adapter never saw (no claim, status or takeover returned it) is refused with no RPC at all.
   const none = createBrokerAdapter({ rpc: async () => assert.fail("no rpc for an unknown attempt"), binding: async () => binding(), usageEvidence: async () => "h" });
-  for (const step of [() => none.markFailed(A2, 1), () => none.markUnknown(A2, 1), () => none.release(A2, 1), () => none.settle(A2, 0, "ref")]) {
+  for (const step of [() => none.markDispatched(A2, 1), () => none.markFailed(A2, 1), () => none.markUnknown(A2, 1), () => none.release(A2, 1), () => none.settle(A2, 0, "ref")]) {
     assert.deepEqual(await step(), { ok: false, reason: ADAPTER_REFUSALS.unknownAttempt });
   }
 }));

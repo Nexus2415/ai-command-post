@@ -238,8 +238,12 @@ export function createBrokerAdapter(deps: BrokerAdapterDeps): AdmissionBroker {
       return { ...t, created: false };
     },
 
-    markDispatched: (attemptId, fence) =>
-      step("broker_mark_dispatched", { p_attempt: attemptId, p_fence: fence }, (o) => o.attempt_id === attemptId && o.fence === fence && o.operation_id === ops.get(attemptId)),
+    markDispatched(attemptId, fence) {
+      // Only an attempt this adapter has seen has a known operation id to match the echo against.
+      const op = ops.get(attemptId);
+      if (!op || !owners.has(attemptId)) return Promise.resolve(refuse(ADAPTER_REFUSALS.unknownAttempt));
+      return step("broker_mark_dispatched", { p_attempt: attemptId, p_fence: fence }, (o) => o.attempt_id === attemptId && o.fence === fence && o.operation_id === op);
+    },
     markUnknown: (attemptId, fence) =>
       ack("broker_mark_unknown", { p_attempt: attemptId, p_fence: fence }, attemptId, fence, (o) => o.changed === true, "unknown"),
     // A first failure reports what it charged (always 0 at a $0 budget); a replay reports `changed: false` and no charge.
