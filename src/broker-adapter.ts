@@ -23,7 +23,9 @@ export const BROKER_SIGNATURES = Object.freeze({
   broker_release: [["p_attempt", "uuid"], ["p_fence", "bigint"], ["p_reason", "text"]],
   broker_settle: [["p_attempt", "uuid"], ["p_operation_id", "text"], ["p_actual", "numeric"], ["p_usage_evidence", "text"]],
 } as const satisfies Record<string, readonly (readonly [string, string])[]>);
+export const MANAGER_EVENT_SIGNATURE = [["p_tenant", "uuid"], ["p_event", "text"], ["p_command_key", "text"], ["p_action_ref", "uuid"], ["p_tariff_ref", "uuid"], ["p_max_input", "integer"], ["p_max_cached", "integer"], ["p_max_output", "integer"]] as const;
 export type BrokerFunction = keyof typeof BROKER_SIGNATURES;
+export type ManagerBrokerFunction = BrokerFunction | "broker_claim_manager_event";
 export type RpcArgs = Record<string, string | number>;
 
 /**
@@ -41,7 +43,7 @@ export type BrokerRpc = (fn: BrokerFunction, args: RpcArgs) => Promise<unknown>;
 export interface CommandBinding {
   /** Must equal the manager's tenant id: a binding for another tenant is refused before any RPC. */
   tenantRef: string;
-  /** The tenant-scoped key: the manager's claim key must be exactly `${tenantRef}:${commandKey}`, or the binding is refused. */
+  /** Legacy adapter: unprefixed key. Manager-event adapter: complete `${tenantRef}:${taskId}:${intent}` key. */
   commandKey: string;
   actionRef: string;
   /** Must be an all-zero tariff while the budget is $0. A priced tariff reserves above zero and is refused. */
@@ -60,6 +62,9 @@ export interface BrokerAdapterDeps {
   /** The usage hash the egress gateway captured for an attempt (`broker_capture_usage`), or null when none was. */
   usageEvidence(attemptId: string): Promise<string | null>;
 }
+export type ManagerEventBrokerAdapterDeps = Omit<BrokerAdapterDeps, "rpc"> & {
+  rpc(fn: ManagerBrokerFunction, args: RpcArgs): Promise<unknown>;
+};
 
 /** Refusal reasons the adapter adds on top of the broker's own (which pass through unchanged). */
 export const ADAPTER_REFUSALS = Object.freeze({
@@ -85,7 +90,7 @@ const refuse = (reason: string) => ({ ok: false as const, reason });
 const MALFORMED = refuse(ADAPTER_REFUSALS.malformed);
 
 /** The reply fields the adapter reads. Anything else the broker returns is ignored. */
-type Json = Partial<Record<"ok" | "reason" | "created" | "claim_id" | "attempt_id" | "operation_id" | "fence" | "reserved_micros" | "state" | "actual_micros" | "changed" | "charged_micros" | "frozen", unknown>>;
+type Json = Partial<Record<"ok" | "reason" | "created" | "claim_id" | "attempt_id" | "operation_id" | "idempotency_key" | "fence" | "reserved_micros" | "state" | "actual_micros" | "changed" | "charged_micros" | "frozen", unknown>>;
 
 /**
  * Every key each acknowledgment may carry, from the SQL's own `jsonb_build_object` calls. These replies do not echo the
@@ -113,12 +118,22 @@ function validBinding(b: CommandBinding | null): b is CommandBinding {
 
 /** Builds the adapter. There is no default instance and no default transport. */
 export function createBrokerAdapter(deps: BrokerAdapterDeps): AdmissionBroker {
+  return adapter({ ...deps, rpc: (fn, args) => fn === "broker_claim_manager_event"
+    ? Promise.reject(new Error("manager lineage RPC unavailable in raw adapter")) : deps.rpc(fn, args) }, false);
+}
+
+/** ARN-94: inert manager-lineage mode; the SQL broker retains all authority. */
+export function createManagerEventBrokerAdapter(deps: ManagerEventBrokerAdapterDeps): AdmissionBroker {
+  return adapter(deps, true);
+}
+
+function adapter(deps: ManagerEventBrokerAdapterDeps, managerEvents: boolean): AdmissionBroker {
   const ops = new Map<string, string>(); // attempt id -> operation id
   const owners = new Map<string, { claimId: string; fence: number }>(); // attempt id -> its claim and fence
   const claims = new Map<string, CommandBinding>(); // claim id -> binding
 
-  const call = (fn: BrokerFunction, args: RpcArgs): Promise<unknown> => {
-    const want = BROKER_SIGNATURES[fn].map(([name]) => name);
+  const call = (fn: ManagerBrokerFunction, args: RpcArgs): Promise<unknown> => {
+    const want = (fn === "broker_claim_manager_event" ? MANAGER_EVENT_SIGNATURE : BROKER_SIGNATURES[fn]).map(([name]) => name);
     const got = Object.keys(args);
     if (got.length !== want.length || want.some((n) => !(n in args))) throw new Error(`adapter bug: ${fn} arguments ${got.join(",")}`);
     return deps.rpc(fn, args);
@@ -172,15 +187,27 @@ export function createBrokerAdapter(deps: BrokerAdapterDeps): AdmissionBroker {
 
   /** `broker_claim_and_reserve` for a binding. Also the SQL's takeover path when the latest attempt is released/failed. */
   const reserve = async (b: CommandBinding, expectAttempt: "any" | "new_attempt"): Promise<BrokerResult> => {
-    const r = read(await call("broker_claim_and_reserve", {
+    const prefix = `${b.tenantRef}:`;
+    const eventId = b.idempotencyKey.startsWith(prefix) ? b.idempotencyKey.slice(prefix.length) : "";
+    if (managerEvents && (!eventId || eventId.length > 200)) return refuse(ADAPTER_REFUSALS.unbound);
+    const r = read(await call(managerEvents ? "broker_claim_manager_event" : "broker_claim_and_reserve", {
       p_tenant: b.tenantRef, p_command_key: b.commandKey, p_action_ref: b.actionRef, p_tariff_ref: b.tariffRef,
       p_max_input: b.maxInputTokens, p_max_cached: b.maxCachedInputTokens, p_max_output: b.maxOutputTokens,
+      ...(managerEvents ? { p_event: eventId } : {}),
     }));
     if (!r) return MALFORMED;
     if ("refusal" in r) return refuse(r.refusal);
     const o = r.body;
     if (typeof o.created !== "boolean" || !isUuid(o.claim_id)) return MALFORMED;
     const claimId = o.claim_id;
+    let operationId = o.operation_id;
+    if (managerEvents) {
+      if (o.idempotency_key !== b.idempotencyKey || !isUuid(o.attempt_id) || !isFence(o.fence) || o.reserved_micros !== 0) return MALFORMED;
+      const st = await status(claimId);
+      if (!st.ok) return st;
+      if (st.attemptId !== o.attempt_id || st.fence !== o.fence || st.state !== "claimed") return refuse(ADAPTER_REFUSALS.unconfirmed);
+      operationId = ops.get(st.attemptId);
+    }
     if (o.attempt_id === undefined) {
       // The claim exists and is live: the broker returns its id only and charges nothing. Its attempt comes from the
       // read-only status RPC. A "created" claim without an attempt is not a shape the broker returns.
@@ -190,16 +217,16 @@ export function createBrokerAdapter(deps: BrokerAdapterDeps): AdmissionBroker {
       if (!st.ok) return st;
       return { ok: true, claimId, attemptId: st.attemptId, fence: st.fence, operationId: ops.get(st.attemptId)!, created: false, idempotencyKey: b.idempotencyKey };
     }
-    if (!isUuid(o.attempt_id) || !isText(o.operation_id) || !isFence(o.fence) || !isCount(o.reserved_micros)) return MALFORMED;
+    if (!isUuid(o.attempt_id) || !isText(operationId) || !isFence(o.fence) || !isCount(o.reserved_micros)) return MALFORMED;
     claims.set(claimId, b);
-    ops.set(o.attempt_id, o.operation_id);
+    ops.set(o.attempt_id, operationId);
     owners.set(o.attempt_id, { claimId, fence: o.fence });
     if (o.reserved_micros !== 0) {
       // A priced tariff: the broker reserved real money. Hand it back before anything can dispatch, then refuse.
       await release(o.attempt_id, o.fence, ADAPTER_REFUSALS.cost).catch(() => undefined);
       return refuse(ADAPTER_REFUSALS.cost);
     }
-    return { ok: true, claimId, attemptId: o.attempt_id, fence: o.fence, operationId: o.operation_id, created: o.created, idempotencyKey: b.idempotencyKey };
+    return { ok: true, claimId, attemptId: o.attempt_id, fence: o.fence, operationId, created: o.created, idempotencyKey: b.idempotencyKey };
   };
 
   return {
@@ -211,7 +238,7 @@ export function createBrokerAdapter(deps: BrokerAdapterDeps): AdmissionBroker {
       if (!validBinding(b)) return refuse(ADAPTER_REFUSALS.unbound);
       // A lookup is a separate injected trust boundary. Never let a stale or misbound
       // command redirect the manager's admission to another tenant or task/intent.
-      if (b.tenantRef !== req.tenantId || req.claimKey !== `${req.tenantId}:${b.commandKey}`) return refuse(ADAPTER_REFUSALS.unbound);
+      if (b.tenantRef !== req.tenantId || req.claimKey !== (managerEvents ? b.commandKey : `${req.tenantId}:${b.commandKey}`)) return refuse(ADAPTER_REFUSALS.unbound);
       // Only the admission the command was recorded for may claim it; another event on the same task is refused here,
       // before the broker is asked, so it can never take the claim first.
       if (b.idempotencyKey !== req.idempotencyKey) return refuse(ADAPTER_REFUSALS.boundElsewhere);
@@ -219,6 +246,8 @@ export function createBrokerAdapter(deps: BrokerAdapterDeps): AdmissionBroker {
     },
 
     async takeover(claimId, expectedFence, worstCaseMicros) {
+      // An immutable admitted event must never borrow a later broker attempt.
+      if (managerEvents) return refuse(ADAPTER_REFUSALS.notReclaimable);
       if (worstCaseMicros !== 0) return refuse(ADAPTER_REFUSALS.cost);
       const b = claims.get(claimId);
       if (!b) return refuse(ADAPTER_REFUSALS.unboundClaim);

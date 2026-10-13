@@ -488,14 +488,16 @@ export class Manager {
     job.claimId = claim.claimId;
     job.attemptId = claim.attemptId;
     job.fence = claim.fence;
-    if (!(await this.audit(e.tenantId, e.taskId, e.eventId, job, "admitted", `${claim.claimId}/${claim.attemptId}/fence=${claim.fence}`))) {
+    // The pending receipt has no bound job yet. Audit the event and exact broker
+    // references first; the atomic resolve below binds its immutable job ID.
+    if (!(await this.audit(e.tenantId, e.taskId, e.eventId, null, "admitted", `${claim.claimId}/${claim.attemptId}/fence=${claim.fence}`))) {
       await this.p.broker.release(claim.attemptId, claim.fence).catch(() => undefined);
       return { status: "BLOCKED", reason: "audit_failed_after_claim; reservation released" };
     }
     // The receipt becomes `admitted` with the claim reference only after the claim and its audit entry exist.
     if (!(await this.resolve(job, "admitted"))) {
       await this.p.broker.release(claim.attemptId, claim.fence).catch(() => undefined);
-      await this.audit(e.tenantId, e.taskId, e.eventId, job, "admission_rolled_back", "ledger_unavailable");
+      await this.audit(e.tenantId, e.taskId, e.eventId, null, "admission_rolled_back", "ledger_unavailable");
       return { status: "BLOCKED", reason: "ledger_unavailable_after_claim; reservation released" };
     }
     this.adopt(job);
