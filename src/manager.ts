@@ -128,9 +128,23 @@ export type LedgerEntry = { status: "pending"; job: null } | { status: "admitted
 export type LedgerOutcome = { state: "complete" | "failed"; fence: number };
 export type LedgerVerdict = { verdict: "new" } | { verdict: "out_of_order" } | { verdict: "duplicate"; entry: LedgerEntry };
 /** Durable per-task event ledger. */
+export interface AdmissionExpectation {
+  /** Derived from the manager's fixed event-kind policy and owner grant, never the persisted snapshot. */
+  kind: string;
+  intent: string;
+  tier: "green" | "yellow";
+  executor: AgentKey;
+  claimKey: string;
+  bodyDigest: string;
+  permissionsExpireAt: string;
+  maxBudgetMicros: number;
+}
+
 export interface EventLedger {
-  /** Records receipt as `pending`, atomically with the duplicate and out-of-order checks. */
-  record(e: { tenantId: string; taskId: string; eventId: string; seq: number }): Promise<LedgerVerdict>;
+  /** Records receipt as `pending`, atomically with the duplicate and out-of-order checks.
+   * The optional expectation retains compatibility with inert test doubles; a real durable adapter MUST require it.
+   */
+  record(e: { tenantId: string; taskId: string; eventId: string; seq: number; expectation?: AdmissionExpectation }): Promise<LedgerVerdict>;
   /** Durably moves a pending receipt to its admission outcome. Throwing means it was not recorded. */
   resolve(e: { tenantId: string; eventId: string; status: "admitted" | "staged"; job: Job }): Promise<void>;
   /** Durably records an admitted job's terminal outcome for one attempt. Throwing means it was not recorded. */
@@ -139,6 +153,9 @@ export interface EventLedger {
 
 export interface AuditEntry {
   at: string;
+  /** Explicit tenant and task scope for durable audit/RLS; event IDs alone are not globally unique. */
+  tenantId: string;
+  taskId: string;
   eventId: string;
   jobId: string | null;
   step: string;
@@ -315,9 +332,9 @@ export class Manager {
     }
   }
 
-  private async audit(eventId: string, job: Job | null, step: string, outcome: string): Promise<boolean> {
+  private async audit(tenantId: string, taskId: string, eventId: string, job: Job | null, step: string, outcome: string): Promise<boolean> {
     try {
-      await this.p.audit.append({ at: this.p.now().toISOString(), eventId, jobId: job?.jobId ?? null, step, outcome });
+      await this.p.audit.append({ at: this.p.now().toISOString(), tenantId, taskId, eventId, jobId: job?.jobId ?? null, step, outcome });
       return true;
     } catch {
       return false;
@@ -380,7 +397,15 @@ export class Manager {
     if (!this.live("ledger")) return this.halted(null, "ledger");
     let recorded: LedgerVerdict;
     try {
-      recorded = await this.p.ledger.record({ tenantId: e.tenantId, taskId: e.taskId, eventId: e.eventId, seq: e.seq as number });
+      recorded = await this.p.ledger.record({
+        tenantId: e.tenantId, taskId: e.taskId, eventId: e.eventId, seq: e.seq as number,
+        expectation: {
+          kind: e.kind, intent: spec.intent, tier: spec.tier as "green" | "yellow", executor,
+          claimKey: `${e.tenantId}:${e.taskId}:${spec.intent}`,
+          bodyDigest: sha(typeof e.body === "string" ? e.body : ""),
+          permissionsExpireAt: grant.expiresAt, maxBudgetMicros: grant.maxBudgetMicros,
+        },
+      });
     } catch {
       return { status: "BLOCKED", reason: "ledger_unavailable" };
     }
@@ -428,7 +453,7 @@ export class Manager {
 
     // 5. Audit before any claim. A missing audit trail blocks the job (the receipt stays pending, so a retry resumes).
     if (!this.live("audit")) return this.halted(null, "audit");
-    if (!(await this.audit(e.eventId, null, "admission_decided", `${spec.tier}:${spec.intent}:${executor}`))) return { status: "BLOCKED", reason: "audit_unavailable" };
+    if (!(await this.audit(e.tenantId, e.taskId, e.eventId, null, "admission_decided", `${spec.tier}:${spec.intent}:${executor}`))) return { status: "BLOCKED", reason: "audit_unavailable" };
 
     // Yellow work is staged: recorded for the owner, with no claim, no reservation and no dispatch.
     if (spec.tier === "yellow") {
@@ -463,14 +488,14 @@ export class Manager {
     job.claimId = claim.claimId;
     job.attemptId = claim.attemptId;
     job.fence = claim.fence;
-    if (!(await this.audit(e.eventId, job, "admitted", `${claim.claimId}/${claim.attemptId}/fence=${claim.fence}`))) {
+    if (!(await this.audit(e.tenantId, e.taskId, e.eventId, job, "admitted", `${claim.claimId}/${claim.attemptId}/fence=${claim.fence}`))) {
       await this.p.broker.release(claim.attemptId, claim.fence).catch(() => undefined);
       return { status: "BLOCKED", reason: "audit_failed_after_claim; reservation released" };
     }
     // The receipt becomes `admitted` with the claim reference only after the claim and its audit entry exist.
     if (!(await this.resolve(job, "admitted"))) {
       await this.p.broker.release(claim.attemptId, claim.fence).catch(() => undefined);
-      await this.audit(e.eventId, job, "admission_rolled_back", "ledger_unavailable");
+      await this.audit(e.tenantId, e.taskId, e.eventId, job, "admission_rolled_back", "ledger_unavailable");
       return { status: "BLOCKED", reason: "ledger_unavailable_after_claim; reservation released" };
     }
     this.adopt(job);
@@ -589,7 +614,7 @@ export class Manager {
     }
     if (!step.ok) return { status: "BLOCKED", reason: `broker_refused:${step.reason}`, job };
     this.move(job, "dispatched");
-    if (!(await this.audit(job.eventId, job, "dispatched", job.replayId))) return this.ambiguous(job, "audit_failed_after_dispatch");
+    if (!(await this.audit(job.tenantId, job.taskId, job.eventId, job, "dispatched", job.replayId))) return this.ambiguous(job, "audit_failed_after_dispatch");
     if (!this.live("worker_start")) {
       // Marked dispatched but the worker has not been started: a known non-execution, so close the attempt as failed.
       await this.p.broker.markFailed(attemptId, fence).catch(() => this.queue({ eventId: job.eventId, jobId: job.jobId, needs: "attention", reason: "halted before the worker started; attempt could not be closed" }));
@@ -618,7 +643,7 @@ export class Manager {
     // From here the worker has run. A job moves to `failed` or `complete` only after the audit entry and the broker both
     // acknowledge; if either cannot, the outcome is unknown and goes to an independent reconciliation.
     if (!v.ok) {
-      if (!(await this.audit(job.eventId, job, "verification_failed", v.ref))) return this.ambiguous(job, "audit_failed_on_rejected_result");
+      if (!(await this.audit(job.tenantId, job.taskId, job.eventId, job, "verification_failed", v.ref))) return this.ambiguous(job, "audit_failed_on_rejected_result");
       const f = await this.p.broker.markFailed(attemptId, fence).catch(() => ({ ok: false as const, reason: "unavailable" }));
       if (!f.ok) return this.ambiguous(job, `mark_failed_refused:${f.reason}`);
       if (!(await this.recordOutcome(job, "failed"))) return this.ambiguous(job, "ledger_failed_after_mark_failed");
@@ -627,14 +652,14 @@ export class Manager {
     }
 
     if (!this.live("settle")) return this.stop(job, "settle");
-    if (!(await this.audit(job.eventId, job, "verified", v.ref))) return this.ambiguous(job, "audit_failed_before_settle");
+    if (!(await this.audit(job.tenantId, job.taskId, job.eventId, job, "verified", v.ref))) return this.ambiguous(job, "audit_failed_before_settle");
     try {
       const s = await this.p.broker.settle(attemptId, result.actualMicros, v.ref);
       if (!s.ok) return this.ambiguous(job, `settle_refused:${s.reason}`);
     } catch {
       return this.ambiguous(job, "settle_unavailable");
     }
-    if (!(await this.audit(job.eventId, job, "complete", v.ref))) return this.ambiguous(job, "audit_failed_after_settle");
+    if (!(await this.audit(job.tenantId, job.taskId, job.eventId, job, "complete", v.ref))) return this.ambiguous(job, "audit_failed_after_settle");
     if (!(await this.recordOutcome(job, "complete"))) return this.ambiguous(job, "ledger_failed_after_settle");
     this.move(job, "complete");
     return { status: "ADMITTED", reason: "complete and independently checked", job };
@@ -655,7 +680,7 @@ export class Manager {
   private async ambiguous(job: Job, why: string): Promise<Decision> {
     if (this.move(job, "unknown") && job.attemptId !== null && job.fence !== null) await this.p.broker.markUnknown(job.attemptId, job.fence).catch(() => undefined);
     this.queue({ eventId: job.eventId, jobId: job.jobId, needs: "reconciliation", reason: why });
-    await this.audit(job.eventId, job, "unknown", why);
+    await this.audit(job.tenantId, job.taskId, job.eventId, job, "unknown", why);
     return { status: "BLOCKED", reason: `unknown_outcome:${why}`, job };
   }
 
@@ -668,13 +693,13 @@ export class Manager {
     if (!this.live("reconcile")) return this.halted(job, "reconcile");
     const { attemptId, fence } = job;
     // The job stays unknown unless the decision is audited, the broker acknowledges it, and the result is audited.
-    if (!(await this.audit(job.eventId, job, "reconcile_decided", `${r.outcome}:${r.checkedBy}:${r.ref}`))) return { status: "BLOCKED", reason: "audit_unavailable", job };
+    if (!(await this.audit(job.tenantId, job.taskId, job.eventId, job, "reconcile_decided", `${r.outcome}:${r.checkedBy}:${r.ref}`))) return { status: "BLOCKED", reason: "audit_unavailable", job };
     const step: BrokerStep =
       r.outcome === "completed"
         ? await this.p.broker.settle(attemptId, job.result?.actualMicros ?? 0, r.ref).catch(() => ({ ok: false as const, reason: "unavailable" }))
         : await this.p.broker.markFailed(attemptId, fence).catch(() => ({ ok: false as const, reason: "unavailable" }));
     if (!step.ok) return { status: "BLOCKED", reason: `broker_refused:${step.reason}`, job };
-    if (!(await this.audit(job.eventId, job, "reconciled", `${r.outcome}:${r.ref}`))) {
+    if (!(await this.audit(job.tenantId, job.taskId, job.eventId, job, "reconciled", `${r.outcome}:${r.ref}`))) {
       this.queue({ eventId: job.eventId, jobId: job.jobId, needs: "attention", reason: `broker recorded ${r.outcome} but the reconciliation audit entry failed` });
       return { status: "BLOCKED", reason: "audit_failed_after_reconcile", job };
     }
@@ -712,7 +737,7 @@ export class Manager {
     // The claim has moved to the fresh attempt either way; the job only becomes admitted once that is audited.
     job.attemptId = t.attemptId;
     job.fence = t.fence;
-    if (!(await this.audit(job.eventId, job, "retry_admitted", `${job.jobId}#${job.attempt + 1}`))) {
+    if (!(await this.audit(job.tenantId, job.taskId, job.eventId, job, "retry_admitted", `${job.jobId}#${job.attempt + 1}`))) {
       const rel = await this.p.broker.release(t.attemptId, t.fence).catch(() => ({ ok: false as const, reason: "unavailable" }));
       if (!rel.ok) this.queue({ eventId: job.eventId, jobId: job.jobId, needs: "attention", reason: "retry not audited and its fresh attempt could not be released" });
       return { status: "BLOCKED", reason: "audit_unavailable; fresh attempt released", job };
