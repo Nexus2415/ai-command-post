@@ -29,7 +29,8 @@ test("disposable harness refuses inherited libpq hostaddr before starting a serv
   assert.throws(() => execFileSync(process.execPath, ["test/synthetic-workflow.test.ts"], {
     env: { ...guardEnv, ARN94_DISPOSABLE: "1", ARN94_GUARD_CHILD: "1", ARN94_PGBIN: "/nonexistent/arn94-server",
       PGHOSTADDR: "192.0.2.1" }, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 10000,
-  }), (e: unknown) => e instanceof Error && "stdout" in e && String(e.stdout).includes("refusing external connection variable PGHOSTADDR"));
+  }), (e: unknown) => e instanceof Error && ["stdout", "stderr"].some(k =>
+    k in e && String((e as Error & Record<string, unknown>)[k]).includes("refusing external connection variable PGHOSTADDR")));
 });
 
 let dir = "", source = "";
