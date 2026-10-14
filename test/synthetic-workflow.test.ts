@@ -24,8 +24,10 @@ test("ARN-94 SQL fixture is pinned to the independently accepted source", () => 
   assert.equal(hash(readFileSync(bundle)), manifest.archiveSha256);
 });
 test("disposable harness refuses inherited libpq hostaddr before starting a server", { skip: process.env["ARN94_GUARD_CHILD"] === "1" }, () => {
+  // A fresh Node test runner must not inherit its parent's internal worker mode.
+  const guardEnv = Object.fromEntries(Object.entries(process.env).filter(([k]) => k !== "NODE_TEST_CONTEXT"));
   assert.throws(() => execFileSync(process.execPath, ["--test", "test/synthetic-workflow.test.ts"], {
-    env: { ...process.env, ARN94_DISPOSABLE: "1", ARN94_GUARD_CHILD: "1", ARN94_PGBIN: "/nonexistent/arn94-server",
+    env: { ...guardEnv, ARN94_DISPOSABLE: "1", ARN94_GUARD_CHILD: "1", ARN94_PGBIN: "/nonexistent/arn94-server",
       PGHOSTADDR: "192.0.2.1" }, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 10000,
   }), (e: unknown) => e instanceof Error && "stdout" in e && String(e.stdout).includes("refusing external connection variable PGHOSTADDR"));
 });
