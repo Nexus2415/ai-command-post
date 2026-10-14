@@ -7,7 +7,7 @@ configured. The manager-event adapter remains an injected, inert factory.
 
 The native harness requires `ARN94_DISPOSABLE=1`, an unprivileged user and
 PostgreSQL 16 binaries (`ARN94_PGBIN`). It refuses external database connection
-variables, creates its own temporary cluster, listens only on its private Unix
+variables (including every inherited libpq `PG*` option), creates its own temporary cluster, listens only on its private Unix
 socket, replays the reviewed migration journal and removes that cluster afterward.
 Run `node --test test/synthetic-workflow.test.ts`; use `npm run validate` for the
 existing regression suite. CI runs both checks.

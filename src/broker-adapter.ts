@@ -118,7 +118,7 @@ function validBinding(b: CommandBinding | null): b is CommandBinding {
 
 /** Builds the adapter. There is no default instance and no default transport. */
 export function createBrokerAdapter(deps: BrokerAdapterDeps): AdmissionBroker {
-  return adapter({ ...deps, rpc: (fn, args) => fn === "broker_claim_manager_event"
+  return adapter({ binding: req => deps.binding(req), usageEvidence: attempt => deps.usageEvidence(attempt), rpc: (fn, args) => fn === "broker_claim_manager_event"
     ? Promise.reject(new Error("manager lineage RPC unavailable in raw adapter")) : deps.rpc(fn, args) }, false);
 }
 

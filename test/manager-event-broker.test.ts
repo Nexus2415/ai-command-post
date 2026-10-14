@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createManagerEventBrokerAdapter, type ManagerBrokerFunction, type CommandBinding } from "../src/broker-adapter.ts";
+import { createBrokerAdapter, createManagerEventBrokerAdapter, type BrokerFunction, type ManagerBrokerFunction, type CommandBinding } from "../src/broker-adapter.ts";
 
 const tenant = "11111111-1111-4111-8111-111111111111";
 const claim = "22222222-2222-4222-8222-222222222222";
@@ -11,6 +11,20 @@ const request = { tenantId: tenant, claimKey: binding.commandKey, idempotencyKey
   executor: "claude" as const, tariffId: "free", worstCaseMicros: 0 };
 const admitted = { ok: true, created: true, claim_id: claim, attempt_id: attempt, fence: 1, reserved_micros: 0, idempotency_key: binding.idempotencyKey };
 const status = { ok: true, claim_id: claim, attempt_id: attempt, fence: 1, operation_id: "op:synthetic", state: "claimed" };
+
+test("raw adapter retains class dependency methods and their receiver", async () => {
+  class Dependencies {
+    async binding() { assert.equal(this, deps); return { ...binding, commandKey: "task:review_result" }; }
+    async usageEvidence() { assert.equal(this, deps); return null; }
+    async rpc(fn: BrokerFunction) {
+      assert.equal(this, deps); assert.equal(fn, "broker_claim_and_reserve");
+      return { ...admitted, operation_id: "op:synthetic" };
+    }
+  }
+  const deps = new Dependencies(), b = createBrokerAdapter(deps);
+  assert.equal((await b.claimAndReserve(request)).ok, true);
+  assert.deepEqual(await b.settle(attempt, 0, "unused"), { ok: false, reason: "no_usage_evidence" });
+});
 
 test("manager-event adapter uses native event claim and independently confirms its exact fence", async () => {
   const calls: ManagerBrokerFunction[] = [];

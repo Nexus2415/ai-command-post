@@ -23,6 +23,12 @@ test("ARN-94 SQL fixture is pinned to the independently accepted source", () => 
   assert.equal(manifest.commit, "df274ef994c807dff375fb05020d68d3fe692a7f");
   assert.equal(hash(readFileSync(bundle)), manifest.archiveSha256);
 });
+test("disposable harness refuses inherited libpq hostaddr before starting a server", { skip: process.env["ARN94_GUARD_CHILD"] === "1" }, () => {
+  assert.throws(() => execFileSync(process.execPath, ["--test", "test/synthetic-workflow.test.ts"], {
+    env: { ...process.env, ARN94_DISPOSABLE: "1", ARN94_GUARD_CHILD: "1", ARN94_PGBIN: "/nonexistent/arn94-server",
+      PGHOSTADDR: "192.0.2.1" }, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 10000,
+  }), (e: unknown) => e instanceof Error && "stdout" in e && String(e.stdout).includes("refusing external connection variable PGHOSTADDR"));
+});
 
 let dir = "", source = "";
 let pgEnv: NodeJS.ProcessEnv = {};
@@ -55,7 +61,7 @@ async function rpc(fn: string, args: Record<string, readonly [unknown, string]>,
 describe("ARN-94 native synthetic workflow", { skip: !enabled }, () => {
   before(async () => {
     assert.notEqual(userInfo().uid, 0, "run the disposable harness as an unprivileged user");
-    for (const k of ["PGHOST", "PGPORT", "PGUSER", "PGPASSWORD", "PGSERVICE", "PGDATABASE", "DATABASE_URL", "SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY"]) {
+    for (const k of [...Object.keys(process.env).filter(k => k.startsWith("PG")), "DATABASE_URL", "SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY"]) {
       assert.ok(!process.env[k], `refusing external connection variable ${k}`);
     }
     assert.ok(existsSync(join(bin, "postgres")), "PostgreSQL 16 server binaries required");
@@ -69,7 +75,7 @@ describe("ARN-94 native synthetic workflow", { skip: !enabled }, () => {
     const data = join(dir, "data");
     execFileSync(join(bin, "initdb"), ["-D", data, "-U", "postgres", "--auth=trust", "--no-locale", "--encoding=UTF8"], { stdio: "ignore" });
     execFileSync(join(bin, "pg_ctl"), ["-D", data, "-l", join(dir, "postgres.log"), "-o", `-c listen_addresses='' -c unix_socket_directories=${dir}`, "-w", "start"], { stdio: "ignore" });
-    pgEnv = { ...process.env, PGHOST: dir, PGPORT: "5432", PGUSER: "postgres" };
+    pgEnv = { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("PG"))), PGHOST: dir, PGPORT: "5432", PGUSER: "postgres" };
     await pg("CREATE DATABASE arn94;", {}, "postgres");
     const file = async (name: string) => { await pg(`\\i ${join(source, name)}`); };
     await file("tests/sql/supabase-stub.sql");
