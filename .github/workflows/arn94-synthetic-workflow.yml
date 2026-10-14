@@ -1,0 +1,22 @@
+name: ARN-94 Native Synthetic Workflow
+on:
+  pull_request:
+  push:
+    branches: [codex/arn-94-synthetic-workflow]
+permissions:
+  contents: read
+jobs:
+  native-workflow:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - name: Run isolated PostgreSQL 16 workflow and actual restart proof
+        env:
+          ARN94_DISPOSABLE: "1"
+          ARN94_PGBIN: /usr/lib/postgresql/16/bin
+        run: node --test test/synthetic-workflow.test.ts

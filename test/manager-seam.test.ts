@@ -289,7 +289,8 @@ test("SYNTHETIC end to end: event -> admitted job -> one worker -> independent c
     assert.equal(r.verifier.calls, 1);
     assert.notEqual(done.job!.result, null);
     assert.deepEqual(r.log.filter((x) => x !== "kill:on"), ["claimAndReserve", "claimAndReserve", "markDispatched", "worker.run", "verifier.verify", "settle"]);
-    assert.deepEqual(r.audit.filter((x) => x.jobId === job.jobId).map((x) => x.step), ["admitted", "dispatched", "verified", "complete"]);
+    assert.deepEqual(r.audit.filter((x) => x.eventId === job.eventId).map((x) => x.step), ["admission_decided", "admitted", "dispatched", "verified", "complete"]);
+    assert.equal(r.audit.find((x) => x.eventId === job.eventId && x.step === "admitted")!.jobId, null, "pending receipts have no bound job ID");
     // Next-eligible selection moves on to the other task's job.
     assert.equal(r.m.nextEligible()?.jobId, b.job!.jobId);
     assert.equal(r.m.ownerQueue.length, 0);
