@@ -685,11 +685,12 @@ test("SYNTHETIC wiring: the seam is not imported by the engine, CLI or workflows
   const src = readFileSync("src/manager.ts", "utf8");
   assert.doesNotMatch(src, /\bfetch\s*\(|process\.env|XMLHttpRequest|WebSocket|child_process|node:(http|https|net|dns)/);
   assert.doesNotMatch(src, /from\s+"\.\/(providers|tools|linear|orchestrator|cli)\.ts"/);
-  // The only permitted typed consumers are inert adapters. They may reference manager.ts
-  // but must contain no ambient network, secrets, runtime config or provider dispatch.
-  for (const f of readdirSync("src").filter((x) => ["manager-persistence.ts", "broker-adapter.ts"].includes(x))) {
+  // ARN-89's broker adapter and ARN-92's persistence adapter are sanctioned typed
+  // consumers; both must remain inert with no ambient transport or runtime wiring.
+  for (const f of ["broker-adapter.ts", "manager-persistence.ts"]) {
     const body = readFileSync(`src/${f}`, "utf8");
     assert.doesNotMatch(body, /\bfetch\s*\(|process\.env|XMLHttpRequest|WebSocket|child_process|node:(http|https|net|dns)/, `${f} must remain inert`);
+    assert.doesNotMatch(body, /from\s+["']\.\/(providers|tools|linear|orchestrator|cli|config)\.ts["']/, `${f} must have no provider or runtime path`);
   }
   for (const f of [...readdirSync("src").filter((x) => !["manager.ts", "manager-persistence.ts", "broker-adapter.ts"].includes(x)).map((x) => `src/${x}`), ...readdirSync("api").filter((x) => x.endsWith(".js")).map((x) => `api/${x}`), ...readdirSync(".github/workflows").map((x) => `.github/workflows/${x}`)]) {
     assert.doesNotMatch(readFileSync(f, "utf8"), /\bmanager\.ts\b|\.\/manager\b|src\/manager/, `${f} must not reference the manager seam`);

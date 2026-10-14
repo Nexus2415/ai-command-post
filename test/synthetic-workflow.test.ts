@@ -227,6 +227,8 @@ SELECT jsonb_build_object('tenant',:'t','tariff',:'tariff','action',:'action','a
     assert.equal((await m.handleEvent({ ...w.managerEvent(e), kind: "deploy_request" })).status, "OWNER_APPROVAL_REQUIRED");
     w.set({ killed: true }); assert.equal((await w.intake(w.token(), e)).status, "blocked"); assert.equal(w.runs(), 0);
     w.set({ killed: false, missingProof: true }); const d = await w.receive(m, e); assert.ok(d.job);
+    assert.equal((await rpc("broker_claim_status", { p_claim: [d.job.claimId!, "uuid"] }, "11111111-1111-4111-8111-111111111111"))["ok"], false);
+    await assert.rejects(w.verification(d.job, "complete", "claude"), /manager_denied:self_or_unknown_verification/);
     const end = await m.dispatch(d.job.jobId); assert.equal(end.job?.state, "unknown");
     assert.equal(await pg("SELECT outcome IS NULL FROM public.manager_event_receipts WHERE tenant_id=:'t'::uuid AND event_id=:'e';", { t: w.tenant, e: e.eventId }), "t");
     await assert.rejects(rpc("manager_record_verification", { p_data: [{ tenantId: w.tenant, eventId: e.eventId, fence: d.job.fence, decision: "complete", evidenceRef: "fake" }, "jsonb"] }, w.tenant), /permission denied/);

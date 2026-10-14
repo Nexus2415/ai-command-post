@@ -53,5 +53,16 @@ rotation; review rollback and separately authorize activation. No main merge,
 production mutation or pilot activation is included. ACP stays disabled, Gemini
 suspended, Eve dispatch off and limited-live readiness false.
 
-Exact-head CI and different-agent review results are recorded in the PR and
-Linear ARN-94 after the executable checks pass.
+The first accepted execution checkpoint is ACP `a7e625c5ba19c10491513c04575c3b9cbb051323`:
+native run [38419266319](https://github.com/Nexus2415/ai-command-post/actions/runs/38419266319)
+passed 10 tests with zero failures/skips, and
+[Validate 38419266234](https://github.com/Nexus2415/ai-command-post/actions/runs/38419266234)
+passed. Final-head CI and different-agent review are recorded in PR #45 and
+Linear ARN-94.
+
+Existing acceptance assets are retained: ARN-10's controlled-simulation scope,
+ARN-27 PR #35's no-repeat rule for ambiguous execution and separate preview
+authorization, and ARN-47's existing Chromium outage/malformed-receipt tests.
+ARN-47's observed anonymous console-data refusal remains separate live UI
+evidence; its authenticated cross-service/outage/kill gaps are not closed by
+this native synthetic suite. No second preview probe or real Agent Run occurred.
