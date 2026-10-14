@@ -668,7 +668,8 @@ test("SYNTHETIC wiring: the seam is not imported by the engine, CLI or workflows
   const src = readFileSync("src/manager.ts", "utf8");
   assert.doesNotMatch(src, /\bfetch\s*\(|process\.env|XMLHttpRequest|WebSocket|child_process|node:(http|https|net|dns)/);
   assert.doesNotMatch(src, /from\s+"\.\/(providers|tools|linear|orchestrator|cli)\.ts"/);
-  for (const f of [...readdirSync("src").filter((x) => x !== "manager.ts").map((x) => `src/${x}`), ...readdirSync("api").filter((x) => x.endsWith(".js")).map((x) => `api/${x}`), ...readdirSync(".github/workflows").map((x) => `.github/workflows/${x}`)]) {
+  // The ARN-89 broker adapter is the one sanctioned, equally disabled consumer; test/broker-adapter.test.ts holds it to the same rule.
+  for (const f of [...readdirSync("src").filter((x) => x !== "manager.ts" && x !== "broker-adapter.ts").map((x) => `src/${x}`), ...readdirSync("api").filter((x) => x.endsWith(".js")).map((x) => `api/${x}`), ...readdirSync(".github/workflows").map((x) => `.github/workflows/${x}`)]) {
     assert.doesNotMatch(readFileSync(f, "utf8"), /\bmanager\.ts\b|\.\/manager\b|src\/manager/, `${f} must not reference the manager seam`);
   }
 });
