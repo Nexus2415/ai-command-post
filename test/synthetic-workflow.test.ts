@@ -18,6 +18,14 @@ const manifest = JSON.parse(readFileSync("test/fixtures/arn94-opsdesk.json", "ut
   repository: string; commit: string; archiveSha256: string; files: Record<string, string>;
 };
 const hash = (v: string | Buffer) => createHash("sha256").update(v).digest("hex");
+function assertIsolatedConnectionEnvironment() {
+  for (const k of [...Object.keys(process.env).filter(k => k.startsWith("PG")), "DATABASE_URL", "SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY"]) {
+    assert.ok(!process.env[k], `refusing external connection variable ${k}`);
+  }
+}
+// Run the same preflight before test-runner hooks in the refusal probe, so
+// every supported Node reporter preserves the actual guard's diagnostic.
+if (process.env["ARN94_GUARD_CHILD"] === "1") assertIsolatedConnectionEnvironment();
 test("ARN-94 SQL fixture is pinned to the independently accepted source", () => {
   assert.equal(manifest.repository, "Nexus2415/opsdesk-harmony");
   assert.equal(manifest.commit, "df274ef994c807dff375fb05020d68d3fe692a7f");
@@ -64,9 +72,7 @@ async function rpc(fn: string, args: Record<string, readonly [unknown, string]>,
 describe("ARN-94 native synthetic workflow", { skip: !enabled }, () => {
   before(async () => {
     assert.notEqual(userInfo().uid, 0, "run the disposable harness as an unprivileged user");
-    for (const k of [...Object.keys(process.env).filter(k => k.startsWith("PG")), "DATABASE_URL", "SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY"]) {
-      assert.ok(!process.env[k], `refusing external connection variable ${k}`);
-    }
+    assertIsolatedConnectionEnvironment();
     assert.ok(existsSync(join(bin, "postgres")), "PostgreSQL 16 server binaries required");
     assert.match(execFileSync(join(bin, "postgres"), ["--version"], { encoding: "utf8" }), /PostgreSQL\) 16\./);
     dir = mkdtempSync(join(tmpdir(), "arn94-pg-")); source = join(dir, "source"); mkdirSync(source);
