@@ -8,6 +8,7 @@
   const TAB_LABEL = { done: "Done", active: "Active", queued: "Queued", blocked: "Blocked", review: "Review", canceled: "Canceled" };
   const AGENT_NAME = { chatgpt: "ChatGPT", claude: "Claude", codex: "Codex", gemini: "Gemini", perplexity: "Perplexity" };
   const ID_RE = /^ARN-[1-9]\d{0,8}$/;
+  const QUESTION_EXPLANATION = "Submitting a question creates a Linear issue for an answer. It does not authorize agents to execute tools or change existing work.";
 
   // ---- pure helpers (unit-tested in test/console-ui.test.ts) ----
   function laneCounts(overview) {
@@ -53,10 +54,10 @@
   }
   // Owner questions filed through intake are read-only, not unclaimed work.
   const isQuestion = it => /^\[Question\]/.test(String(it && it.title || ""));
-  const ownerLabel = it => AGENT_NAME[it && it.owner] || (isQuestion(it) ? "Owner question · read-only" : "Unclaimed");
+  const ownerLabel = it => AGENT_NAME[it && it.owner] || (isQuestion(it) ? "Owner question · no execution" : "Unclaimed");
   // Only plain http(s) links are rendered; javascript:, data: and the like are dropped.
   function safeUrl(u) { const s = String(u || "").trim(); return /^https?:\/\/[^\s]+$/i.test(s) ? s : null; }
-  const api = { safeUrl, ownerLabel, TABS, laneCounts, laneIssues, rosterRow, connectionLabel, intakeBody, errorMessage, isIssueId: s => ID_RE.test(String(s)) };
+  const api = { safeUrl, ownerLabel, TABS, laneCounts, laneIssues, rosterRow, connectionLabel, intakeBody, errorMessage, QUESTION_EXPLANATION, isIssueId: s => ID_RE.test(String(s)) };
   root.ACPConsoleCore = api;
   if (typeof document === "undefined") return;
 
@@ -236,7 +237,7 @@
     intent = k;
     document.querySelectorAll("#cIntent button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.intent === k)));
     $("cIntentNote").textContent = k === "question"
-      ? "Question · read-only. It asks for an answer and must not change any tasking."
+      ? QUESTION_EXPLANATION
       : "Command · filed in Linear as a new command. The engine works it on a later run only while the engine is switched on; this page can't confirm that.";
     $("cSend").textContent = k === "question" ? "Ask question" : "Send command";
   }

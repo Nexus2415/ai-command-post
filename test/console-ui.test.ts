@@ -21,10 +21,12 @@ test("console shows canceled as its own lane, never folded into done", () => {
   assert.deepEqual({ ...core.laneCounts(null) }, { done: 0, active: 0, queued: 0, blocked: 0, review: 0, canceled: 0 });
 });
 
-test("owner questions read as read-only, not unclaimed work; Codex is named", () => {
-  assert.equal(core.ownerLabel({ title: "[Question] status?", owner: null }), "Owner question · read-only");
+test("owner question labels distinguish issue creation from execution; Codex is named", () => {
+  assert.equal(core.ownerLabel({ title: "[Question] status?", owner: null }), "Owner question · no execution");
   assert.equal(core.ownerLabel({ title: "Do it", owner: null }), "Unclaimed");
   assert.equal(core.ownerLabel({ title: "[Codex] x", owner: "codex" }), "Codex");
+  assert.match(core.QUESTION_EXPLANATION, /Submitting a question creates a Linear issue/);
+  assert.match(core.QUESTION_EXPLANATION, /does not authorize agents to execute tools/);
 });
 
 test("roster shows workload and never claims an agent is online", () => {
@@ -64,6 +66,12 @@ test("static: fetches are relative /api/console and /api/intake only", () => {
   assert.deepEqual([...new Set(paths)].sort(), ["/api/console", "/api/intake"]);
   assert.equal((src.match(/fetch\(/g) || []).length, 1);
   assert.doesNotMatch(src, /https?:\/\/(?!\/)/);
+});
+
+test("static: question toggle does not mislabel persistent issue creation as read-only", () => {
+  assert.match(html, /Question <span class="mono note">no agent execution<\/span>/);
+  assert.doesNotMatch(html, /Question <span[^>]+>read-only<\/span>/);
+  assert.match(src, /\? QUESTION_EXPLANATION/);
 });
 
 test("static: route compatibility — every element id console.js uses exists in index.html", () => {
