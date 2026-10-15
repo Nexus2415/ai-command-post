@@ -1,12 +1,24 @@
-// Website backend (Vercel serverless function). The dashboard page calls this instead of the Claude Linear connector.
-// Locked by the ACP_SITE_PASSWORD env var; it refuses everything when that isn't set. Only reads issues and creates new commands.
+// Website backend (Vercel serverless function). Legacy read-only adapter.
+// The active dashboard uses /api/console; command creation uses /api/intake.
+// This compatibility endpoint is fixed to the Arnexyia Launch Operations scope.
 import { timingSafeEqual } from "node:crypto";
+import { TEAM_ID, PROJECT_ID } from "./lib/console-state.js";
 
 const LINEAR = "https://api.linear.app/graphql";
+const MAX_BODY = 8192;
+const error = (status, message) => ({ status, body: { error: message } });
+const inScope = n => n?.team?.id === TEAM_ID && n?.project?.id === PROJECT_ID;
 
 function sameSecret(a, b) {
   const x = Buffer.from(String(a)), y = Buffer.from(String(b));
   return x.length === y.length && timingSafeEqual(x, y);
+}
+
+function crossSite(req) {
+  if (req.headers?.["sec-fetch-site"] === "cross-site") return true;
+  const origin = req.headers?.origin;
+  if (!origin) return false; // Non-browser callers still need the site password.
+  try { return new URL(origin).host !== req.headers?.host; } catch { return true; }
 }
 
 async function gql(env, f, query, variables) {
@@ -16,72 +28,77 @@ async function gql(env, f, query, variables) {
     body: JSON.stringify({ query, variables }),
     signal: AbortSignal.timeout(20_000),
   });
-  const j = await res.json().catch(() => ({}));
-  if (!res.ok || j.errors) throw new Error(j.errors?.[0]?.message || `Linear HTTP ${res.status}`);
-  return j.data;
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok || payload.errors || !payload.data) throw new Error("Linear request failed");
+  return payload.data;
 }
 
-async function teamId(env, f, name) {
-  const d = await gql(env, f, `query($n:String!){ teams(filter:{ name:{ eq:$n } }){ nodes{ id } } }`, { n: name });
-  const id = d.teams.nodes[0]?.id;
-  if (!id) throw new Error(`No Linear team named ${name}`);
-  return id;
-}
-
-const TOOLS = {
-  async list_teams(env, f) {
-    const d = await gql(env, f, `{ teams{ nodes{ name key } } }`);
-    return { teams: d.teams.nodes };
+const TOOLS = Object.freeze({
+  async list_teams() {
+    // Compatibility response without enumerating every team visible to the API key.
+    return { teams: [{ name: "Arnexyia", key: "ARN" }] };
   },
-  async list_issues(env, f, args) {
+  async list_issues(env, f) {
     const d = await gql(
       env, f,
-      `query($n:String!){ issues(first:250, orderBy:updatedAt, filter:{ team:{ name:{ eq:$n } } }){
-        nodes{ identifier title url priority priorityLabel updatedAt completedAt createdAt
-          state{ name type } labels{ nodes{ name } } assignee{ name } }
+      `query($team:ID!,$project:ID!){ issues(first:250, orderBy:updatedAt, filter:{
+        team:{ id:{ eq:$team } }, project:{ id:{ eq:$project } }
+      }){ nodes{ identifier title url priority priorityLabel updatedAt completedAt createdAt
+          team{ id } project{ id } state{ name type } labels{ nodes{ name } } assignee{ name } }
         pageInfo{ hasNextPage } } }`,
-      { n: String(args.team || "") },
+      { team: TEAM_ID, project: PROJECT_ID },
     );
-    const issues = d.issues.nodes.map((n) => ({
+    if (!Array.isArray(d.issues?.nodes) || !d.issues?.pageInfo) throw new Error("Invalid response");
+    const issues = d.issues.nodes.filter(inScope).map((n) => ({
       id: n.identifier, title: n.title, url: n.url,
       status: n.state?.name ?? "", statusType: n.state?.type ?? "",
       priority: { value: n.priority ?? 0, name: n.priorityLabel ?? "" },
       labels: (n.labels?.nodes ?? []).map((l) => l.name), assignee: n.assignee?.name ?? null,
       updatedAt: n.updatedAt, completedAt: n.completedAt, createdAt: n.createdAt,
     }));
-    return { issues, hasNextPage: d.issues.pageInfo.hasNextPage };
+    return { issues, hasNextPage: Boolean(d.issues.pageInfo.hasNextPage) };
   },
-  // Creates a new command issue only; there is no way to edit or delete through the website.
-  async save_issue(env, f, args) {
-    const title = String(args.title || "").trim().slice(0, 200);
-    const description = String(args.description || "").slice(0, 20_000);
-    if (!title) throw new Error("A command needs a title");
-    const priority = [0, 1, 2, 3, 4].includes(Number(args.priority)) ? Number(args.priority) : 0;
-    const d = await gql(
-      env, f,
-      `mutation($i:IssueCreateInput!){ issueCreate(input:$i){ issue{ identifier url } } }`,
-      { i: { teamId: await teamId(env, f, String(args.team || "")), title, description, priority } },
-    );
-    return d.issueCreate.issue;
-  },
-};
+});
 
 // Pure request handler, so tests can drive it with a fake fetch.
 export async function handle(req, env, f = fetch) {
-  if (!env.ACP_SITE_PASSWORD || !env.LINEAR_API_KEY) return { status: 503, body: { error: "The website isn't configured yet (ACP_SITE_PASSWORD and LINEAR_API_KEY)." } };
-  if (!sameSecret(req.headers["x-acp-password"] ?? "", env.ACP_SITE_PASSWORD)) return { status: 401, body: { error: "Wrong password" } };
-  if (req.method !== "POST") return { status: 405, body: { error: "POST only" } };
-  const body = typeof req.body === "string" ? JSON.parse(req.body || "{}") : req.body || {};
-  const tool = TOOLS[body.tool];
-  if (!tool) return { status: 400, body: { error: `Unknown tool ${body.tool}` } };
+  if (!env.ACP_SITE_PASSWORD || !env.LINEAR_API_KEY) return error(503, "The website isn't configured yet.");
+  if (!sameSecret(req.headers?.["x-acp-password"] ?? "", env.ACP_SITE_PASSWORD)) return error(401, "Wrong password");
+  if (crossSite(req)) return error(403, "Cross-site requests are not allowed.");
+  if (req.method !== "POST") return error(405, "POST only");
+
+  let body;
   try {
-    return { status: 200, body: await tool(env, f, body.args || {}) };
-  } catch (e) {
-    return { status: 502, body: { error: e instanceof Error ? e.message : String(e) } };
+    if (typeof req.body === "string" && Buffer.byteLength(req.body) > MAX_BODY) return error(413, "Request too large.");
+    body = typeof req.body === "string" ? JSON.parse(req.body || "{}") : req.body || {};
+    if (!body || typeof body !== "object" || Array.isArray(body)) return error(400, "Invalid request.");
+    if (Buffer.byteLength(JSON.stringify(body)) > MAX_BODY) return error(413, "Request too large.");
+  } catch { return error(400, "Invalid JSON."); }
+
+  if (typeof body.tool !== "string" || !Object.hasOwn(TOOLS, body.tool)) return error(400, "Unknown read tool");
+  const args = body.args ?? {};
+  if (!args || typeof args !== "object" || Array.isArray(args)) return error(400, "Invalid arguments.");
+  // The documented website fallback still sends { team: "Arnexyia" }.
+  // Accept only that redundant canonical value; the query remains bound to server IDs.
+  const canonicalLegacyTeam =
+    body.tool === "list_issues" && Object.hasOwn(args, "team") && args.team === "Arnexyia";
+  if ((Object.hasOwn(args, "team") && !canonicalLegacyTeam) ||
+      ["teamId", "project", "projectId", "url"].some(k => Object.hasOwn(args, k))) {
+    return error(400, "Scope is fixed by the server.");
+  }
+
+  try {
+    return { status: 200, body: await TOOLS[body.tool](env, f) };
+  } catch {
+    // Never relay upstream errors: they may contain internal data.
+    return error(502, "Linear is unavailable. Retry without assuming task status changed.");
   }
 }
 
 export default async function handler(req, res) {
+  res.setHeader("Cache-Control", "private, no-store");
+  res.setHeader("Vary", "Origin");
+  res.setHeader("X-Content-Type-Options", "nosniff");
   const out = await handle(req, process.env);
   res.status(out.status).json(out.body);
 }
