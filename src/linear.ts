@@ -23,6 +23,8 @@ export interface Issue {
 export interface TaskStore {
   listOpenAndRecent(teamKey: string): Promise<Issue[]>;
   getComments(issueId: string): Promise<{ body: string; createdAt: string }[]>;
+  /** Fresh labels for one issue; used for the final claim check. Optional so simple stores can skip it. */
+  getLabels?(issueId: string): Promise<string[]>;
   createIssue(input: { teamKey: string; title: string; description: string; parentId?: string; priority?: number }): Promise<Issue>;
   comment(issueId: string, body: string): Promise<void>;
   setState(issueId: string, teamKey: string, type: StateType): Promise<void>;
@@ -109,9 +111,26 @@ export class LinearStore implements TaskStore {
     return d.issues.nodes.map(toIssue);
   }
 
+  async getLabels(issueId: string) {
+    const d = await this.gql(`query($id:String!){ issue(id:$id){ labels { nodes { name } } } }`, { id: issueId });
+    return (d.issue.labels?.nodes ?? []).map((l: any) => l.name as string);
+  }
+
   async getComments(issueId: string) {
-    const d = await this.gql(`query($id:String!){ issue(id:$id){ comments(first:100){ nodes { body createdAt } } } }`, { id: issueId });
-    return d.issue.comments.nodes;
+    // Page through every comment: claim ownership depends on the earliest claim, which may not be on page one.
+    const out: { body: string; createdAt: string }[] = [];
+    let after: string | null = null;
+    for (let page = 0; page < 50; page++) {
+      const d: any = await this.gql(
+        `query($id:String!,$after:String){ issue(id:$id){ comments(first:100, after:$after){ nodes { body createdAt } pageInfo { hasNextPage endCursor } } } }`,
+        { id: issueId, after },
+      );
+      const c = d.issue.comments;
+      out.push(...c.nodes);
+      if (!c.pageInfo?.hasNextPage) return out;
+      after = c.pageInfo.endCursor;
+    }
+    throw new Error(`issue ${issueId} has more comments than ACP will page through; refusing to guess the earliest claim`);
   }
 
   async createIssue(input: { teamKey: string; title: string; description: string; parentId?: string; priority?: number }) {
@@ -151,8 +170,11 @@ export class DryRunStore implements TaskStore {
   readonly log: string[] = [];
   private n = 0;
   private readonly inner: TaskStore;
+  /** Only present when the wrapped store has it, so callers keep the issue-snapshot fallback otherwise. */
+  readonly getLabels?: (issueId: string) => Promise<string[]>;
   constructor(inner: TaskStore) {
     this.inner = inner;
+    if (inner.getLabels) this.getLabels = (issueId) => inner.getLabels!(issueId);
   }
   listOpenAndRecent(teamKey: string) {
     return this.inner.listOpenAndRecent(teamKey);

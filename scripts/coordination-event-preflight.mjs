@@ -6,7 +6,8 @@ export function classifyEvent(event, repo, actor) {
   if (!event || event.action !== "created" || !event.comment || !event.issue) return { accepted: false, reason: "unsupported-event" };
   if (event.comment.user?.login !== "Nexus2415") return { accepted: false, reason: "untrusted-comment-author" };
   const body = String(event.comment.body || "");
-  const match = /^\/arnexyia handoff (ARN-\d+) (claude|codex|perplexity|gemini)$/i.exec(body.trim());
+  // Gemini is suspended by the ARN-43 owner decision; accepted markers remain record-only.
+  const match = /^\/arnexyia handoff (ARN-\d+) (claude|codex|perplexity)$/i.exec(body.trim());
   if (!match) return { accepted: false, reason: "not-explicit-handoff" };
   return { accepted: true, issue: match[1].toUpperCase(), agent: match[2].toLowerCase(), action: "record-only" };
 }

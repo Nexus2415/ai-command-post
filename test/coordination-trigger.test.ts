@@ -22,7 +22,7 @@ test("never accepts third-party actors or comments", () => {
 });
 
 test("rejects malformed commands, extra instructions and unrecognized agents", () => {
-  for (const body of ["/arnexyia handoff ARN-63 codex execute", "/arnexyia handoff ARN-63 hacker", "/arnexyia handoff ARN-abc claude", "@codex review", ""]) {
+  for (const body of ["/arnexyia handoff ARN-63 codex execute", "/arnexyia handoff ARN-63 hacker", "/arnexyia handoff ARN-63 gemini", "/arnexyia handoff ARN-abc claude", "@codex review", ""]) {
     assert.equal(classifyEvent(event(body), repo, owner).accepted, false, body);
   }
 });
