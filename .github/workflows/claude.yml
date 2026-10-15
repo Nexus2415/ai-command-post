@@ -1,0 +1,39 @@
+# ARN-118: owner-gated native Claude Code handoff for this repository.
+# The workflow is inert until the owner separately enables ACP_CLAUDE_WORKER_ENABLED
+# and configures CLAUDE_CODE_OAUTH_TOKEN in this repository's Actions secrets.
+# A comment or PR alone does not authorize paid API usage or production execution.
+name: Claude (owner-gated)
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: acp-claude-${{ github.event.issue.number || github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  claude:
+    if: >-
+      vars.ACP_CLAUDE_WORKER_ENABLED == 'true' &&
+      github.repository == 'Nexus2415/ai-command-post' &&
+      github.actor == 'Nexus2415' &&
+      contains(github.event.comment.body, '@claude')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
