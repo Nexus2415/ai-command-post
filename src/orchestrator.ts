@@ -352,6 +352,8 @@ export async function tick(d: Deps): Promise<TickReport> {
 
   if (!d.cfg.active) {
     report.waiting.push(`Engine is off (ACP_ACTIVE=false). ${newCommands.length} command(s) and ${tasks.length} task(s) waiting.`);
+    // Non-mutating stopped-state record: the run halted before any step, and says so in the run log.
+    d.log?.(JSON.stringify({ at: new Date().toISOString(), ...report, budget: d.budget.summary() }));
     return report;
   }
 
