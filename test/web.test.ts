@@ -24,7 +24,7 @@ test("website refuses everything until a password and Linear key are set", async
   assert.equal(calls.length, 0);
 });
 
-test("website lists fixed-scope issues in the dashboard's shape", async () => {
+test("website fallback accepts only the redundant canonical team while binding scope server-side", async () => {
   const { f, calls } = fakeLinear(() => ({
     issues: {
       nodes: [{ identifier: "ARN-1", title: "[Gemini] x", url: "u", priority: 2, priorityLabel: "High", updatedAt: "t", completedAt: null, createdAt: "c",
@@ -33,7 +33,10 @@ test("website lists fixed-scope issues in the dashboard's shape", async () => {
       pageInfo: { hasNextPage: false },
     },
   }));
-  const out = await handle(req("list_issues"), env, f);
+  const out = await handle(req("list_issues", {
+    team: "Arnexyia", limit: 250, orderBy: "updatedAt",
+    fields: ["id", "title", "url", "state"],
+  }), env, f);
   assert.equal(out.status, 200);
   assert.deepEqual((out.body as any).issues[0], {
     id: "ARN-1", title: "[Gemini] x", url: "u", status: "Todo", statusType: "unstarted", priority: { value: 2, name: "High" },
