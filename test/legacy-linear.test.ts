@@ -50,7 +50,10 @@ test("legacy issue reads bind team and project server-side and filter upstream l
       nodes: [scoped, foreign], pageInfo: { hasNextPage: true },
     } } }), { status: 200 });
   }) as typeof fetch;
-  const out = await handle(req("list_issues"), env, fakeFetch);
+  const out = await handle(req("list_issues", {
+    team: "Arnexyia", limit: 250, orderBy: "updatedAt",
+    fields: ["id", "title", "url", "state"],
+  }), env, fakeFetch);
   assert.equal(out.status, 200);
   assert.deepEqual((out.body as any).issues.map((i: any) => i.id), ["ARN-47"]);
   assert.equal((out.body as any).hasNextPage, true);
@@ -62,9 +65,10 @@ test("legacy reads reject cross-site, malformed, oversized and scope-changing re
   const neverFetch = (async () => { calls++; throw new Error("unexpected fetch"); }) as typeof fetch;
   assert.equal((await handle(req("list_issues", {}, { "sec-fetch-site": "cross-site" }), env, neverFetch)).status, 403);
   assert.equal((await handle(req("list_issues", {}, { origin: "https://evil.example", host: "console.example" }), env, neverFetch)).status, 403);
-  for (const args of [{ team: "Other" }, { teamId: "other" }, { project: "Other" }, { projectId: "other" }, { url: "https://other.example" }]) {
+  for (const args of [{ team: "Other" }, { team: "arnexyia" }, { team: null }, { teamId: "other" }, { project: "Other" }, { projectId: "other" }, { url: "https://other.example" }]) {
     assert.equal((await handle(req("list_issues", args), env, neverFetch)).status, 400);
   }
+  assert.equal((await handle(req("list_teams", { team: "Arnexyia" }), env, neverFetch)).status, 400);
   assert.equal((await handle({ ...req("list_issues"), body: "{" }, env, neverFetch)).status, 400);
   assert.equal((await handle({ ...req("list_issues"), body: JSON.stringify({ tool: "list_issues", args: {}, filler: "x".repeat(9000) }) }, env, neverFetch)).status, 413);
   assert.equal(calls, 0);
