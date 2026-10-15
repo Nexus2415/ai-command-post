@@ -78,8 +78,12 @@ export async function handle(req, env, f = fetch) {
   if (typeof body.tool !== "string" || !Object.hasOwn(TOOLS, body.tool)) return error(400, "Unknown read tool");
   const args = body.args ?? {};
   if (!args || typeof args !== "object" || Array.isArray(args)) return error(400, "Invalid arguments.");
-  // Legacy callers may choose the read operation, never the tenant/project scope.
-  if (["team", "teamId", "project", "projectId", "url"].some(k => Object.hasOwn(args, k))) {
+  // The documented website fallback still sends { team: "Arnexyia" }.
+  // Accept only that redundant canonical value; the query remains bound to server IDs.
+  const canonicalLegacyTeam =
+    body.tool === "list_issues" && Object.hasOwn(args, "team") && args.team === "Arnexyia";
+  if ((Object.hasOwn(args, "team") && !canonicalLegacyTeam) ||
+      ["teamId", "project", "projectId", "url"].some(k => Object.hasOwn(args, k))) {
     return error(400, "Scope is fixed by the server.");
   }
 
