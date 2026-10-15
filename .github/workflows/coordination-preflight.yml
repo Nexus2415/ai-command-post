@@ -1,0 +1,23 @@
+# ARN-63: owner-comment handoff preflight. Does NOT wake, execute, or pay an AI.
+# Inert until explicitly reviewed and merged by the owner.
+name: Arnexyia handoff preflight
+on:
+  issue_comment:
+    types: [created]
+permissions:
+  contents: read
+concurrency:
+  group: arnexyia-preflight-${{ github.event.issue.number }}
+  cancel-in-progress: false
+jobs:
+  inspect:
+    if: github.actor == 'Nexus2415' && contains(github.event.comment.body, '/arnexyia handoff ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Inspect trusted handoff marker (no dispatch)
+        run: node scripts/coordination-event-preflight.mjs
