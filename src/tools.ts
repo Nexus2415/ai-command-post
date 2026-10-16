@@ -34,6 +34,65 @@ function str(input: Record<string, unknown>, key: string): string {
   return v.trim();
 }
 
+// ---------- pull request input validation (ARN-119, from the ARN-83 review finding F4) ----------
+
+/** Agent branches live under acp/ so they can never be the default branch or a person's branch. */
+const BRANCH_RE = /^acp\/[a-z0-9][a-z0-9._-]{0,62}$/;
+export const MAX_PR_FILES = 20;
+const MAX_PATH = 255;
+const SEGMENT_RE = /^[A-Za-z0-9._@+-][A-Za-z0-9 ._@+-]*$/;
+/**
+ * Paths an agent may never write: CI and automation config (a PR can run workflows with repository secrets),
+ * ownership and security policy, git internals, and environment/secret files.
+ */
+const PROTECTED: RegExp[] = [
+  /^\.github(\/|$)/i,
+  /^\.gitlab-ci\.yml$/i,
+  /^\.circleci(\/|$)/i,
+  /(^|\/)\.git(\/|$)/i,
+  /(^|\/)\.gitmodules$/i,
+  /(^|\/)\.gitattributes$/i,
+  /(^|\/)CODEOWNERS$/i,
+  /(^|\/)\.env(\.|$)/i,
+  /(^|\/)\.npmrc$/i,
+  /(^|\/)vercel\.json$/i,
+];
+
+export function prBranch(v: unknown): string {
+  if (typeof v !== "string" || !BRANCH_RE.test(v) || v.includes("..") || v.endsWith(".lock") || v.endsWith(".") || v.includes("/.")) {
+    throw new Error('"branch" must look like acp/short-name (lowercase letters, digits, ".", "_" or "-")');
+  }
+  return v;
+}
+
+export function prPath(v: unknown): string {
+  if (typeof v !== "string" || !v || v.length > MAX_PATH) throw new Error("Each file needs a path of 1-255 characters");
+  const segments = v.split("/");
+  for (const seg of segments) {
+    if (!seg || seg === "." || seg === ".." || !SEGMENT_RE.test(seg) || seg.endsWith(" ")) {
+      throw new Error(`File path "${v}" is not a plain relative repository path`);
+    }
+  }
+  if (PROTECTED.some((re) => re.test(v))) throw new Error(`File path "${v}" is protected: agents may not change CI, ownership, git or secret files`);
+  return v;
+}
+
+export function prFiles(v: unknown): { path: string; content: string }[] {
+  if (!Array.isArray(v) || !v.length) throw new Error('"files" must be a non-empty array of {path, content}');
+  if (v.length > MAX_PR_FILES) throw new Error(`A pull request may touch at most ${MAX_PR_FILES} files`);
+  const seen = new Set<string>();
+  return v.map((f) => {
+    if (!f || typeof f !== "object" || typeof f.content !== "string") throw new Error("Each file needs path and content");
+    const path = prPath(f.path);
+    const key = path.toLowerCase();
+    if (seen.has(key)) throw new Error(`File path "${path}" appears more than once`);
+    seen.add(key);
+    return { path, content: f.content };
+  });
+}
+
+const encodePath = (p: string) => p.split("/").map(encodeURIComponent).join("/");
+
 async function gh(env: ToolEnv, path: string, init: RequestInit = {}): Promise<any> {
   if (!env.githubToken) throw new Error("GITHUB_TOKEN is not set");
   const res = await (env.f ?? fetch)(`https://api.github.com${path}`, {
@@ -87,26 +146,27 @@ const HANDLERS: Record<string, (input: Record<string, unknown>, env: ToolEnv) =>
   },
   async "github.open_pull_request"(input, env) {
     const repo = str(input, "repo");
-    const branch = str(input, "branch");
     const title = str(input, "title");
     const body = typeof input["body"] === "string" ? input["body"] : "";
-    const files = input["files"];
-    if (!Array.isArray(files) || !files.length) throw new Error('"files" must be a non-empty array of {path, content}');
-    if (branch === "main" || branch === "master") throw new Error("Agents may not write to the default branch");
+    // Everything is validated before any GitHub call, dry run included (ARN-119).
+    const branch = prBranch(input["branch"]);
+    const files = prFiles(input["files"]);
     if (env.dryRun) return `DRY RUN: would open PR "${title}" on ${repo} from ${branch} touching ${files.length} file(s)`;
     const repoInfo = await gh(env, `/repos/${repo}`);
     const base = repoInfo.default_branch as string;
+    if (typeof base !== "string" || !base || base === branch) throw new Error("Agents may not write to the default branch");
     const baseRef = await gh(env, `/repos/${repo}/git/ref/heads/${encodeURIComponent(base)}`);
+    // Creating the ref fails if the branch already exists, so an agent can never write onto someone else's branch.
     await gh(env, `/repos/${repo}/git/refs`, { method: "POST", body: JSON.stringify({ ref: `refs/heads/${branch}`, sha: baseRef.object.sha }) });
-    for (const file of files as { path: string; content: string }[]) {
-      if (typeof file?.path !== "string" || typeof file?.content !== "string") throw new Error("Each file needs path and content");
+    for (const file of files) {
+      const path = encodePath(file.path);
       let sha: string | undefined;
       try {
-        sha = (await gh(env, `/repos/${repo}/contents/${file.path}?ref=${encodeURIComponent(branch)}`)).sha;
+        sha = (await gh(env, `/repos/${repo}/contents/${path}?ref=${encodeURIComponent(branch)}`)).sha;
       } catch {
         sha = undefined;
       }
-      await gh(env, `/repos/${repo}/contents/${file.path}`, {
+      await gh(env, `/repos/${repo}/contents/${path}`, {
         method: "PUT",
         body: JSON.stringify({ message: `${title}\n\nOpened by AI Command Post`, content: Buffer.from(file.content).toString("base64"), branch, ...(sha ? { sha } : {}) }),
       });
