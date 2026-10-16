@@ -131,6 +131,6 @@ test("ARN-76: questions still work with no lead configured and stay read-only", 
 });
 
 test("ARN-76: an explicitly authorized lead files the command under that lead, case-insensitively", () => {
-  assert.equal(commandLead({ ACP_DEFAULT_LEAD: " Gemini ", ACP_INTAKE_ALLOWED_LEADS: "claude, GEMINI" }), "gemini");
+  assert.equal(commandLead({ ACP_DEFAULT_LEAD: " ChatGPT ", ACP_INTAKE_ALLOWED_LEADS: "claude, CHATGPT" }), "chatgpt");
   assert.equal(commandLead({ ACP_DEFAULT_LEAD: "perplexity", ACP_INTAKE_ALLOWED_LEADS: "perplexity" }), "perplexity");
 });

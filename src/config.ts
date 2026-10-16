@@ -9,7 +9,8 @@ export interface Config {
   dryRun: boolean;
   /** Hard monthly cap in USD across all paid model calls. 0 = free tiers only. */
   monthlyBudgetUsd: number;
-  /** Default lead AI when a command title doesn't name one. */
+  /** Default lead AI when a command title doesn't name one. A suspended lead is accepted here (so a disabled engine
+   *  still starts and reports) but never runs: see SUSPENDED_AGENTS. */
   defaultLead: AgentKey;
   linearTeamKey: string;
   pollSeconds: number;
@@ -49,6 +50,18 @@ const AGENT_KEYS: AgentKey[] = ["claude", "chatgpt", "gemini", "perplexity"];
 
 export function isAgentKey(v: string): v is AgentKey {
   return (AGENT_KEYS as string[]).includes(v);
+}
+
+/**
+ * Owner suspension (ARN-43 decision of 2026-10-09; enforced by ARN-115). A suspended agent never gets a runnable
+ * client, never leads or works a task, and is never a fallback, whatever ACP_DEFAULT_LEAD, the intake allowlist or
+ * its API key say. Historical tasks that name it are still recognised and displayed. Restoring an agent needs a dated
+ * written owner decision in Linear and a reviewed change here (and to SUSPENDED_LEADS in api/intake.js).
+ */
+export const SUSPENDED_AGENTS: readonly AgentKey[] = Object.freeze(["gemini"] as AgentKey[]);
+
+export function isSuspended(key: AgentKey): boolean {
+  return SUSPENDED_AGENTS.includes(key);
 }
 
 export function loadConfig(env: Record<string, string | undefined> = process.env): Config {
