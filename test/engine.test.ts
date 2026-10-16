@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { agentFor, titleFor } from "../src/agents.ts";
-import { Budget } from "../src/budget.ts";
+import { Budget, DEFAULT_RATES } from "../src/budget.ts";
 import { loadConfig, type AgentKey } from "../src/config.ts";
 import { extractJson } from "../src/json.ts";
 import type { Issue, StateType, TaskStore } from "../src/linear.ts";
@@ -67,13 +67,16 @@ function scripted(replies: string[], seen: ChatMessage[][] = []): ModelClient {
   };
 }
 
+// Gemini is suspended (ARN-115), so ChatGPT stands in as the free-tier executor these engine tests drive.
+const TEST_RATES = { ...DEFAULT_RATES, chatgpt: { inputPerM: 0, outputPerM: 0, freeTier: true } };
+
 function deps(store: MemoryStore, clients: Partial<Record<AgentKey, ModelClient>>, env: Record<string, string> = {}): Deps {
   const cfg = loadConfig({ ACP_ACTIVE: "true", ACP_DRY_RUN: "false", ...env });
   return {
     cfg,
     store,
     clients,
-    budget: new Budget({ capUsd: cfg.monthlyBudgetUsd, path: null }),
+    budget: new Budget({ capUsd: cfg.monthlyBudgetUsd, path: null, rates: TEST_RATES }),
     toolEnv: (issue) => ({
       dryRun: false,
       policy: { allowPullRequests: false, allowedRepos: ["acme/app"] },
@@ -183,18 +186,18 @@ test("full loop: lead plans, workers execute with a tool, lead reconciles", asyn
       summary: "Research then review.",
       tasks: [
         { agent: "perplexity", title: "Research FSM tools", description: "List top tools with sources" },
-        { agent: "gemini", title: "Challenge the list", description: "Find gaps" },
+        { agent: "chatgpt", title: "Challenge the list", description: "Find gaps" },
       ],
     }),
-    "## Final\nServiceTitan and Jobber lead; Gemini flagged pricing gaps.",
+    "## Final\nServiceTitan and Jobber lead; ChatGPT flagged pricing gaps.",
   ]);
   const perplexity = scripted([
     JSON.stringify({ tool: "linear.comment", input: { body: "Starting research" } }),
     JSON.stringify({ final: "ServiceTitan, Jobber. Sources: https://example.com", status: "done" }),
   ]);
-  const gemini = scripted([JSON.stringify({ final: "Missing pricing data.", status: "done" })]);
+  const chatgpt = scripted([JSON.stringify({ final: "Missing pricing data.", status: "done" })]);
 
-  const d = deps(store, { claude, perplexity, gemini });
+  const d = deps(store, { claude, perplexity, chatgpt });
   d.budget.rates.claude = freeRates.claude;
   d.budget.rates.perplexity = freeRates.perplexity;
 
@@ -202,7 +205,7 @@ test("full loop: lead plans, workers execute with a tool, lead reconciles", asyn
   assert.deepEqual(r1.planned, ["T-1 → 2 sub-tasks"]);
   assert.equal(store.issues.find((i) => i.id === cmd.id)!.stateType, "started");
   const kids = store.issues.filter((i) => i.parentId === cmd.id);
-  assert.deepEqual(kids.map((k) => k.title), ["[Perplexity] Research FSM tools", "[Gemini] Challenge the list"]);
+  assert.deepEqual(kids.map((k) => k.title), ["[Perplexity] Research FSM tools", "[ChatGPT] Challenge the list"]);
   // Sub-tasks created during a tick are picked up on the next one.
   assert.equal(r1.worked.length, 0);
 
@@ -222,9 +225,9 @@ test("full loop: lead plans, workers execute with a tool, lead reconciles", asyn
 test("a command reconciles when its sub-tasks are completed, canceled or marked duplicate", async () => {
   const store = new MemoryStore();
   const cmd = store.add({ title: "[Claude] Tidy backlog", description: `**${COMMAND_MARKER}**`, stateType: "started" });
-  store.add({ title: "[Gemini] A", parentId: cmd.id, stateType: "completed" });
-  store.add({ title: "[Gemini] B", parentId: cmd.id, stateType: "canceled" });
-  store.add({ title: "[Gemini] C", parentId: cmd.id, stateType: "duplicate" });
+  store.add({ title: "[ChatGPT] A", parentId: cmd.id, stateType: "completed" });
+  store.add({ title: "[ChatGPT] B", parentId: cmd.id, stateType: "canceled" });
+  store.add({ title: "[ChatGPT] C", parentId: cmd.id, stateType: "duplicate" });
   const d = deps(store, { claude: scripted(["## Final\nDone."]) });
   d.budget.rates.claude = freeRates.claude;
   const r = await tick(d);
@@ -234,18 +237,18 @@ test("a command reconciles when its sub-tasks are completed, canceled or marked 
 test("an offline lead falls back to the default lead, and its tasks go to agents that are online", async () => {
   const store = new MemoryStore();
   const cmd = store.add({ title: "[Claude] Research tools", description: `**${COMMAND_MARKER}**` });
-  const gemini = scripted([JSON.stringify({ summary: "Plan.", tasks: [{ agent: "claude", title: "Review", description: "x" }] })]);
-  const r = await tick(deps(store, { gemini }, { ACP_DEFAULT_LEAD: "gemini" }));
+  const chatgpt = scripted([JSON.stringify({ summary: "Plan.", tasks: [{ agent: "claude", title: "Review", description: "x" }] })]);
+  const r = await tick(deps(store, { chatgpt }, { ACP_DEFAULT_LEAD: "chatgpt" }));
   assert.deepEqual(r.planned, ["T-1 → 1 sub-tasks"]);
-  assert.deepEqual(store.issues.filter((i) => i.parentId === cmd.id).map((k) => k.title), ["[Gemini] Review"]);
-  assert.ok((store.comments.get(cmd.id) ?? []).some((c) => c.body.includes("Claude isn't connected, so Gemini led instead")));
+  assert.deepEqual(store.issues.filter((i) => i.parentId === cmd.id).map((k) => k.title), ["[ChatGPT] Review"]);
+  assert.ok((store.comments.get(cmd.id) ?? []).some((c) => c.body.includes("Claude isn't connected, so ChatGPT led instead")));
 });
 
 test("a blocked task is closed so its command can still be summarized", async () => {
   const store = new MemoryStore();
-  const cmd = store.add({ title: "[Gemini] Cmd", description: `**${COMMAND_MARKER}**`, stateType: "started" });
-  const task = store.add({ title: "[Gemini] Research", parentId: cmd.id });
-  const d = deps(store, { gemini: scripted([JSON.stringify({ final: "No access.", status: "blocked" }), "## Summary\nBlocked."]) });
+  const cmd = store.add({ title: "[ChatGPT] Cmd", description: `**${COMMAND_MARKER}**`, stateType: "started" });
+  const task = store.add({ title: "[ChatGPT] Research", parentId: cmd.id });
+  const d = deps(store, { chatgpt: scripted([JSON.stringify({ final: "No access.", status: "blocked" }), "## Summary\nBlocked."]) });
   await tick(d);
   assert.equal(store.issues.find((i) => i.id === task.id)!.stateType, "canceled");
   assert.deepEqual((await tick(d)).reconciled, ["T-1"]);
@@ -253,10 +256,10 @@ test("a blocked task is closed so its command can still be summarized", async ()
 
 test("workers are only offered tools whose keys are configured", async () => {
   const store = new MemoryStore();
-  const cmd = store.add({ title: "[Gemini] Cmd", description: `**${COMMAND_MARKER}**`, stateType: "started" });
-  store.add({ title: "[Gemini] Research", parentId: cmd.id });
+  const cmd = store.add({ title: "[ChatGPT] Cmd", description: `**${COMMAND_MARKER}**`, stateType: "started" });
+  store.add({ title: "[ChatGPT] Research", parentId: cmd.id });
   const seen: ChatMessage[][] = [];
-  const d = deps(store, { gemini: scripted([JSON.stringify({ final: "Done.", status: "done" })], seen) });
+  const d = deps(store, { chatgpt: scripted([JSON.stringify({ final: "Done.", status: "done" })], seen) });
   await tick(d);
   const system = seen[0]![0]!.content;
   assert.ok(system.includes("linear.comment"));
@@ -300,8 +303,8 @@ test("budget-blocked worker never claims a task", async () => {
 
 test("worker that keeps replying with junk stops at the step limit", async () => {
   const store = new MemoryStore();
-  const t = store.add({ title: "[Gemini] Summarize", description: "x" });
-  const d = deps(store, { gemini: scripted(["nope", "still nope"]) }, { ACP_MAX_STEPS: "2" });
+  const t = store.add({ title: "[ChatGPT] Summarize", description: "x" });
+  const d = deps(store, { chatgpt: scripted(["nope", "still nope"]) }, { ACP_MAX_STEPS: "2" });
   const r = await tick(d);
   assert.match(r.worked[0]!, /step limit/);
   assert.notEqual(store.issues.find((i) => i.id === t.id)!.stateType, "completed");
@@ -309,10 +312,10 @@ test("worker that keeps replying with junk stops at the step limit", async () =>
 
 test("one task per agent per tick, highest priority first", async () => {
   const store = new MemoryStore();
-  store.add({ title: "[Gemini] Low", priority: 4 });
-  const urgent = store.add({ title: "[Gemini] Urgent", priority: 1 });
+  store.add({ title: "[ChatGPT] Low", priority: 4 });
+  const urgent = store.add({ title: "[ChatGPT] Urgent", priority: 1 });
   const seen: ChatMessage[][] = [];
-  const d = deps(store, { gemini: scripted([JSON.stringify({ final: "ok", status: "done" })], seen) });
+  const d = deps(store, { chatgpt: scripted([JSON.stringify({ final: "ok", status: "done" })], seen) });
   const r = await tick(d);
   assert.equal(r.worked.length, 1);
   assert.match(seen[0]![1]!.content, /Urgent/);
@@ -322,7 +325,7 @@ test("one task per agent per tick, highest priority first", async () => {
 test("issues without an AI owner are left alone", async () => {
   const store = new MemoryStore();
   store.add({ title: "Verify invitation activation path" });
-  const d = deps(store, { gemini: scripted([]) });
+  const d = deps(store, { chatgpt: scripted([]) });
   const r = await tick(d);
   assert.equal(r.worked.length, 0);
   assert.equal(store.comments.size, 0);
@@ -331,16 +334,16 @@ test("issues without an AI owner are left alone", async () => {
 
 test("provider failure before any tool returns task to Todo for safe retry", async () => {
   const store = new MemoryStore();
-  const task = store.add({ title: "[Gemini] Review PR", description: "review" });
+  const task = store.add({ title: "[ChatGPT] Review PR", description: "review" });
   let calls = 0;
-  const gemini: ModelClient = {
+  const chatgpt: ModelClient = {
     async chat() {
       calls += 1;
-      if (calls === 1) throw new Error("gemini 503: temporarily unavailable");
+      if (calls === 1) throw new Error("chatgpt 503: temporarily unavailable");
       return { text: JSON.stringify({ final: "Review complete.", status: "done" }), inputTokens: 100, outputTokens: 20 };
     },
   };
-  const d = deps(store, { gemini });
+  const d = deps(store, { chatgpt });
 
   const first = await tick(d);
   assert.equal(store.issues.find((i) => i.id === task.id)!.stateType, "unstarted");
@@ -354,18 +357,18 @@ test("provider failure before any tool returns task to Todo for safe retry", asy
 
 test("provider failure after a tool call stops replay and closes task blocked", async () => {
   const store = new MemoryStore();
-  const task = store.add({ title: "[Gemini] Review PR", description: "review" });
+  const task = store.add({ title: "[ChatGPT] Review PR", description: "review" });
   let calls = 0;
-  const gemini: ModelClient = {
+  const chatgpt: ModelClient = {
     async chat() {
       calls += 1;
       if (calls === 1) {
         return { text: JSON.stringify({ tool: "linear.comment", input: { body: "Internal checkpoint" } }), inputTokens: 100, outputTokens: 20 };
       }
-      throw new Error("gemini 503: temporarily unavailable");
+      throw new Error("chatgpt 503: temporarily unavailable");
     },
   };
-  const d = deps(store, { gemini });
+  const d = deps(store, { chatgpt });
 
   const r = await tick(d);
   assert.equal(store.issues.find((i) => i.id === task.id)!.stateType, "canceled");
@@ -377,15 +380,15 @@ test("provider failure after a tool call stops replay and closes task blocked", 
 
 test("permanent provider error closes the task blocked instead of retrying forever", async () => {
   const store = new MemoryStore();
-  const task = store.add({ title: "[Gemini] Review PR", description: "review" });
+  const task = store.add({ title: "[ChatGPT] Review PR", description: "review" });
   let calls = 0;
-  const gemini: ModelClient = {
+  const chatgpt: ModelClient = {
     async chat() {
       calls += 1;
-      throw new ProviderError("gemini", 401, "invalid API key");
+      throw new ProviderError("chatgpt", 401, "invalid API key");
     },
   };
-  const d = deps(store, { gemini });
+  const d = deps(store, { chatgpt });
   await tick(d);
   assert.equal(store.issues.find((i) => i.id === task.id)!.stateType, "canceled");
   assert.ok((store.comments.get(task.id) ?? []).some((c) => c.body.startsWith(RESULT_MARKER) && c.body.includes("Permanent provider error")));
@@ -395,15 +398,15 @@ test("permanent provider error closes the task blocked instead of retrying forev
 
 test("transient provider errors are retried a bounded number of times, then blocked", async () => {
   const store = new MemoryStore();
-  const task = store.add({ title: "[Gemini] Review PR", description: "review" });
+  const task = store.add({ title: "[ChatGPT] Review PR", description: "review" });
   let calls = 0;
-  const gemini: ModelClient = {
+  const chatgpt: ModelClient = {
     async chat() {
       calls += 1;
-      throw new ProviderError("gemini", 503, "busy");
+      throw new ProviderError("chatgpt", 503, "busy");
     },
   };
-  const d = deps(store, { gemini });
+  const d = deps(store, { chatgpt });
   for (let i = 0; i < 6; i++) await tick(d);
   assert.equal(calls, 4);
   assert.equal(store.issues.find((i) => i.id === task.id)!.stateType, "canceled");

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { agentFor } from "../src/agents.ts";
-import { Budget } from "../src/budget.ts";
+import { Budget, DEFAULT_RATES } from "../src/budget.ts";
 import { loadConfig, type AgentKey } from "../src/config.ts";
 import { DryRunStore, type Issue, type StateType, type TaskStore } from "../src/linear.ts";
 import { COMMAND_MARKER, EXECUTOR_MARKER, isQuestion, RECONCILED_MARKER, RESULT_MARKER, claimStatus, claimsOn, tick, type Deps } from "../src/orchestrator.ts";
@@ -67,13 +67,16 @@ function scripted(replies: string[], seen: ChatMessage[][] = []): ModelClient {
   };
 }
 
+// Gemini is suspended (ARN-115), so ChatGPT stands in as the free-tier executor these engine tests drive.
+const TEST_RATES = { ...DEFAULT_RATES, chatgpt: { inputPerM: 0, outputPerM: 0, freeTier: true } };
+
 function deps(store: MemoryStore, clients: Partial<Record<AgentKey, ModelClient>>, env: Record<string, string> = {}): Deps {
   const cfg = loadConfig({ ACP_ACTIVE: "true", ACP_DRY_RUN: "false", ...env });
   return {
     cfg,
     store,
     clients,
-    budget: new Budget({ capUsd: cfg.monthlyBudgetUsd, path: null }),
+    budget: new Budget({ capUsd: cfg.monthlyBudgetUsd, path: null, rates: TEST_RATES }),
     toolEnv: (issue) => ({
       dryRun: false,
       policy: { allowPullRequests: false, allowedRepos: ["acme/app"] },
@@ -97,25 +100,25 @@ const claimsFor = (s: MemoryStore, id: string) => (s.comments.get(id) ?? []).fil
 
 test("ACP records one executor claim and never double-claims on re-runs", async () => {
   const store = new MemoryStore();
-  const t = store.add({ title: "[Gemini] check docs" });
+  const t = store.add({ title: "[ChatGPT] check docs" });
   // First run: provider fails transiently, task returns to Todo.
   const flaky: ModelClient = { async chat() { throw new Error("timeout"); } };
-  await tick(deps(store, { gemini: flaky }));
+  await tick(deps(store, { chatgpt: flaky }));
   assert.equal(store.issues[0]!.stateType, "unstarted");
   // Second run picks it up again and finishes.
-  await tick(deps(store, { gemini: scripted([done]) }));
+  await tick(deps(store, { chatgpt: scripted([done]) }));
   assert.equal(store.issues[0]!.stateType, "completed");
   const claims = claimsFor(store, t.id);
   assert.equal(claims.length, 1, "exactly one claim across re-runs");
-  assert.match(claims[0]!.body, /acp:gemini/);
+  assert.match(claims[0]!.body, /acp:chatgpt/);
 });
 
 test("an issue claimed by a foreign executor (manual) is skipped", async () => {
   const store = new MemoryStore();
-  const t = store.add({ title: "[Gemini] check docs" });
+  const t = store.add({ title: "[ChatGPT] check docs" });
   await store.comment(t.id, `${EXECUTOR_MARKER} manual`);
   const seen: ChatMessage[][] = [];
-  const r = await tick(deps(store, { gemini: scripted([done], seen) }));
+  const r = await tick(deps(store, { chatgpt: scripted([done], seen) }));
   assert.equal(seen.length, 0, "model never called");
   assert.equal(store.issues[0]!.stateType, "unstarted");
   assert.equal(claimsFor(store, t.id).length, 1);
@@ -125,10 +128,10 @@ test("an issue claimed by a foreign executor (manual) is skipped", async () => {
 test("an Eve-claimed issue (comment or label) is never run by ACP, and Eve is never treated as having executed", async () => {
   for (const setup of ["comment", "label"] as const) {
     const store = new MemoryStore();
-    const t = store.add({ title: "[Gemini] task", labels: setup === "label" ? ["executor:eve"] : [] });
+    const t = store.add({ title: "[ChatGPT] task", labels: setup === "label" ? ["executor:eve"] : [] });
     if (setup === "comment") await store.comment(t.id, `${EXECUTOR_MARKER} eve`);
     const seen: ChatMessage[][] = [];
-    await tick(deps(store, { gemini: scripted([done, done], seen) }));
+    await tick(deps(store, { chatgpt: scripted([done, done], seen) }));
     assert.equal(seen.length, 0, setup);
     assert.equal(store.issues[0]!.stateType, "unstarted", "an inactive Eve claim never becomes completed");
     assert.ok(!(store.comments.get(t.id) ?? []).some((c) => c.body.includes(RESULT_MARKER)));
@@ -145,48 +148,48 @@ test("another ACP agent's claim is foreign; the earliest comment claim wins", ()
 
 test("blocked results are closed as canceled, never completed", async () => {
   const store = new MemoryStore();
-  const t = store.add({ title: "[Gemini] task" });
-  await tick(deps(store, { gemini: scripted([blocked]) }));
+  const t = store.add({ title: "[ChatGPT] task" });
+  await tick(deps(store, { chatgpt: scripted([blocked]) }));
   assert.equal(store.issues[0]!.stateType, "canceled");
   assert.ok((store.comments.get(t.id) ?? []).some((c) => c.body.includes("blocked")));
 });
 
 test("a command whose sub-tasks were all canceled/blocked is not marked completed", async () => {
   const store = new MemoryStore();
-  const cmd = store.add({ title: "[Gemini] do it", description: COMMAND_MARKER, stateType: "started" });
-  store.add({ title: "[Gemini] a", parentId: cmd.id, stateType: "canceled" });
-  store.add({ title: "[Gemini] b", parentId: cmd.id, stateType: "duplicate" });
-  await tick(deps(store, { gemini: scripted(["summary"]) }));
+  const cmd = store.add({ title: "[ChatGPT] do it", description: COMMAND_MARKER, stateType: "started" });
+  store.add({ title: "[ChatGPT] a", parentId: cmd.id, stateType: "canceled" });
+  store.add({ title: "[ChatGPT] b", parentId: cmd.id, stateType: "duplicate" });
+  await tick(deps(store, { chatgpt: scripted(["summary"]) }));
   assert.ok((store.comments.get(cmd.id) ?? []).some((c) => c.body.includes(RECONCILED_MARKER)));
   assert.equal(store.issues.find((i) => i.id === cmd.id)!.stateType, "canceled");
 });
 
 test("a command with at least one completed sub-task is still completed", async () => {
   const store = new MemoryStore();
-  const cmd = store.add({ title: "[Gemini] do it", description: COMMAND_MARKER, stateType: "started" });
-  store.add({ title: "[Gemini] a", parentId: cmd.id, stateType: "completed" });
-  store.add({ title: "[Gemini] b", parentId: cmd.id, stateType: "canceled" });
-  await tick(deps(store, { gemini: scripted(["summary"]) }));
+  const cmd = store.add({ title: "[ChatGPT] do it", description: COMMAND_MARKER, stateType: "started" });
+  store.add({ title: "[ChatGPT] a", parentId: cmd.id, stateType: "completed" });
+  store.add({ title: "[ChatGPT] b", parentId: cmd.id, stateType: "canceled" });
+  await tick(deps(store, { chatgpt: scripted(["summary"]) }));
   assert.equal(store.issues.find((i) => i.id === cmd.id)!.stateType, "completed");
 });
 
-test("a task owned by an offline agent is left untouched, not given to Gemini", async () => {
-  for (const owner of [{ title: "[Claude] review" }, { title: "Review", labels: ["ChatGPT"] }, { title: "Review", assignee: "Claude" }]) {
+test("a task owned by an offline agent is left untouched, not given to ChatGPT", async () => {
+  for (const owner of [{ title: "[Claude] review" }, { title: "Review", labels: ["Perplexity"] }, { title: "Review", assignee: "Claude" }]) {
     const store = new MemoryStore();
     const t = store.add(owner);
     const seen: ChatMessage[][] = [];
-    await tick(deps(store, { gemini: scripted([done], seen) }, { ACP_DEFAULT_LEAD: "gemini" }));
+    await tick(deps(store, { chatgpt: scripted([done], seen) }, { ACP_DEFAULT_LEAD: "chatgpt" }));
     assert.equal(seen.length, 0, JSON.stringify(owner));
     assert.equal(store.issues[0]!.stateType, "unstarted");
     assert.equal((store.comments.get(t.id) ?? []).length, 0);
   }
 });
 
-test("explicit Gemini routing (title prefix or label) is still worked", async () => {
-  for (const p of [{ title: "[Gemini] x" }, { title: "x", labels: ["gemini"] }]) {
+test("explicit ChatGPT routing (title prefix or label) is still worked", async () => {
+  for (const p of [{ title: "[ChatGPT] x" }, { title: "x", labels: ["chatgpt"] }]) {
     const store = new MemoryStore();
     store.add(p);
-    await tick(deps(store, { gemini: scripted([done]) }));
+    await tick(deps(store, { chatgpt: scripted([done]) }));
     assert.equal(store.issues[0]!.stateType, "completed");
   }
 });
@@ -196,27 +199,27 @@ test("documents current question behaviour: an unlabelled [Question] has no owne
   const store = new MemoryStore();
   store.add({ title: "[Question] what is X?" });
   const seen: ChatMessage[][] = [];
-  await tick(deps(store, { gemini: scripted([done], seen) }, { ACP_DEFAULT_LEAD: "gemini" }));
+  await tick(deps(store, { chatgpt: scripted([done], seen) }, { ACP_DEFAULT_LEAD: "chatgpt" }));
   assert.equal(seen.length, 0);
 });
 
 test("the earliest-created claim wins even if comments arrive newest-first", () => {
   const claims = claimsOn([], [
-    { body: `${EXECUTOR_MARKER} acp:gemini`, createdAt: "2026-10-08T10:00:01Z" },
+    { body: `${EXECUTOR_MARKER} acp:chatgpt`, createdAt: "2026-10-08T10:00:01Z" },
     { body: `${EXECUTOR_MARKER} acp:claude`, createdAt: "2026-10-08T10:00:00Z" },
   ]);
   assert.equal(claimStatus(claims, "claude"), "own");
-  assert.equal(claimStatus(claims, "gemini"), "foreign");
+  assert.equal(claimStatus(claims, "chatgpt"), "foreign");
 });
 
 test("a failed claim read on one task does not abort the tick", async () => {
   const store = new MemoryStore();
-  const bad = store.add({ title: "[Gemini] flaky read", priority: 1 });
-  const cmd = store.add({ title: "[Gemini] cmd", description: COMMAND_MARKER, stateType: "started" });
-  store.add({ title: "[Gemini] a", parentId: cmd.id, stateType: "completed" });
+  const bad = store.add({ title: "[ChatGPT] flaky read", priority: 1 });
+  const cmd = store.add({ title: "[ChatGPT] cmd", description: COMMAND_MARKER, stateType: "started" });
+  store.add({ title: "[ChatGPT] a", parentId: cmd.id, stateType: "completed" });
   const orig = store.getComments.bind(store);
   store.getComments = async (id: string) => { if (id === bad.id) throw new Error("linear down"); return orig(id); };
-  const r = await tick(deps(store, { gemini: scripted(["summary"]) }));
+  const r = await tick(deps(store, { chatgpt: scripted(["summary"]) }));
   assert.ok(r.errors.some((e) => e.includes("linear down")));
   assert.equal(store.issues.find((i) => i.id === cmd.id)!.stateType, "completed", "reconciliation still ran");
 });
@@ -224,14 +227,14 @@ test("a failed claim read on one task does not abort the tick", async () => {
 test("claim order uses parsed time, not array order or string format", () => {
   const claims = claimsOn([], [
     { body: `${EXECUTOR_MARKER} acp:chatgpt` },
-    { body: `${EXECUTOR_MARKER} acp:gemini`, createdAt: "2026-10-08T10:00:00.500Z" },
+    { body: `${EXECUTOR_MARKER} acp:chatgpt`, createdAt: "2026-10-08T10:00:00.500Z" },
     { body: `${EXECUTOR_MARKER} acp:claude`, createdAt: "2026-10-08T05:00:00-05:00" },
   ]);
   // 05:00-05:00 is 10:00:00Z, earlier than 10:00:00.500Z; the undated claim sorts last.
   assert.equal(claimStatus(claims, "claude"), "own");
   const reversed = claimsOn([], [...[
     { body: `${EXECUTOR_MARKER} acp:chatgpt` },
-    { body: `${EXECUTOR_MARKER} acp:gemini`, createdAt: "2026-10-08T10:00:00.500Z" },
+    { body: `${EXECUTOR_MARKER} acp:chatgpt`, createdAt: "2026-10-08T10:00:00.500Z" },
     { body: `${EXECUTOR_MARKER} acp:claude`, createdAt: "2026-10-08T05:00:00-05:00" },
   ]].reverse());
   assert.equal(claimStatus(reversed, "claude"), "own");
@@ -241,26 +244,26 @@ test("a command fenced for another executor is neither planned nor reconciled", 
   const store = new MemoryStore();
   const cmd = store.add({ title: "Do the thing", description: COMMAND_MARKER, labels: ["executor:eve"] });
   const seen: ChatMessage[][] = [];
-  const r = await tick(deps(store, { gemini: scripted(["{}"], seen) }, { ACP_DEFAULT_LEAD: "gemini" }));
+  const r = await tick(deps(store, { chatgpt: scripted(["{}"], seen) }, { ACP_DEFAULT_LEAD: "chatgpt" }));
   assert.equal(seen.length, 0, "lead never called");
   assert.equal(store.issues.filter((i) => i.parentId === cmd.id).length, 0, "no sub-issues");
   assert.ok(r.waiting.some((w) => w.includes("command claimed by another executor")));
 
   const running = store.add({ title: "Running", description: COMMAND_MARKER, stateType: "started" });
-  store.add({ title: "[Gemini] a", parentId: running.id, stateType: "completed" });
+  store.add({ title: "[ChatGPT] a", parentId: running.id, stateType: "completed" });
   await store.comment(running.id, `${EXECUTOR_MARKER} manual`);
   const seen2: ChatMessage[][] = [];
-  await tick(deps(store, { gemini: scripted(["summary"], seen2) }));
+  await tick(deps(store, { chatgpt: scripted(["summary"], seen2) }));
   assert.equal(seen2.length, 0, "no reconcile call");
   assert.equal(store.issues.find((i) => i.id === running.id)!.stateType, "started");
 });
 
 test("a label added after the snapshot still fences the task at the final claim check", async () => {
   const store = new MemoryStore();
-  const t = store.add({ title: "[Gemini] check docs" });
+  const t = store.add({ title: "[ChatGPT] check docs" });
   store.labelOverride.set(t.id, ["executor:manual"]);
   const seen: ChatMessage[][] = [];
-  await tick(deps(store, { gemini: scripted([done], seen) }));
+  await tick(deps(store, { chatgpt: scripted([done], seen) }));
   assert.equal(seen.length, 0, "model never called");
   assert.equal(claimsFor(store, t.id).length, 0, "ACP wrote no claim");
 });
@@ -268,10 +271,10 @@ test("a label added after the snapshot still fences the task at the final claim 
 test("ACP claims a command for its lead before planning", async () => {
   const store = new MemoryStore();
   const cmd = store.add({ title: "Do the thing", description: COMMAND_MARKER });
-  await tick(deps(store, { gemini: scripted(['{"summary":"s","tasks":[]}']) }, { ACP_DEFAULT_LEAD: "gemini" }));
+  await tick(deps(store, { chatgpt: scripted(['{"summary":"s","tasks":[]}']) }, { ACP_DEFAULT_LEAD: "chatgpt" }));
   const claims = claimsFor(store, cmd.id);
   assert.equal(claims.length, 1);
-  assert.match(claims[0]!.body, /acp:gemini/);
+  assert.match(claims[0]!.body, /acp:chatgpt/);
 });
 
 test("a command claimed by another ACP agent is planned only by that recorded agent", async () => {
@@ -279,7 +282,7 @@ test("a command claimed by another ACP agent is planned only by that recorded ag
   const cmd = store.add({ title: "Do the thing", description: COMMAND_MARKER });
   await store.comment(cmd.id, `${EXECUTOR_MARKER} acp:claude`);
   const seen: ChatMessage[][] = [];
-  await tick(deps(store, { gemini: scripted(["{}"], seen) }, { ACP_DEFAULT_LEAD: "gemini" }));
+  await tick(deps(store, { chatgpt: scripted(["{}"], seen) }, { ACP_DEFAULT_LEAD: "chatgpt" }));
   assert.equal(seen.length, 0, "the active lead never plans another ACP agent's command");
   assert.equal(claimsFor(store, cmd.id).length, 1, "no second claim");
 });
@@ -287,32 +290,32 @@ test("a command claimed by another ACP agent is planned only by that recorded ag
 test("a planning retry keeps the fallback lead recorded in the claim after the named lead comes online", async () => {
   const store = new MemoryStore();
   const cmd = store.add({ title: "[Claude] Do the thing", description: COMMAND_MARKER });
-  await store.comment(cmd.id, `${EXECUTOR_MARKER} acp:gemini`);
+  await store.comment(cmd.id, `${EXECUTOR_MARKER} acp:chatgpt`);
   const claudeSeen: ChatMessage[][] = [];
-  const geminiSeen: ChatMessage[][] = [];
-  await tick(deps(store, { claude: scripted(["{}"], claudeSeen), gemini: scripted(['{"summary":"s","tasks":[]}'], geminiSeen) }, { ACP_DEFAULT_LEAD: "gemini" }));
+  const chatgptSeen: ChatMessage[][] = [];
+  await tick(deps(store, { claude: scripted(["{}"], claudeSeen), chatgpt: scripted(['{"summary":"s","tasks":[]}'], chatgptSeen) }, { ACP_DEFAULT_LEAD: "chatgpt" }));
   assert.equal(claudeSeen.length, 0);
-  assert.equal(geminiSeen.length, 1);
+  assert.equal(chatgptSeen.length, 1);
 });
 
 test("an unclaimed running command is claimed before reconciliation", async () => {
   const store = new MemoryStore();
   const running = store.add({ title: "Running", description: COMMAND_MARKER, stateType: "started" });
-  store.add({ title: "[Gemini] a", parentId: running.id, stateType: "completed" });
+  store.add({ title: "[ChatGPT] a", parentId: running.id, stateType: "completed" });
   const seen: ChatMessage[][] = [];
-  await tick(deps(store, { gemini: scripted(["summary"], seen) }, { ACP_DEFAULT_LEAD: "gemini" }));
+  await tick(deps(store, { chatgpt: scripted(["summary"], seen) }, { ACP_DEFAULT_LEAD: "chatgpt" }));
   const claims = claimsFor(store, running.id);
   assert.equal(claims.length, 1);
-  assert.match(claims[0]!.body, /acp:gemini/);
+  assert.match(claims[0]!.body, /acp:chatgpt/);
 });
 
 test("a planned command keeps its recorded ACP lead after the active lead changes", async () => {
   const store = new MemoryStore();
   const running = store.add({ title: "Running", description: COMMAND_MARKER, stateType: "started" });
-  store.add({ title: "[Gemini] a", parentId: running.id, stateType: "completed" });
+  store.add({ title: "[ChatGPT] a", parentId: running.id, stateType: "completed" });
   await store.comment(running.id, `${EXECUTOR_MARKER} acp:claude`);
   const seen: ChatMessage[][] = [];
-  const r = await tick(deps(store, { gemini: scripted(["summary"], seen) }, { ACP_DEFAULT_LEAD: "gemini" }));
+  const r = await tick(deps(store, { chatgpt: scripted(["summary"], seen) }, { ACP_DEFAULT_LEAD: "chatgpt" }));
   assert.ok(!r.waiting.some((w) => w.includes("command claimed by another executor")));
   assert.equal(claimsFor(store, running.id).length, 1, "no second claim");
 });
@@ -331,25 +334,25 @@ test("reconciliation budget preflight counts child results, so a too-large promp
 test("reconciliation uses the ACP lead recorded in the claim, not the current active lead", async () => {
   const store = new MemoryStore();
   const running = store.add({ title: "[Claude] Running", description: COMMAND_MARKER, stateType: "started" });
-  store.add({ title: "[Gemini] a", parentId: running.id, stateType: "completed" });
-  await store.comment(running.id, `${EXECUTOR_MARKER} acp:gemini`);
+  store.add({ title: "[ChatGPT] a", parentId: running.id, stateType: "completed" });
+  await store.comment(running.id, `${EXECUTOR_MARKER} acp:chatgpt`);
   const claudeSeen: ChatMessage[][] = [];
-  const geminiSeen: ChatMessage[][] = [];
-  const d = deps(store, { claude: scripted(["c"], claudeSeen), gemini: scripted(["g"], geminiSeen) }, { ACP_DEFAULT_LEAD: "gemini" });
+  const chatgptSeen: ChatMessage[][] = [];
+  const d = deps(store, { claude: scripted(["c"], claudeSeen), chatgpt: scripted(["g"], chatgptSeen) }, { ACP_DEFAULT_LEAD: "chatgpt" });
   await tick(d);
   assert.equal(claudeSeen.length, 0, "current lead never called");
-  assert.equal(geminiSeen.length, 1, "recorded lead reconciles");
+  assert.equal(chatgptSeen.length, 1, "recorded lead reconciles");
 });
 
 test("reconciliation keeps an ACP lead recorded only in an executor label", async () => {
   const store = new MemoryStore();
-  const running = store.add({ title: "[Claude] Running", description: COMMAND_MARKER, stateType: "started", labels: ["executor:acp:gemini"] });
-  store.add({ title: "[Gemini] a", parentId: running.id, stateType: "completed" });
+  const running = store.add({ title: "[Claude] Running", description: COMMAND_MARKER, stateType: "started", labels: ["executor:acp:chatgpt"] });
+  store.add({ title: "[ChatGPT] a", parentId: running.id, stateType: "completed" });
   const claudeSeen: ChatMessage[][] = [];
-  const geminiSeen: ChatMessage[][] = [];
-  await tick(deps(store, { claude: scripted(["c"], claudeSeen), gemini: scripted(["g"], geminiSeen) }, { ACP_DEFAULT_LEAD: "gemini" }));
+  const chatgptSeen: ChatMessage[][] = [];
+  await tick(deps(store, { claude: scripted(["c"], claudeSeen), chatgpt: scripted(["g"], chatgptSeen) }, { ACP_DEFAULT_LEAD: "chatgpt" }));
   assert.equal(claudeSeen.length, 0);
-  assert.equal(geminiSeen.length, 1);
+  assert.equal(chatgptSeen.length, 1);
 });
 
 test("dry-run over a store without getLabels keeps the snapshot label fence", async () => {
@@ -365,20 +368,20 @@ test("dry-run over a store without getLabels keeps the snapshot label fence", as
   const dry = new DryRunStore(bare);
   assert.equal(dry.getLabels, undefined);
   const seen: ChatMessage[][] = [];
-  const d = deps(store, { gemini: scripted(["{}"], seen) }, { ACP_DEFAULT_LEAD: "gemini" });
+  const d = deps(store, { chatgpt: scripted(["{}"], seen) }, { ACP_DEFAULT_LEAD: "chatgpt" });
   d.store = dry;
   await tick(d);
   assert.equal(seen.length, 0, "fenced command never reaches the model");
 });
 
-test("ARN-56: [Question] issues are never worked or planned, even with Gemini ownership", async () => {
+test("ARN-56: [Question] issues are never worked or planned, even with ChatGPT ownership", async () => {
   const store = new MemoryStore();
-  const q1 = store.add({ title: "[Question] what is blocked?", labels: ["gemini"] });
-  const q2 = store.add({ title: "  [question] status", assignee: "Gemini" } as any);
-  const q3 = store.add({ title: "[QUESTION] plan it", labels: ["gemini"], description: `**${COMMAND_MARKER}**` });
-  const t = store.add({ title: "[Gemini] real task" });
+  const q1 = store.add({ title: "[Question] what is blocked?", labels: ["chatgpt"] });
+  const q2 = store.add({ title: "  [question] status", assignee: "ChatGPT" } as any);
+  const q3 = store.add({ title: "[QUESTION] plan it", labels: ["chatgpt"], description: `**${COMMAND_MARKER}**` });
+  const t = store.add({ title: "[ChatGPT] real task" });
   const seen: ChatMessage[][] = [];
-  await tick(deps(store, { gemini: scripted([done], seen) }));
+  await tick(deps(store, { chatgpt: scripted([done], seen) }));
   assert.equal(seen.length, 1, "only the normal task reached the model");
   for (const q of [q1, q2, q3]) {
     assert.equal(store.issues.find((i) => i.id === q.id)!.stateType, "unstarted");
@@ -393,9 +396,9 @@ test("ARN-56: [Question] issues are never worked or planned, even with Gemini ow
 test("ARN-56: a started command renamed to [Question] is never reconciled", async () => {
   const store = new MemoryStore();
   const cmd = store.add({ title: "[Question] was a command", description: COMMAND_MARKER, stateType: "started" });
-  store.add({ title: "[Gemini] a", parentId: cmd.id, stateType: "completed" });
+  store.add({ title: "[ChatGPT] a", parentId: cmd.id, stateType: "completed" });
   const seen: ChatMessage[][] = [];
-  await tick(deps(store, { gemini: scripted(["summary"], seen) }));
+  await tick(deps(store, { chatgpt: scripted(["summary"], seen) }));
   assert.equal(seen.length, 0);
   assert.equal(store.issues.find((i) => i.id === cmd.id)!.stateType, "started");
   assert.equal(store.comments.get(cmd.id), undefined);

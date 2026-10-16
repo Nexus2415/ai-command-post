@@ -1,4 +1,4 @@
-import type { AgentKey, Config } from "./config.ts";
+import { isSuspended, type AgentKey, type Config } from "./config.ts";
 
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
@@ -119,12 +119,18 @@ export function geminiClient(apiKey: string, model: string, f: Fetch = fetch): M
   };
 }
 
-/** Builds a client for each agent whose API key is present. Missing keys simply leave that agent offline. */
+/**
+ * Builds a client for each agent whose API key is present. Missing keys simply leave that agent offline.
+ * Suspended agents (ARN-115) get no client even when their key is present, so they can never be called.
+ */
 export function buildClients(cfg: Config, f: Fetch = fetch): Partial<Record<AgentKey, ModelClient>> {
   const out: Partial<Record<AgentKey, ModelClient>> = {};
-  if (cfg.keys.anthropic) out.claude = anthropicClient(cfg.keys.anthropic, cfg.models.claude, f);
-  if (cfg.keys.openai) out.chatgpt = chatCompletionsClient("openai", "https://api.openai.com/v1", cfg.keys.openai, cfg.models.chatgpt, f);
-  if (cfg.keys.gemini) out.gemini = geminiClient(cfg.keys.gemini, cfg.models.gemini, f);
-  if (cfg.keys.perplexity) out.perplexity = chatCompletionsClient("perplexity", "https://api.perplexity.ai", cfg.keys.perplexity, cfg.models.perplexity, f);
+  const add = (key: AgentKey, apiKey: string | undefined, make: (k: string) => ModelClient) => {
+    if (apiKey && !isSuspended(key)) out[key] = make(apiKey);
+  };
+  add("claude", cfg.keys.anthropic, (k) => anthropicClient(k, cfg.models.claude, f));
+  add("chatgpt", cfg.keys.openai, (k) => chatCompletionsClient("openai", "https://api.openai.com/v1", k, cfg.models.chatgpt, f));
+  add("gemini", cfg.keys.gemini, (k) => geminiClient(k, cfg.models.gemini, f));
+  add("perplexity", cfg.keys.perplexity, (k) => chatCompletionsClient("perplexity", "https://api.perplexity.ai", k, cfg.models.perplexity, f));
   return out;
 }
