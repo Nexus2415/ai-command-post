@@ -41,6 +41,9 @@ const BRANCH_RE = /^acp\/[a-z0-9][a-z0-9._-]{0,62}$/;
 export const MAX_PR_FILES = 20;
 const MAX_PATH = 255;
 const SEGMENT_RE = /^[A-Za-z0-9._@+-][A-Za-z0-9 ._@+-]*$/;
+export const MAX_FILE_CHARS = 1_000_000;
+export const MAX_TITLE_CHARS = 200;
+export const MAX_BODY_CHARS = 20_000;
 /**
  * Paths an agent may never write: CI and automation config (a PR can run workflows with repository secrets),
  * ownership and security policy, git internals, and environment/secret files.
@@ -53,10 +56,26 @@ const PROTECTED: RegExp[] = [
   /(^|\/)\.gitmodules$/i,
   /(^|\/)\.gitattributes$/i,
   /(^|\/)CODEOWNERS$/i,
-  /(^|\/)\.env(\.|$)/i,
+  /(^|\/)\.env(rc)?(\.|$)/i,
   /(^|\/)\.npmrc$/i,
   /(^|\/)vercel\.json$/i,
+  // Files that run on install, commit or deploy (dependency scripts, git hooks, local Vercel config).
+  /(^|\/)package(-lock)?\.json$/i,
+  /(^|\/)(npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?)$/i,
+  /(^|\/)\.husky(\/|$)/i,
+  /(^|\/)\.vercel(\/|$)/i,
 ];
+
+/** A plain relative path: no empty, ".", ".." or dot/space-terminated segments (".." would climb out of the API path). */
+function plainPath(v: unknown, what: string): string {
+  if (typeof v !== "string" || !v || v.length > MAX_PATH) throw new Error(`${what} needs a path of 1-255 characters`);
+  for (const seg of v.split("/")) {
+    if (!seg || seg === "." || seg === ".." || !SEGMENT_RE.test(seg) || seg.endsWith(" ") || seg.endsWith(".")) {
+      throw new Error(`${what} path "${v}" is not a plain relative repository path`);
+    }
+  }
+  return v;
+}
 
 export function prBranch(v: unknown): string {
   if (typeof v !== "string" || !BRANCH_RE.test(v) || v.includes("..") || v.endsWith(".lock") || v.endsWith(".") || v.includes("/.")) {
@@ -66,15 +85,9 @@ export function prBranch(v: unknown): string {
 }
 
 export function prPath(v: unknown): string {
-  if (typeof v !== "string" || !v || v.length > MAX_PATH) throw new Error("Each file needs a path of 1-255 characters");
-  const segments = v.split("/");
-  for (const seg of segments) {
-    if (!seg || seg === "." || seg === ".." || !SEGMENT_RE.test(seg) || seg.endsWith(" ")) {
-      throw new Error(`File path "${v}" is not a plain relative repository path`);
-    }
-  }
-  if (PROTECTED.some((re) => re.test(v))) throw new Error(`File path "${v}" is protected: agents may not change CI, ownership, git or secret files`);
-  return v;
+  const p = plainPath(v, "File");
+  if (PROTECTED.some((re) => re.test(p))) throw new Error(`File path "${p}" is protected: agents may not change CI, ownership, git, install-time or secret files`);
+  return p;
 }
 
 export function prFiles(v: unknown): { path: string; content: string }[] {
@@ -83,6 +96,7 @@ export function prFiles(v: unknown): { path: string; content: string }[] {
   const seen = new Set<string>();
   return v.map((f) => {
     if (!f || typeof f !== "object" || typeof f.content !== "string") throw new Error("Each file needs path and content");
+    if (f.content.length > MAX_FILE_CHARS) throw new Error(`File content may be at most ${MAX_FILE_CHARS} characters`);
     const path = prPath(f.path);
     const key = path.toLowerCase();
     if (seen.has(key)) throw new Error(`File path "${path}" appears more than once`);
@@ -92,6 +106,21 @@ export function prFiles(v: unknown): { path: string; content: string }[] {
 }
 
 const encodePath = (p: string) => p.split("/").map(encodeURIComponent).join("/");
+
+/** Reads may target the repository root (empty path) or any plain relative path; never ".." (ARN-119 review F1). */
+export function readPath(v: unknown): string {
+  if (v === undefined || v === "") return "";
+  return plainPath(typeof v === "string" ? v.replace(/\/+$/, "") : v, "Read");
+}
+
+/** A git ref passed as a single URL segment: "." or ".." would be normalised into a different API path. */
+export function gitRef(v: unknown, fallback: string): string {
+  if (v === undefined) return fallback;
+  if (typeof v !== "string" || !v.trim() || v.length > 255 || /^\.{1,2}$/.test(v.trim()) || /[\u0000-\u001f\u007f]/.test(v)) {
+    throw new Error('"ref" must be a branch, tag or commit name');
+  }
+  return v.trim();
+}
 
 async function gh(env: ToolEnv, path: string, init: RequestInit = {}): Promise<any> {
   if (!env.githubToken) throw new Error("GITHUB_TOKEN is not set");
@@ -126,15 +155,15 @@ async function firecrawl(env: ToolEnv, path: string, body: unknown): Promise<any
 const HANDLERS: Record<string, (input: Record<string, unknown>, env: ToolEnv) => Promise<string>> = {
   async "github.read_file"(input, env) {
     const repo = str(input, "repo");
-    const path = str(input, "path");
-    const ref = typeof input["ref"] === "string" ? `?ref=${encodeURIComponent(input["ref"])}` : "";
-    const j = await gh(env, `/repos/${repo}/contents/${path.split("/").map(encodeURIComponent).join("/")}${ref}`);
+    const path = readPath(input["path"]);
+    const ref = input["ref"] === undefined ? "" : `?ref=${encodeURIComponent(gitRef(input["ref"], ""))}`;
+    const j = await gh(env, `/repos/${repo}/contents/${encodePath(path)}${ref}`);
     if (Array.isArray(j)) return j.map((e: any) => `${e.type}\t${e.path}`).join("\n");
     return Buffer.from(j.content ?? "", "base64").toString("utf8");
   },
   async "github.list_tree"(input, env) {
     const repo = str(input, "repo");
-    const ref = typeof input["ref"] === "string" ? input["ref"] : "HEAD";
+    const ref = gitRef(input["ref"], "HEAD");
     const j = await gh(env, `/repos/${repo}/git/trees/${encodeURIComponent(ref)}?recursive=1`);
     return (j.tree ?? []).filter((t: any) => t.type === "blob").map((t: any) => t.path).join("\n");
   },
@@ -148,6 +177,8 @@ const HANDLERS: Record<string, (input: Record<string, unknown>, env: ToolEnv) =>
     const repo = str(input, "repo");
     const title = str(input, "title");
     const body = typeof input["body"] === "string" ? input["body"] : "";
+    if (title.length > MAX_TITLE_CHARS || /[\r\n]/.test(title)) throw new Error(`"title" must be one line of at most ${MAX_TITLE_CHARS} characters`);
+    if (body.length > MAX_BODY_CHARS) throw new Error(`"body" may be at most ${MAX_BODY_CHARS} characters`);
     // Everything is validated before any GitHub call, dry run included (ARN-119).
     const branch = prBranch(input["branch"]);
     const files = prFiles(input["files"]);

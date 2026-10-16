@@ -2,7 +2,7 @@
 // GitHub call. Synthetic only: a fake fetch records requests; nothing reaches GitHub.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { MAX_PR_FILES, prBranch, prFiles, prPath, runTool, type ToolEnv } from "../src/tools.ts";
+import { MAX_BODY_CHARS, MAX_FILE_CHARS, MAX_PR_FILES, MAX_TITLE_CHARS, gitRef, prBranch, prFiles, prPath, readPath, runTool, type ToolEnv } from "../src/tools.ts";
 
 const REPO = "acme/app";
 const ok = (path = "src/a.ts") => ({ path, content: "x" });
@@ -25,9 +25,10 @@ function rig(opts: { dryRun?: boolean; defaultBranch?: string } = {}) {
     policy: { allowPullRequests: true, allowedRepos: [REPO] },
     comment: async () => {}, requestApproval: async () => {},
   };
+  const run = (tool: string, input: Record<string, unknown>) => runTool({ tool, input: { repo: REPO, ...input } }, [tool], env);
   const open = (input: Record<string, unknown>) =>
     runTool({ tool: "github.open_pull_request", input: { repo: REPO, title: "Add tests", branch: "acp/add-tests", files: [ok()], ...input } }, ["github.open_pull_request"], env);
-  return { calls, open };
+  return { calls, open, run };
 }
 
 test("branch names must be acp/<short-name>", () => {
@@ -103,4 +104,50 @@ test("the dry run of a valid request makes no GitHub call", async () => {
   const r = await open({});
   assert.match(r.output, /DRY RUN: would open PR/);
   assert.equal(calls.length, 0);
+});
+
+// Perplexity review of PR #52 (ARN-119), finding 1: github.read_file let ".." segments climb out of
+// /repos/<repo>/contents/ after URL normalisation, reaching other repositories past the ACP_GITHUB_REPOS allowlist.
+test("read paths and refs cannot climb out of the allowlisted repository", async () => {
+  for (const p of ["../x", "../../../user", "../../../other/private/contents/x", "src/../../x", "./x", "a/./b", "src//x", "x\\y", "x?y", "x#y"]) {
+    assert.throws(() => readPath(p), /plain relative/, p);
+  }
+  for (const r of ["..", ".", " .. ", "", "a\u0000b"]) assert.throws(() => gitRef(r, "HEAD"), /ref/, JSON.stringify(r));
+  assert.equal(readPath(undefined), "");
+  assert.equal(readPath("src/"), "src");
+  assert.equal(gitRef(undefined, "HEAD"), "HEAD");
+  assert.equal(gitRef("feature/x", "HEAD"), "feature/x");
+
+  for (const [tool, input] of [
+    ["github.read_file", { path: "../../../user" }],
+    ["github.read_file", { path: "../../../other/private/contents/x" }],
+    ["github.read_file", { path: "src/a.ts", ref: ".." }],
+    ["github.list_tree", { ref: ".." }],
+  ] as const) {
+    const { calls, run } = rig();
+    const r = await run(tool, input);
+    assert.equal(r.ok, false, `${tool} ${JSON.stringify(input)}`);
+    assert.equal(calls.length, 0, "no GitHub request");
+  }
+
+  const { calls, run } = rig();
+  await run("github.read_file", { path: "docs/a b.md", ref: "feature/x" });
+  await run("github.read_file", {});
+  const paths = calls.map((c) => { const u = new URL(c.url); return u.pathname + u.search; });
+  assert.deepEqual(paths, [`/repos/${REPO}/contents/docs/a%20b.md?ref=feature%2Fx`, `/repos/${REPO}/contents/`]);
+});
+
+// Finding 3: dot-terminated segments, .envrc, install-time files and unbounded sizes.
+test("install-time, dot-terminated and .envrc paths are refused, and sizes are capped", async () => {
+  for (const p of [".git./config", "src/x.", ".envrc", "app/.envrc", "package.json", "web/package.json", "package-lock.json",
+    "yarn.lock", "pnpm-lock.yaml", "bun.lockb", ".husky/pre-commit", ".vercel/project.json"]) {
+    assert.throws(() => prPath(p), /path/, p);
+  }
+  assert.throws(() => prFiles([{ path: "a.ts", content: "x".repeat(MAX_FILE_CHARS + 1) }]), /at most/);
+  for (const bad of [{ title: "x".repeat(MAX_TITLE_CHARS + 1) }, { title: "one\ntwo" }, { body: "x".repeat(MAX_BODY_CHARS + 1) }]) {
+    const { calls, open } = rig();
+    const r = await open(bad);
+    assert.equal(r.ok, false, JSON.stringify(bad).slice(0, 60));
+    assert.equal(calls.length, 0);
+  }
 });
