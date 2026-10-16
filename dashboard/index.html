@@ -170,7 +170,7 @@ button.link{background:none;border:0;padding:0;margin-left:8px;color:inherit;tex
         <dt>Status</dt><dd id="engStatus">Live on GitHub, every 15 min</dd>
         <dt>Monthly cap</dt><dd>$0.00</dd>
         <dt>Spent this month</dt><dd>$0.00</dd>
-        <dt>Mode</dt><dd>Free tiers only (Gemini)</dd>
+        <dt>Mode</dt><dd>Gemini paused by owner</dd>
       </dl>
       <div class="meter" aria-hidden="true"><i></i></div>
       <p class="note">The engine checks Linear every 15 minutes and picks up new commands. Merges, purchases and customer-facing actions always wait for your approval.</p>
@@ -250,7 +250,7 @@ const AGENTS=[
   {key:"perplexity",name:"Perplexity",role:"Live web research and evidence",re:/perplexity|sonar/i},
 ];
 const $=id=>document.getElementById(id);
-let mcp=null, db=null, issues=[], team=null, lead="gemini", unwatch=null, pending=false;
+let mcp=null, db=null, issues=[], team=null, lead="chatgpt", unwatch=null, pending=false;
 
 function tick(){const d=new Date();const p=n=>String(n).padStart(2,"0");
   $("clkL").textContent=p(d.getHours())+":"+p(d.getMinutes());
@@ -396,7 +396,7 @@ $("confirmBtn").onclick=async()=>{
   }finally{pending=false;$("confirmBtn").disabled=false;$("issueBtn").hidden=false;$("confirmBox").hidden=true;}
 };
 
-lead=lsGet("acp.lead")||"gemini"; if(!AGENTS.find(a=>a.key===lead))lead="gemini";
+lead=lsGet("acp.lead")||"chatgpt"; if(!AGENTS.find(a=>a.key===lead)||lead==="gemini")lead="chatgpt";
 renderLead(); renderRoster();
 
 // Website mode: outside Claude, the page talks to Linear through its own /api/linear backend, locked by a password.
