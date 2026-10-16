@@ -8,6 +8,9 @@ export const COMMAND_MARKER = "Command issued from AI Command Post"; // must mat
 export const MAX_TEXT = 4000;
 const MAX_BODY = 8192;
 const LEADS = { gemini: "Gemini", claude: "Claude", chatgpt: "ChatGPT", perplexity: "Perplexity" };
+// Owner suspension (ARN-43, 2026-10-09; ARN-115). Must match SUSPENDED_AGENTS in src/config.ts (a test checks).
+// A suspended lead is refused even when ACP_DEFAULT_LEAD and ACP_INTAKE_ALLOWED_LEADS both name it.
+export const SUSPENDED_LEADS = Object.freeze(["gemini"]);
 const KEY_RE = /^[A-Za-z0-9_-]{16,64}$/;
 
 const error = (status, message) => ({ status, body: { error: message } });
@@ -37,11 +40,13 @@ export function issueIdFor(key) {
 /**
  * Commands need an explicitly authorized lead (ARN-76). The lead is ACP_DEFAULT_LEAD and must also be listed in
  * ACP_INTAKE_ALLOWED_LEADS (comma-separated). Missing, unknown or unlisted leads refuse the command: no default
- * lead, no reroute to another AI. Questions never need a lead.
+ * lead, no reroute to another AI. A suspended lead is refused whatever the environment says (ARN-115).
+ * Questions never need a lead.
  */
 export function commandLead(env) {
   const lead = String(env.ACP_DEFAULT_LEAD || "").trim().toLowerCase();
   const allowed = String(env.ACP_INTAKE_ALLOWED_LEADS || "").split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
+  if (SUSPENDED_LEADS.includes(lead)) return null;
   return Object.hasOwn(LEADS, lead) && allowed.includes(lead) ? lead : null;
 }
 
@@ -58,7 +63,7 @@ export function buildIssue(intent, text, lead, at) {
       description: `**Owner question (read-only)**\n\n${stamp}\n- Intent: question. Answer in comments only; this is not authority to run tools, open PRs or change anything.\n\n## Question\n\n${clean}`,
     };
   }
-  if (!Object.hasOwn(LEADS, lead)) throw new Error("Command lead is not authorized.");
+  if (!Object.hasOwn(LEADS, lead) || SUSPENDED_LEADS.includes(lead)) throw new Error("Command lead is not authorized.");
   const name = LEADS[lead];
   return {
     title: `[${name}] ${first}`,

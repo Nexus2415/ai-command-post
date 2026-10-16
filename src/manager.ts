@@ -12,7 +12,7 @@
 // comment is not an atomic lock (ARN-52), so no lock is invented here. The Postgres RPC behind the port is ARN-88.
 import { createHash } from "node:crypto";
 import { DEFAULT_RATES } from "./budget.ts";
-import type { AgentKey, Config } from "./config.ts";
+import { SUSPENDED_AGENTS, type AgentKey, type Config } from "./config.ts";
 import type { Tier } from "./policy.ts";
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -226,7 +226,7 @@ export function inertPorts(): Ports {
 }
 
 /** Roster from config key presence, with Gemini suspended (owner decision). Never reads the environment itself. */
-export function rosterFromConfig(cfg: Config, suspended: AgentKey[] = ["gemini"]): ExecutorProfile[] {
+export function rosterFromConfig(cfg: Config, suspended: readonly AgentKey[] = SUSPENDED_AGENTS): ExecutorProfile[] {
   const keyOf: Record<AgentKey, string | undefined> = { claude: cfg.keys.anthropic, chatgpt: cfg.keys.openai, gemini: cfg.keys.gemini, perplexity: cfg.keys.perplexity };
   return (Object.keys(keyOf) as AgentKey[]).map((key) => ({
     key,

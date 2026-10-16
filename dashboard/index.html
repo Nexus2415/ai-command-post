@@ -170,7 +170,7 @@ button.link{background:none;border:0;padding:0;margin-left:8px;color:inherit;tex
         <dt>Status</dt><dd id="engStatus">Live on GitHub, every 15 min</dd>
         <dt>Monthly cap</dt><dd>$0.00</dd>
         <dt>Spent this month</dt><dd>$0.00</dd>
-        <dt>Mode</dt><dd>Free tiers only (Gemini)</dd>
+        <dt>Mode</dt><dd>Gemini paused by owner</dd>
       </dl>
       <div class="meter" aria-hidden="true"><i></i></div>
       <p class="note">The engine checks Linear every 15 minutes and picks up new commands. Merges, purchases and customer-facing actions always wait for your approval.</p>
@@ -249,8 +249,11 @@ const AGENTS=[
   {key:"gemini",name:"Gemini",role:"Google ecosystem and independent challenge",re:/gemini/i},
   {key:"perplexity",name:"Perplexity",role:"Live web research and evidence",re:/perplexity|sonar/i},
 ];
+// Paused by the owner (ARN-115); must match the suspension list in src/config.ts. Never selectable or issued as lead.
+const PAUSED=Object.freeze(["gemini"]);
+const paused=k=>PAUSED.includes(k);
 const $=id=>document.getElementById(id);
-let mcp=null, db=null, issues=[], team=null, lead="gemini", unwatch=null, pending=false;
+let mcp=null, db=null, issues=[], team=null, lead="chatgpt", unwatch=null, pending=false;
 
 function tick(){const d=new Date();const p=n=>String(n).padStart(2,"0");
   $("clkL").textContent=p(d.getHours())+":"+p(d.getMinutes());
@@ -276,11 +279,11 @@ function esc(s){const d=document.createElement("div");d.textContent=s==null?"":S
 
 function renderLead(){
   const seg=$("leadSeg"); seg.innerHTML="";
-  AGENTS.forEach(a=>{const b=document.createElement("button");b.type="button";b.dataset.ag=a.key;b.setAttribute("aria-pressed",String(a.key===lead));
+  AGENTS.filter(a=>!paused(a.key)).forEach(a=>{const b=document.createElement("button");b.type="button";b.dataset.ag=a.key;b.setAttribute("aria-pressed",String(a.key===lead));
     b.innerHTML='<span class="dot"></span>'+esc(a.name)+(a.key===lead?' <span class="mono note">LEAD</span>':"");
     b.onclick=()=>setLead(a.key); seg.appendChild(b);});
 }
-async function setLead(k){lead=k;renderLead();renderRoster();lsSet("acp.lead",k);
+async function setLead(k){if(paused(k)||!AGENTS.find(a=>a.key===k))return;lead=k;renderLead();renderRoster();lsSet("acp.lead",k);
   if(db){try{await db.doc("settings/lead").set({agent:k})}catch(e){}}}
 
 function renderRoster(){
@@ -374,13 +377,17 @@ $("issueBtn").onclick=()=>{
   if(!mcp){say("Linear isn't available in this view, so commands can't be sent from here.","err");return}
   if(!team){say("Pick a workspace first.","warn");return}
   const a=AGENTS.find(x=>x.key===lead);
+  if(!a||paused(a.key)){say("That lead AI is paused by the owner. Pick another lead.","err");return}
   say("This creates a new issue in <b>"+esc(team)+"</b> titled <span class='mono'>["+esc(a.name)+"] "+esc(t.slice(0,80))+(t.length>80?"…":"")+"</span>.","");
   $("issueBtn").hidden=true;$("confirmBox").hidden=false;
 };
 $("cancelBtn").onclick=()=>{$("issueBtn").hidden=false;$("confirmBox").hidden=true;say("")};
 $("confirmBtn").onclick=async()=>{
-  if(pending)return; pending=true; $("confirmBtn").disabled=true;
+  if(pending)return;
   const t=$("cmdText").value.trim(); const a=AGENTS.find(x=>x.key===lead);
+  // Fail closed again right before the write: this path calls Linear directly and never reaches api/intake.js.
+  if(!a||paused(a.key)){say("That lead AI is paused by the owner. Nothing was sent.","err");$("issueBtn").hidden=false;$("confirmBox").hidden=true;return}
+  pending=true; $("confirmBtn").disabled=true;
   const title="["+a.name+"] "+(t.split("\n")[0].slice(0,120));
   const description="**Command issued from AI Command Post**\n\n- Lead AI: "+a.name+"\n- Issued: "+new Date().toISOString()+"\n\n## Command\n\n"+t+
     "\n\n## Rules\n\n- The lead breaks this into sub-issues and assigns each to an AI by putting its name in [brackets] at the start of the title.\n- No merges to main, purchases, credential changes or customer-facing actions without owner approval.\n- Record evidence and handoff notes as comments on this issue.";
@@ -396,7 +403,7 @@ $("confirmBtn").onclick=async()=>{
   }finally{pending=false;$("confirmBtn").disabled=false;$("issueBtn").hidden=false;$("confirmBox").hidden=true;}
 };
 
-lead=lsGet("acp.lead")||"gemini"; if(!AGENTS.find(a=>a.key===lead))lead="gemini";
+lead=lsGet("acp.lead")||"chatgpt"; if(!AGENTS.find(a=>a.key===lead)||paused(lead))lead="chatgpt";
 renderLead(); renderRoster();
 
 // Website mode: outside Claude, the page talks to Linear through its own /api/linear backend, locked by a password.
@@ -428,7 +435,7 @@ if(!cl||!cl.use){showPage("Open this page in Claude to connect it to Linear.","w
   ["lProg","lQueue","lDone"].forEach(id=>$(id).innerHTML='<li class="empty">Not connected to Linear.</li>');return}
 cl.use("db").then(d=>{db=d;if(!db)return;
   try{db.doc("settings/lead").onSnapshot(s=>{const v=s&&(typeof s.data==="function"?s.data():s.data);const k=v&&v.agent;
-    if(k&&k!==lead&&AGENTS.find(a=>a.key===k)){lead=k;lsSet("acp.lead",k);renderLead();renderRoster();}})}catch(e){}
+    if(k&&k!==lead&&!paused(k)&&AGENTS.find(a=>a.key===k)){lead=k;lsSet("acp.lead",k);renderLead();renderRoster();}})}catch(e){}
 }).catch(()=>{});
 cl.use("mcp").then(m=>{mcp=m;
   if(!mcp){showPage("Linear isn't available in this view. Open the page signed in to Claude with the Linear connector added.","warn");

@@ -1,6 +1,6 @@
 import { AGENTS, AGENT_LIST, agentFor, titleFor } from "./agents.ts";
 import { Budget, estimateTokens } from "./budget.ts";
-import { isAgentKey, type AgentKey, type Config } from "./config.ts";
+import { isAgentKey, isSuspended, type AgentKey, type Config } from "./config.ts";
 import { extractJson } from "./json.ts";
 import type { Issue, TaskStore } from "./linear.ts";
 import { ProviderError, type ChatMessage, type ModelClient } from "./providers.ts";
@@ -56,12 +56,21 @@ export function leadFor(i: Issue, fallback: AgentKey): AgentKey {
   return agentFor({ title: i.title, labels: i.labels, assignee: i.assignee }) ?? fallback;
 }
 
-/** The named lead if it has an API key; otherwise the default lead, so a command never waits on an offline AI. */
+/**
+ * The named lead if it has an API key; otherwise the default lead, so a command never waits on an offline AI.
+ * A suspended default lead (ARN-115) is never a fallback: tick() has already removed its client.
+ */
 function activeLead(d: Deps, cmd: Issue): { lead: AgentKey; note: string } {
   const named = leadFor(cmd, d.cfg.defaultLead);
   if (d.clients[named] || !d.clients[d.cfg.defaultLead]) return { lead: named, note: "" };
   const lead = d.cfg.defaultLead;
-  return { lead, note: `${AGENTS[named].name} isn't connected, so ${AGENTS[lead].name} led instead.\n\n` };
+  const why = isSuspended(named) ? "is suspended by the owner" : "isn't connected";
+  return { lead, note: `${AGENTS[named].name} ${why}, so ${AGENTS[lead].name} led instead.\n\n` };
+}
+
+/** Clients the engine may call: suspended agents are dropped however the client map was built (ARN-115). */
+export function runnableClients(clients: Deps["clients"]): Deps["clients"] {
+  return Object.fromEntries(Object.entries(clients).filter(([k]) => isAgentKey(k) && !isSuspended(k)));
 }
 
 /*
@@ -341,7 +350,8 @@ async function reconcile(d: Deps, cmd: Issue, lead: AgentKey, children: Issue[],
   report.reconciled.push(cmd.identifier);
 }
 
-export async function tick(d: Deps): Promise<TickReport> {
+export async function tick(deps: Deps): Promise<TickReport> {
+  const d: Deps = { ...deps, clients: runnableClients(deps.clients) };
   const report: TickReport = { active: d.cfg.active, planned: [], worked: [], reconciled: [], waiting: [], errors: [] };
   const issues = await d.store.listOpenAndRecent(d.cfg.linearTeamKey);
   const byId = new Map(issues.map((i) => [i.id, i]));
