@@ -14,7 +14,7 @@ Merging to `main` redeploys https://ai-command-post.vercel.app within a minute o
 | 4 | #57 | Keeps a copy of the spend ledger in Linear so it survives cache loss (built on #54 and #56) |
 | 5 | #58 | Current AI prices (Claude, ChatGPT, Perplexity per-request fee) |
 | 6 | #59 | The engine backs off when someone else claimed a task first |
-| 7 | docs PR | This checklist plus refreshed HANDOFF, README and RUNBOOK |
+| 7 | #60 | This checklist plus refreshed HANDOFF, README and RUNBOOK |
 
 For each one:
 1. Open `github.com/Nexus2415/ai-command-post/pull/<number>`.
