@@ -55,9 +55,26 @@
   // Owner questions filed through intake are read-only, not unclaimed work.
   const isQuestion = it => /^\[Question\]/.test(String(it && it.title || ""));
   const ownerLabel = it => AGENT_NAME[it && it.owner] || (isQuestion(it) ? "Owner question · no execution" : "Unclaimed");
+  // Engine and budget panel rows from the engine's own status report (display only; nothing is authorized by it).
+  const STALE_MS = 6 * 3600 * 1000; // GitHub fires scheduled runs hours apart, so only a long gap is flagged.
+  const usd = (n, dp) => "$" + Number(n).toFixed(dp);
+  function engineRows(engine, nowMs) {
+    if (!engine) return [{ label: "Engine status", value: "Not reported yet. It appears after the engine's next run.", tone: "warn" }];
+    const age = nowMs - Date.parse(engine.at);
+    const b = engine.budget, c = engine.counts;
+    const ago = age < 3600e3 ? Math.max(0, Math.round(age / 60e3)) + " min ago" : Math.round(age / 3600e3) + " h ago";
+    return [
+      { label: "Last engine run", value: fmtTime(engine.at) + " (" + ago + ")", tone: age > STALE_MS ? "warn" : null },
+      { label: "Mode", value: engine.dryRun ? "Dry run, no writes" : "Live writes", tone: null },
+      { label: "Spent " + b.month, value: usd(b.spentUsd, 4) + " of " + usd(b.capUsd, 2) + " cap", tone: null },
+      { label: "Paid AI calls", value: b.ledgerProblem ? "Blocked: " + b.ledgerProblem : b.capUsd > 0 ? "Allowed within the cap" : "Off: the monthly cap is zero", tone: b.ledgerProblem ? "warn" : null },
+      { label: "AIs online", value: engine.agentsOnline.map(k => AGENT_NAME[k] || k).join(", ") || "None", tone: null },
+      { label: "Last run", value: c.planned + " planned, " + c.worked + " worked, " + c.reconciled + " reconciled, " + c.waiting + " waiting, " + c.errors + " errors", tone: c.errors ? "warn" : null },
+    ];
+  }
   // Only plain http(s) links are rendered; javascript:, data: and the like are dropped.
   function safeUrl(u) { const s = String(u || "").trim(); return /^https?:\/\/[^\s]+$/i.test(s) ? s : null; }
-  const api = { safeUrl, ownerLabel, TABS, laneCounts, laneIssues, rosterRow, connectionLabel, intakeBody, errorMessage, QUESTION_EXPLANATION, isIssueId: s => ID_RE.test(String(s)) };
+  const api = { engineRows, safeUrl, ownerLabel, TABS, laneCounts, laneIssues, rosterRow, connectionLabel, intakeBody, errorMessage, QUESTION_EXPLANATION, isIssueId: s => ID_RE.test(String(s)) };
   root.ACPConsoleCore = api;
   if (typeof document === "undefined") return;
 
@@ -98,7 +115,18 @@
       setMsg($("cOverviewMsg"), e.message + (overview ? " Showing the last data received." : ""), "err");
       $("cUpdated").textContent = overview ? "Last updated " + fmtTime(overview.fetchedAt) + " (stale)" : "Not loaded";
     } finally { $("cRefresh").disabled = false; }
-    renderTabs(); renderList(); renderRoster();
+    renderTabs(); renderList(); renderRoster(); renderEngine();
+  }
+
+  function renderEngine() {
+    const dl = $("cEngine");
+    dl.replaceChildren();
+    if (!overview) return;
+    engineRows(overview.engine, Date.now()).forEach(r => {
+      dl.appendChild(el("dt", null, r.label));
+      const dd = el("dd", r.tone === "warn" ? "warn" : null, r.value);
+      dl.appendChild(dd);
+    });
   }
 
   function renderTabs() {
