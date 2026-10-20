@@ -1,25 +1,13 @@
 // Website backend (Vercel serverless function). Legacy read-only adapter.
 // The active dashboard uses /api/console; command creation uses /api/intake.
 // This compatibility endpoint is fixed to the Arnexyia Launch Operations scope.
-import { timingSafeEqual } from "node:crypto";
 import { TEAM_ID, PROJECT_ID } from "./lib/console-state.js";
+import { hasSitePassword, isCrossSite } from "./lib/site-auth.js";
 
 const LINEAR = "https://api.linear.app/graphql";
 const MAX_BODY = 8192;
 const error = (status, message) => ({ status, body: { error: message } });
 const inScope = n => n?.team?.id === TEAM_ID && n?.project?.id === PROJECT_ID;
-
-function sameSecret(a, b) {
-  const x = Buffer.from(String(a)), y = Buffer.from(String(b));
-  return x.length === y.length && timingSafeEqual(x, y);
-}
-
-function crossSite(req) {
-  if (req.headers?.["sec-fetch-site"] === "cross-site") return true;
-  const origin = req.headers?.origin;
-  if (!origin) return false; // Non-browser callers still need the site password.
-  try { return new URL(origin).host !== req.headers?.host; } catch { return true; }
-}
 
 async function gql(env, f, query, variables) {
   const res = await f(LINEAR, {
@@ -63,8 +51,8 @@ const TOOLS = Object.freeze({
 // Pure request handler, so tests can drive it with a fake fetch.
 export async function handle(req, env, f = fetch) {
   if (!env.ACP_SITE_PASSWORD || !env.LINEAR_API_KEY) return error(503, "The website isn't configured yet.");
-  if (!sameSecret(req.headers?.["x-acp-password"] ?? "", env.ACP_SITE_PASSWORD)) return error(401, "Wrong password");
-  if (crossSite(req)) return error(403, "Cross-site requests are not allowed.");
+  if (!hasSitePassword(req, env)) return error(401, "Wrong password");
+  if (isCrossSite(req)) return error(403, "Cross-site requests are not allowed.");
   if (req.method !== "POST") return error(405, "POST only");
 
   let body;
