@@ -2,6 +2,13 @@
 
 Owner: Darius. Built 2026-10-07 in a Claude session that couldn't reach GitHub or the provider APIs, so everything below marked **unverified** has only been tested against fakes.
 
+## Where it stands (2026-10-20)
+
+- **Built and merged:** the engine (plan, work, reconcile), the password-locked website console at https://ai-command-post.vercel.app (`/api/console` reads, `/api/intake` files commands and questions), the fail-closed Eve adapter and OIDC preflight (dispatch unsupported), the broker adapter and manager seam (synthetic only), authenticated intake bound to opsdesk's owner intake grants (ARN-122), and PR path validation (ARN-119).
+- **Switched off on purpose:** the scheduled engine (`ACP_ACTIVE` is not `true`, so every run is skipped), Gemini (suspended in code by the owner, ARN-115), Eve dispatch, engine pull requests, and paid AI (cap $0). With Gemini suspended and no paid key, the engine has no AI that may run.
+- **Other AIs paused:** on 2026-10-20 the owner paused ChatGPT, Perplexity and Codex as reviewers and workers until further notice.
+- **Owner-only steps left** are listed in `docs/OWNER-CHECKLIST.md`.
+
 ## Owner decisions already made
 
 - Separate repo (not inside Arnexyia / opsdesk-harmony).

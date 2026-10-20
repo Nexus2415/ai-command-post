@@ -50,7 +50,9 @@ npm start                   # loop every ACP_POLL_SECONDS
 
 ## Dashboard
 
-`dashboard/index.html` is the published claude.ai page (AI Command Post). It reads Linear live through the viewer's Linear connector and creates command issues in the format the engine expects. Keep the ownership regex in `src/agents.ts` and the dashboard's `AGENTS` list in sync.
+`dashboard/index.html` is both the published claude.ai page and the website. Inside Claude it reads Linear through the viewer's Linear connector. On the website (https://ai-command-post.vercel.app) `dashboard/console.js` drives the owner console: task lanes and the agent roster from `/api/console`, commands and questions through `/api/intake`, and an Engine & budget panel fed by the engine's Linear status document. Keep the ownership regex in `src/agents.ts` and the dashboard's `AGENTS` list in sync.
+
+Current state, what is switched off and why, and the owner-only steps left: `HANDOFF.md` ("Where it stands") and `docs/OWNER-CHECKLIST.md`.
 
 ## Layout
 
@@ -70,7 +72,7 @@ test/                node:test suites (fake models, fake fetch; no network)
 
 ## Website (Vercel)
 
-The dashboard also runs as a website: `vercel.json` serves `dashboard/` and `api/linear.js` talks to Linear for it. Import the repo in Vercel and set two environment variables: `LINEAR_API_KEY` and `ACP_SITE_PASSWORD` (anyone with the password can see your Linear team and issue commands). Without both, the site refuses every request. It can list teams and issues and create new command issues, nothing else.
+The dashboard also runs as a website: `vercel.json` serves `dashboard/`, `api/console.js` (read-only) and `api/intake.js` (commands and questions) talk to Linear for it, and `api/linear.js` is the legacy read-only adapter. All of them share one password and origin check (`api/lib/site-auth.js` once ARN-83 F6 is merged). Import the repo in Vercel and set two environment variables: `LINEAR_API_KEY` and `ACP_SITE_PASSWORD` (anyone with the password can see your Linear team and issue commands). Without both, the site refuses every request. It can list teams and issues and create new command issues, nothing else.
 
 The owner console sends new commands only to an AI lead you have explicitly approved. In Vercel, set `ACP_DEFAULT_LEAD` (for example `claude`) and list it in `ACP_INTAKE_ALLOWED_LEADS` (comma-separated). If either is missing, or the lead isn't on the list, the console refuses commands and files nothing. Questions still work.
 

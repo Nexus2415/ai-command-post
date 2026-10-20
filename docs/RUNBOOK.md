@@ -2,7 +2,8 @@
 
 ## How the engine runs
 - GitHub Actions workflow `.github/workflows/engine.yml` runs on cron `7,22,37,52 * * * *` (every 15 min) and on manual dispatch (Actions tab → Engine → Run workflow). GitHub often fires scheduled runs late or hours apart.
-- Each run reads Linear team `ARN` for commands, lets the lead AI (Gemini) plan sub-issues, works them, and reconciles.
+- Each run reads Linear team `ARN` for commands, lets the lead AI plan sub-issues, works them, and reconciles. As of 2026-10-20 the engine is off (`ACP_ACTIVE` isn't `true`, so runs show as skipped) and Gemini is suspended in code (`SUSPENDED_AGENTS`), so no AI may run until the owner picks one and approves its spend.
+- After each active run the engine rewrites the Linear project document "AI Command Post: engine status"; the website console's Engine & budget panel shows it (last run, mode, spend vs cap, paid-call state, AIs online). "Not reported yet" means no active run has happened since that feature shipped.
 - Repo variables control it (Settings → Secrets and variables → Actions → Variables):
   - `ACP_ACTIVE` — `true` lets the engine act; anything else makes runs exit without work.
   - `ACP_DRY_RUN` — `true` (default) plans but writes nothing to Linear/GitHub; `false` = live writes.
@@ -31,6 +32,6 @@ Resume by reversing the change.
 - The ledger lives in a cache, which GitHub can evict, so it is a best-effort record, not a durable guarantee of paid spend. Paid keys stay off until a durable ledger exists.
 
 ## Keys and models
-- Only Gemini (free tier) is keyed (`GEMINI_API_KEY`). Linear, Firecrawl and Vercel keys are tools, not models.
+- Only Gemini (free tier) is keyed (`GEMINI_API_KEY`), and it is suspended in code by the owner (ARN-115), so it never runs. Linear, Firecrawl and Vercel keys are tools, not models.
 - No paid API keys (Anthropic, OpenAI, Perplexity, AI Gateway) may be added, and the budget may not be raised, without the owner's written approval in Linear.
 - Keys live only in GitHub Actions secrets / Vercel env vars, never in the repo or chat.
