@@ -22,7 +22,7 @@ function rig() {
   const writes: IntakeCommand[] = [], rows = new Map<string, { command: IntakeCommand; receipt: IntakeReceipt }>();
   const approval: IntakeApproval = { tenantId: T, taskId: "task-a", intent: "review_result",
     actionRef: "22222222-2222-4222-8222-222222222222", approvalRef: "33333333-3333-4333-8333-333333333333",
-    expiresAt: NOW + 300, approved: true, mode: "shadow", maxBudgetMicros: 0, authorizationBasis: "owner_internal_test" };
+    expiresAt: NOW + 300, approved: true, mode: "shadow", maxBudgetMicros: 0, authorizationBasis: "owner_intake_grant" };
   const deps: IntakeDeps = {
     mode: "synthetic", trust, now: () => clock, kill: () => kill,
     key: async kid => kid === "synthetic-key" ? pair.publicKey : null,
@@ -39,7 +39,8 @@ function rig() {
       const r: IntakeReceipt = { ok: true, committed: true, created: true,
         commandId: "44444444-4444-4444-8444-444444444444", tenantId: c.event.tenantId, eventId: c.event.eventId,
         taskId: c.event.taskId, seq: c.event.seq, claimKey: c.claimKey, idempotencyKey: c.idempotencyKey,
-        actionRef: c.approval.actionRef, approvalRef: c.approval.approvalRef };
+        actionRef: c.approval.actionRef, approvalRef: c.approval.approvalRef,
+        subject: c.scope.subject, grantId: "55555555-5555-4555-8555-555555555555", validUntil: c.validUntil };
       rows.set(c.idempotencyKey, { command: structuredClone(c), receipt: r }); return r;
     },
   };
@@ -89,7 +90,7 @@ test("invalid times, expired grants, paid/live policy, scope mismatch and kill f
   for (const over of [{ exp: NOW }, { exp: "later" }, { nbf: NOW + 1 }, { iat: NOW + 1 }, { exp: NOW + 10000 }, { exp: null }]) {
     const r = rig(); assert.equal((await r.run()(token(over), event)).status, "blocked"); assert.equal(r.writes.length, 0);
   }
-  for (const over of [{ tenantId: "other" }, { taskId: "other" }, { approved: false }, { mode: "live" }, { maxBudgetMicros: 1 }, { authorizationBasis: "client_authorization" }, { expiresAt: NOW }]) {
+  for (const over of [{ tenantId: "other" }, { taskId: "other" }, { approved: false }, { mode: "live" }, { maxBudgetMicros: 1 }, { authorizationBasis: "client_authorization" }, { authorizationBasis: "owner_internal_test" }, { expiresAt: NOW }]) {
     const r = rig(); Object.assign(r.approval, over);
     assert.equal((await r.run()(token(), event)).status, "blocked"); assert.equal(r.writes.length, 0);
   }
@@ -106,4 +107,33 @@ test("uncommitted, forged and unavailable store acknowledgments never confirm in
   }
   const r = rig(); r.deps.record = async () => { throw new Error("store down"); };
   assert.equal((await r.run()(token(), event)).status, "blocked");
+});
+test("receipt must carry the verified subject, a grant and a deadline no later than the request's", async () => {
+  const bad = [{ subject: "someone-else" }, { grantId: "not-a-uuid" }, { validUntil: NOW + 301 }, { validUntil: "later" }];
+  for (const over of bad) {
+    const r = rig(), real = r.deps.record;
+    r.deps.record = async c => ({ ...(await real(c) as IntakeReceipt), ...over });
+    const out = await r.run()(token(), event);
+    assert.equal(out.status, "blocked", JSON.stringify(over)); assert.equal(out.reason, "unconfirmed_record");
+  }
+  const r = rig(), real = r.deps.record;
+  r.deps.record = async c => { const { grantId, ...rest } = await real(c) as IntakeReceipt; void grantId; return rest; };
+  const out = await r.run()(token(), event);
+  assert.equal(out.status, "blocked"); assert.equal(out.reason, "unconfirmed_record", "a receipt without its grant is not confirmed");
+});
+test("a commit that lands after the deadline or under the kill switch is reported as such, then recovered by replay", async () => {
+  for (const after of ["late", "kill"] as const) {
+    const r = rig(), real = r.deps.record;
+    r.deps.record = async c => {
+      const out = await real(c) as IntakeReceipt;
+      if (after === "late") r.setClock(out.validUntil); else r.setKill("on");
+      return out;
+    };
+    const first = await r.run()(token(), event);
+    assert.equal(first.status, "blocked"); assert.equal(first.reason, "committed_after_deadline");
+    assert.equal(r.writes.length, 1, "the store did commit");
+    r.deps.record = real; r.setClock(NOW); r.setKill("off");
+    const again = await r.run()(token(), event);
+    assert.equal(again.status, "recorded"); assert.equal(again.receipt.created, false); assert.equal(r.writes.length, 1);
+  }
 });
