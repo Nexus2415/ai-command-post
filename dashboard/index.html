@@ -70,7 +70,7 @@ textarea{width:100%;min-height:84px;resize:vertical;border:1px solid var(--line)
 .msg.err{background:var(--bad-soft);color:var(--bad)}
 .msg.warn{background:var(--warn-soft);color:var(--warn)}
 .kv{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:13px}
-.kv dt{color:var(--muted)} .kv dd{margin:0;font-family:var(--mono);text-align:right}
+.kv dt{color:var(--muted)} .kv dd{margin:0;font-family:var(--mono);text-align:right} .kv dd.warn{color:var(--warn)}
 .meter{height:6px;border-radius:3px;background:var(--line);overflow:hidden}
 .meter i{display:block;height:100%;width:0;background:var(--good)}
 
@@ -211,6 +211,8 @@ button.link{background:none;border:0;padding:0;margin-left:8px;color:inherit;tex
         <p class="mono note" id="cUpdated" aria-live="polite">Loading…</p>
         <button class="btn ghost" id="cRefresh" type="button">Refresh</button>
         <p class="note">Read from Linear through /api/console. Agent connections are not verified; the roster shows workload only.</p>
+        <span class="eyebrow">Engine &amp; budget</span>
+        <dl class="kv" id="cEngine" aria-live="polite"></dl>
       </aside>
     </section>
     <div id="cOverviewMsg" class="msg" role="status" hidden></div>

@@ -39,6 +39,33 @@ export interface LedgerState {
   entries: LedgerEntry[];
 }
 
+/** Title of the Linear project document that keeps a durable copy of the ledger next to the Actions cache. */
+export const LEDGER_TITLE = "AI Command Post: spend ledger";
+
+export function ledgerContent(state: LedgerState): string {
+  const usd = state.entries.reduce((s, e) => s + e.usd, 0);
+  return [
+    "Written by the AI Command Post engine. Don't edit it: spend recorded here counts against the monthly cap.",
+    "",
+    `- Month: ${state.month}, spent $${usd.toFixed(4)} over ${state.entries.length} calls`,
+    "",
+    "```json",
+    JSON.stringify(state),
+    "```",
+  ].join("\n");
+}
+
+/** The JSON value in a ledger document, or `undefined` when there is no parseable block. */
+export function ledgerFromContent(content: string): unknown {
+  const m = /```json\n([^\n]*)\n```/.exec(content);
+  if (!m) return undefined;
+  try {
+    return JSON.parse(m[1]!);
+  } catch {
+    return undefined;
+  }
+}
+
 export function monthKey(d = new Date()): string {
   return d.toISOString().slice(0, 7);
 }
@@ -53,20 +80,64 @@ export class Budget {
   readonly capUsd: number;
   readonly rates: Record<AgentKey, Rate>;
 
-  constructor(opts: { capUsd: number; path?: string | null; rates?: Record<AgentKey, Rate>; now?: Date }) {
+  /** Why the stored month-to-date spend can't be trusted, or null when it can. Paid calls are refused while set. */
+  readonly ledgerProblem: string | null;
+
+  /**
+   * `resetMonth` (ACP_LEDGER_RESET) is the owner's acknowledgement, for that month only, that a missing or unreadable
+   * ledger may restart at $0. Without it a lost ledger is not silently reset while paid calls are possible (ARN-83 F5).
+   *
+   * `remote` is the durable copy kept in Linear: `null` when none exists yet, `"unreadable"` when it couldn't be read,
+   * omitted when no durable copy is in use. Both copies are merged, so spend is lost only if both lose it.
+   */
+  constructor(opts: {
+    capUsd: number;
+    path?: string | null;
+    rates?: Record<AgentKey, Rate>;
+    now?: Date;
+    resetMonth?: string;
+    remote?: unknown;
+  }) {
     this.capUsd = opts.capUsd;
     this.path = opts.path ?? null;
     this.rates = { ...(opts.rates ?? DEFAULT_RATES) };
     const month = monthKey(opts.now);
     let loaded: LedgerState | null = null;
+    let problem: string | null = null;
     if (this.path) {
+      let raw: string | null = null;
       try {
-        loaded = JSON.parse(readFileSync(this.path, "utf8")) as LedgerState;
+        raw = readFileSync(this.path, "utf8");
       } catch {
-        loaded = null;
+        problem = "the spend ledger is missing";
+      }
+      if (raw !== null) {
+        try {
+          const v: unknown = JSON.parse(raw);
+          loaded = validLedger(v) ? v : null;
+        } catch {
+          loaded = null;
+        }
+        if (!loaded) problem = "the spend ledger is unreadable";
+        else if (loaded.month > month) problem = `the spend ledger is dated ${loaded.month}, after ${month}`;
       }
     }
-    this.state = loaded && loaded.month === month ? loaded : { month, entries: [] };
+    if (opts.remote !== undefined && opts.remote !== null) {
+      const remote = opts.remote !== "unreadable" && validLedger(opts.remote) ? opts.remote : null;
+      if (!remote) problem ??= "the Linear spend ledger couldn't be read";
+      else if (remote.month > month) problem ??= `the Linear spend ledger is dated ${remote.month}, after ${month}`;
+      else {
+        // The cache was evicted but the durable copy survived: that is the record, not a loss.
+        if (problem === "the spend ledger is missing") problem = null;
+        loaded = mergeLedgers(loaded, remote);
+      }
+    }
+    // Nothing paid can run at a $0 cap, so a fresh ledger is safe there; otherwise only the owner's reset for this month.
+    if (problem && (this.capUsd <= 0 || opts.resetMonth === month)) problem = null;
+    this.ledgerProblem = problem;
+    this.state = !problem && loaded && loaded.month === month ? loaded : { month, entries: [] };
+    // Keep a trusted ledger on disk every run so a later cap increase starts from a real record.
+    if (!problem) this.persist();
   }
 
   spentUsd(): number {
@@ -88,6 +159,12 @@ export class Budget {
     if (this.capUsd <= 0) {
       return { ok: false, reason: `${agent} has no free tier and the monthly cap is $0` };
     }
+    if (this.ledgerProblem) {
+      return {
+        ok: false,
+        reason: `${agent} has no free tier and ${this.ledgerProblem}, so this month's spend can't be proven; set ACP_LEDGER_RESET=${this.state.month} to restart it at $0`,
+      };
+    }
     if (this.spentUsd() + worst > this.capUsd) {
       return {
         ok: false,
@@ -108,15 +185,40 @@ export class Budget {
     return full;
   }
 
-  summary(): { month: string; spentUsd: number; capUsd: number; calls: number } {
-    return { month: this.state.month, spentUsd: this.spentUsd(), capUsd: this.capUsd, calls: this.state.entries.length };
+  /** A copy of this month's ledger, for the durable store. */
+  snapshot(): LedgerState {
+    return structuredClone(this.state);
+  }
+
+  summary(): { month: string; spentUsd: number; capUsd: number; calls: number; ledgerProblem: string | null } {
+    return { month: this.state.month, spentUsd: this.spentUsd(), capUsd: this.capUsd, calls: this.state.entries.length, ledgerProblem: this.ledgerProblem };
   }
 
   private persist(): void {
-    if (!this.path) return;
+    // An untrusted ledger is never overwritten: a fresh file would be trusted on the next run.
+    if (!this.path || this.ledgerProblem) return;
     mkdirSync(dirname(this.path), { recursive: true });
     writeFileSync(this.path, JSON.stringify(this.state, null, 2));
   }
+}
+
+/** Union of two ledgers: the later month wins; within one month every distinct entry is kept once. */
+function mergeLedgers(a: LedgerState | null, b: LedgerState): LedgerState {
+  if (!a || a.month < b.month) return b;
+  if (a.month > b.month) return a;
+  const seen = new Map<string, LedgerEntry>();
+  for (const e of [...a.entries, ...b.entries]) seen.set(`${e.at}|${e.agent}|${e.issue}|${e.usd}`, e);
+  return { month: a.month, entries: [...seen.values()].sort((x, y) => String(x.at).localeCompare(String(y.at))) };
+}
+
+function validLedger(v: unknown): v is LedgerState {
+  if (!v || typeof v !== "object") return false;
+  const l = v as Record<string, unknown>;
+  return typeof l["month"] === "string" && /^\d{4}-\d{2}$/.test(l["month"]) && Array.isArray(l["entries"]) &&
+    l["entries"].every((e: unknown) => {
+      const x = e as Record<string, unknown> | null;
+      return !!x && typeof x["usd"] === "number" && Number.isFinite(x["usd"]) && x["usd"] >= 0;
+    });
 }
 
 /** Rough token estimate (≈4 chars/token) used only for the pre-call budget check. */

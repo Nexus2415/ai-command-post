@@ -1,5 +1,6 @@
+import { statusContent } from "../api/lib/engine-status.js";
 import { AGENTS, AGENT_LIST, agentFor, titleFor } from "./agents.ts";
-import { Budget, estimateTokens } from "./budget.ts";
+import { Budget, estimateTokens, ledgerContent } from "./budget.ts";
 import { isAgentKey, isSuspended, type AgentKey, type Config } from "./config.ts";
 import { extractJson } from "./json.ts";
 import type { Issue, TaskStore } from "./linear.ts";
@@ -427,6 +428,48 @@ export async function tick(deps: Deps): Promise<TickReport> {
       }
     }
   }
+  await saveLedger(d);
+  await publishStatus(d, report);
   d.log?.(JSON.stringify({ at: new Date().toISOString(), ...report, budget: d.budget.summary() }));
   return report;
+}
+
+/**
+ * Copies this month's ledger to its durable Linear document. An untrusted ledger is never written over the durable
+ * copy. A failure is logged; the Actions cache still holds the run's spend and the next run merges both.
+ */
+async function saveLedger(d: Deps): Promise<void> {
+  if (!d.store.saveLedger || d.budget.ledgerProblem) return;
+  try {
+    await d.store.saveLedger(ledgerContent(d.budget.snapshot()));
+  } catch (e) {
+    d.log?.(`spend ledger not saved to Linear: ${(e as Error).message}`);
+  }
+}
+
+/** Rewrites the Linear status document the dashboard reads. A failure is logged, never fails the run. */
+async function publishStatus(d: Deps, report: TickReport): Promise<void> {
+  if (!d.store.publishStatus) return;
+  const b = d.budget.summary();
+  const snapshot = {
+    version: 1,
+    at: new Date().toISOString(),
+    active: d.cfg.active,
+    dryRun: d.cfg.dryRun,
+    lead: d.cfg.defaultLead,
+    agentsOnline: Object.keys(d.clients),
+    budget: { month: b.month, spentUsd: b.spentUsd, capUsd: b.capUsd, calls: b.calls, ledgerProblem: b.ledgerProblem },
+    counts: {
+      planned: report.planned.length,
+      worked: report.worked.length,
+      reconciled: report.reconciled.length,
+      waiting: report.waiting.length,
+      errors: report.errors.length,
+    },
+  };
+  try {
+    await d.store.publishStatus(statusContent(snapshot));
+  } catch (e) {
+    d.log?.(`engine status not published: ${(e as Error).message}`);
+  }
 }

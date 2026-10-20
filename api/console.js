@@ -1,6 +1,7 @@
-import { timingSafeEqual } from "node:crypto";
 import { TEAM_ID, PROJECT_ID, overviewOf, projectIssue, safeLinearUrl } from "./lib/console-state.js";
 import { lifecycleOf } from "./lib/command-lifecycle.js";
+import { engineStatusOf } from "./lib/engine-status.js";
+import { hasSitePassword, isCrossSite } from "./lib/site-auth.js";
 
 const LINEAR = "https://api.linear.app/graphql";
 const FIELDS = `id identifier title url priority updatedAt completedAt
@@ -10,6 +11,11 @@ const OVERVIEW = `query ConsoleOverview($team: ID!, $project: ID!) {
   issues(first: 250, orderBy: updatedAt, filter: {
     team: { id: { eq: $team } }, project: { id: { eq: $project } }
   }) { nodes { ${FIELDS} } pageInfo { hasNextPage } }
+}`;
+// The engine's status document lives in the same fixed project; it is read separately so a failure here never
+// hides the task board.
+const STATUS = `query ConsoleEngineStatus($project: String!) {
+  project(id: $project) { documents(first: 50) { nodes { title content updatedAt } } }
 }`;
 const THREAD = `query ConsoleThread($identifier: String!) {
   issue(id: $identifier) { ${FIELDS} description
@@ -22,20 +28,6 @@ const THREAD = `query ConsoleThread($identifier: String!) {
 }`;
 const error = (status, message) => ({ status, body: { error: message } });
 const inScope = n => n?.team?.id === TEAM_ID && n?.project?.id === PROJECT_ID;
-
-function authenticate(req, env) {
-  const provided = req.headers?.["x-acp-password"];
-  if (typeof provided !== "string" || provided.length > 1024) return false;
-  const a = Buffer.from(provided), b = Buffer.from(env.ACP_SITE_PASSWORD);
-  return a.length === b.length && timingSafeEqual(a, b);
-}
-
-function crossSite(req) {
-  if (req.headers?.["sec-fetch-site"] === "cross-site") return true;
-  const origin = req.headers?.origin;
-  if (!origin) return false; // Non-browser callers still need the site password.
-  try { return new URL(origin).host !== req.headers?.host; } catch { return true; }
-}
 
 async function gql(env, f, query, variables) {
   const r = await f(LINEAR, {
@@ -53,8 +45,8 @@ async function gql(env, f, query, variables) {
 // No issue mutation, comment mutation, model call or Eve execution exists in this endpoint.
 export async function handle(req, env, f = fetch, now = () => new Date()) {
   if (!env.ACP_SITE_PASSWORD || !env.LINEAR_API_KEY) return error(503, "Console connection is not configured.");
-  if (!authenticate(req, env)) return error(401, "Authentication required.");
-  if (crossSite(req)) return error(403, "Cross-site requests are not allowed.");
+  if (!hasSitePassword(req, env)) return error(401, "Authentication required.");
+  if (isCrossSite(req)) return error(403, "Cross-site requests are not allowed.");
   if (req.method !== "POST") return error(405, "POST only.");
   let body;
   try {
@@ -73,11 +65,14 @@ export async function handle(req, env, f = fetch, now = () => new Date()) {
   }
   try {
     if (body.action === "overview") {
-      const data = await gql(env, f, OVERVIEW, { team: TEAM_ID, project: PROJECT_ID });
+      const [data, engine] = await Promise.all([
+        gql(env, f, OVERVIEW, { team: TEAM_ID, project: PROJECT_ID }),
+        gql(env, f, STATUS, { project: PROJECT_ID }).then(s => engineStatusOf(s.project?.documents?.nodes), () => null),
+      ]);
       if (!Array.isArray(data.issues?.nodes) || !data.issues?.pageInfo) throw new Error("Invalid response");
       // Defense in depth: don't trust upstream filtering to authorize an out-of-scope row.
       const scoped = data.issues.nodes.filter(inScope);
-      return { status: 200, body: overviewOf(scoped, now().toISOString(), Boolean(data.issues.pageInfo.hasNextPage)) };
+      return { status: 200, body: { ...overviewOf(scoped, now().toISOString(), Boolean(data.issues.pageInfo.hasNextPage)), engine } };
     }
     const data = await gql(env, f, THREAD, { identifier: body.identifier });
     if (!data.issue || !inScope(data.issue)) return error(404, "Issue not found in this operation.");

@@ -19,7 +19,16 @@ async function main() {
   const real = new LinearStore(cfg.keys.linear);
   const store: TaskStore = cfg.dryRun ? new DryRunStore(real) : real;
   const clients = buildClients(cfg);
-  const budget = new Budget({ capUsd: cfg.monthlyBudgetUsd, path: cfg.ledgerPath });
+  // The durable ledger copy in Linear is merged with the Actions cache copy; an unreadable one blocks paid calls.
+  let remote: unknown = null;
+  if (store.readLedger) {
+    try {
+      remote = await store.readLedger();
+    } catch {
+      remote = "unreadable";
+    }
+  }
+  const budget = new Budget({ capUsd: cfg.monthlyBudgetUsd, path: cfg.ledgerPath, resetMonth: cfg.ledgerResetMonth, remote });
 
   const deps: Deps = {
     cfg: cmd === "status" ? { ...cfg, active: false } : cfg,
