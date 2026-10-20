@@ -29,6 +29,7 @@ Resume by reversing the change.
 - Each run prints the budget summary in its log; open the latest Engine run to see month-to-date spend vs. cap.
 - With cap `$0`, any call that would cost money is refused.
 - The ledger lives in a cache, which GitHub can evict, so it is a best-effort record, not a durable guarantee of paid spend. Paid keys stay off until a durable ledger exists.
+- If the cap is above `$0` and the ledger is missing, unreadable or dated in the future, every paid call is refused (free tiers still run) and the run log's budget summary shows `ledgerProblem`. To accept that this month's spend restarts at `$0`, set repo variable `ACP_LEDGER_RESET` to the current month (for example `2026-10`); it only counts for that month. A cache that falls back to an older copy from the same month can still under-count, which is why a durable ledger comes before any larger budget.
 
 ## Keys and models
 - Only Gemini (free tier) is keyed (`GEMINI_API_KEY`). Linear, Firecrawl and Vercel keys are tools, not models.

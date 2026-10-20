@@ -19,7 +19,7 @@ async function main() {
   const real = new LinearStore(cfg.keys.linear);
   const store: TaskStore = cfg.dryRun ? new DryRunStore(real) : real;
   const clients = buildClients(cfg);
-  const budget = new Budget({ capUsd: cfg.monthlyBudgetUsd, path: cfg.ledgerPath });
+  const budget = new Budget({ capUsd: cfg.monthlyBudgetUsd, path: cfg.ledgerPath, resetMonth: cfg.ledgerResetMonth });
 
   const deps: Deps = {
     cfg: cmd === "status" ? { ...cfg, active: false } : cfg,
