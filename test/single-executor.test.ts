@@ -403,3 +403,38 @@ test("ARN-56: a started command renamed to [Question] is never reconciled", asyn
   assert.equal(store.issues.find((i) => i.id === cmd.id)!.stateType, "started");
   assert.equal(store.comments.get(cmd.id), undefined);
 });
+
+// A rival executor whose claim was written a moment before ACP's but only becomes visible after ACP writes its own.
+class RacingStore extends MemoryStore {
+  private rival: string;
+  constructor(rival: string) { super(); this.rival = rival; }
+  override async comment(id: string, body: string) {
+    if (body.startsWith(EXECUTOR_MARKER) && !claimsFor(this, id).length) {
+      const list = this.comments.get(id) ?? [];
+      list.push({ body: `${EXECUTOR_MARKER} ${this.rival}`, createdAt: new Date(Date.now() - 1_000).toISOString() });
+      this.comments.set(id, list);
+    }
+    await super.comment(id, body);
+  }
+}
+
+test("a task claimed by a racing executor just before ACP's claim: ACP backs off before any work", async () => {
+  const store = new RacingStore("eve");
+  const t = store.add({ title: "[ChatGPT] check docs" });
+  const seen: ChatMessage[][] = [];
+  const r = await tick(deps(store, { chatgpt: scripted([done], seen) }));
+  assert.equal(seen.length, 0, "model never called");
+  assert.equal(store.issues[0]!.stateType, "unstarted", "state untouched");
+  assert.equal(claimStatus(claimsOn([], store.comments.get(t.id)!), "chatgpt"), "foreign", "the earlier rival claim wins");
+  assert.ok(r.waiting.some((w) => w.includes("claimed it first")));
+});
+
+test("a command claimed by a racing executor just before ACP's claim is neither planned nor split", async () => {
+  const store = new RacingStore("manual");
+  const cmd = store.add({ title: "Do the thing", description: COMMAND_MARKER });
+  const seen: ChatMessage[][] = [];
+  const r = await tick(deps(store, { chatgpt: scripted(["{}"], seen) }, { ACP_DEFAULT_LEAD: "chatgpt" }));
+  assert.equal(seen.length, 0, "lead never called");
+  assert.equal(store.issues.filter((i) => i.parentId === cmd.id).length, 0, "no sub-issues");
+  assert.ok(r.waiting.some((w) => w.includes("claimed the command first")));
+});
