@@ -119,11 +119,22 @@ test("$0 cap allows free-tier agents only", () => {
 });
 
 test("paid calls are refused once worst-case cost would exceed the cap", () => {
-  const b = new Budget({ capUsd: 0.04, path: null });
+  const b = new Budget({ capUsd: 0.04, path: null, rates: { ...DEFAULT_RATES, claude: { inputPerM: 3, outputPerM: 15, freeTier: false } } });
   assert.equal(b.check("claude", 1_000, 1_000).ok, true); // ≈ $0.018
   b.record({ agent: "claude", issue: "T-1", inputTokens: 5_000, outputTokens: 1_000 }); // $0.03
   assert.equal(b.check("claude", 1_000, 1_000).ok, false);
   assert.ok(Math.abs(b.spentUsd() - 0.03) < 1e-9);
+});
+
+test("default rates match the checked list prices, and Perplexity's per-request search fee is counted", () => {
+  assert.deepEqual([DEFAULT_RATES.claude.inputPerM, DEFAULT_RATES.claude.outputPerM], [2, 10]);
+  assert.deepEqual([DEFAULT_RATES.chatgpt.inputPerM, DEFAULT_RATES.chatgpt.outputPerM], [0.25, 2]);
+  assert.equal(DEFAULT_RATES.gemini.freeTier, true);
+  const b = new Budget({ capUsd: 0.01, path: null });
+  const r = b.check("perplexity", 10, 10);
+  assert.equal(r.ok, false, "a 20-token Sonar call still costs its $0.012 search fee, over a $0.01 cap");
+  b.record({ agent: "perplexity", issue: "T-1", inputTokens: 0, outputTokens: 0 });
+  assert.ok(Math.abs(b.spentUsd() - 0.012) < 1e-12);
 });
 
 // ---------- policy ----------

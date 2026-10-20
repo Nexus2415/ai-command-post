@@ -47,7 +47,7 @@ The placeholder value only satisfies the startup check; the proxy replaces the h
 1. **Dashboard spend panel is static.** It shows the $0 cap and doesn't read the ledger yet. Option: the engine writes `## Engine status` (spend, last tick, online agents) to a pinned Linear issue or document, and the dashboard reads it with the same connector.
 2. **Ledger on Actions** persists through `actions/cache`. Caches can be evicted, so move it somewhere durable (a Linear document or a small KV) **before** raising the budget above $0.
 3. **Native tool calling.** Workers use a JSON-reply protocol so all four providers behave the same. Native function calling per provider would be more reliable; keep `runTool` and the policy check as the single gate.
-4. **Paid-agent rates** in `src/budget.ts` are placeholders. Update them before raising the cap.
+4. ~~**Paid-agent rates**~~ Updated 2026-10-20 to list prices for the default models (`src/budget.ts`), including Perplexity's per-request search fee. Re-check before raising the cap. Third-party sources say Perplexity's Sonar Chat Completions endpoint (used by `src/providers.ts`) was only supported until 2026-09-27; verify before keying Perplexity.
 5. **Gemini free tier:** Google may use free-tier prompts to improve its products. Don't route client or personal data through the free tier. This matters for Arnexyia work; its AGENTS.md forbids raw client data in shared tools.
 6. Approval flow is one-way: the engine posts "Owner approval needed" and stops. A reply-to-approve handshake isn't built and shouldn't be until the owner asks for it.
 
