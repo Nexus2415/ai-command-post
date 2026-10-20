@@ -44,7 +44,7 @@ The placeholder value only satisfies the startup check; the proxy replaces the h
 
 ## Known gaps (prioritized)
 
-1. ~~**Dashboard spend panel is static.**~~ Done: after each active run the engine rewrites the Linear project document "AI Command Post: engine status" (`api/lib/engine-status.js`), and the website console's Engine & budget panel reads it through `/api/console`. The document is display data only; anyone with Linear access can edit it.
+1. **Dashboard spend panel is static.** It shows the $0 cap and doesn't read the ledger yet. Option: the engine writes `## Engine status` (spend, last tick, online agents) to a pinned Linear issue or document, and the dashboard reads it with the same connector.
 2. **Ledger on Actions** persists through `actions/cache`. Caches can be evicted, so move it somewhere durable (a Linear document or a small KV) **before** raising the budget above $0.
 3. **Native tool calling.** Workers use a JSON-reply protocol so all four providers behave the same. Native function calling per provider would be more reliable; keep `runTool` and the policy check as the single gate.
 4. **Paid-agent rates** in `src/budget.ts` are placeholders. Update them before raising the cap.
