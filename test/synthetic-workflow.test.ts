@@ -122,12 +122,14 @@ SELECT jsonb_build_object('tenant',:'t','tariff',:'tariff','action',:'action','a
     const trust = { issuer: "https://oidc.vercel.com/synthetic", audience: "https://vercel.com/synthetic", subject: "owner:synthetic:project:acp:environment:preview", ownerId: "team_synthetic", projectId: "prj_synthetic", environment: "preview", tenantIds: [w.tenant] };
     const expiry = Date.parse("2030-01-01T00:00:00Z") / 1000;
     const intake = createAuthenticatedIntake({ mode: "synthetic", trust, now, kill: () => kill ? "on" : "off", key: async k => k === "test-key" ? keys.publicKey : null,
-      approval: async e => ({ tenantId: w.tenant, taskId: e.taskId, intent: "review_result", actionRef: w.action, approvalRef: w.approval, expiresAt: expiry, approved: true, mode: "shadow", maxBudgetMicros: 0, authorizationBasis: "owner_internal_test" }),
+      approval: async e => ({ tenantId: w.tenant, taskId: e.taskId, intent: "review_result", actionRef: w.action, approvalRef: w.approval, expiresAt: expiry, approved: true, mode: "shadow", maxBudgetMicros: 0, authorizationBasis: "owner_intake_grant" }),
       async record(c: IntakeCommand) {
         const r = await rpc("broker_record_command", { p_tenant: [w.tenant, "uuid"], p_command_key: [c.claimKey, "text"], p_source_ref: [c.event.eventId, "text"], p_title: [`Synthetic ${c.event.eventId}`, "text"], p_proposed_action: [w.action, "uuid"], p_hard_max_input: [0, "integer"], p_hard_max_cached: [0, "integer"], p_hard_max_output: [1, "integer"] }, w.tenant, "broker_intake");
         assert.equal(r["ok"], true); assert.equal(typeof r["command_id"], "string");
         bindings.set(c.claimKey, { commandId: String(r["command_id"]), eventId: c.event.eventId });
-        return { ok: true, committed: true, created: r["created"], commandId: r["command_id"], tenantId: w.tenant, eventId: c.event.eventId, taskId: c.event.taskId, seq: c.event.seq, claimKey: c.claimKey, idempotencyKey: c.idempotencyKey, actionRef: w.action, approvalRef: w.approval };
+        return { ok: true, committed: true, created: r["created"], commandId: r["command_id"], tenantId: w.tenant, eventId: c.event.eventId, taskId: c.event.taskId, seq: c.event.seq, claimKey: c.claimKey, idempotencyKey: c.idempotencyKey, actionRef: w.action, approvalRef: w.approval,
+          // Pinned ARN-94 bundle predates opsdesk 0035, so this bridge supplies the binding the 0035 RPC returns.
+          subject: c.scope.subject, grantId: "00000000-0000-4000-8000-000000000122", validUntil: c.validUntil };
       } });
     const token = (over: object = {}) => {
       const n = now(); const p = [ { alg: "RS256", typ: "JWT", kid: "test-key" }, { iss: trust.issuer, aud: trust.audience, sub: trust.subject, owner_id: trust.ownerId, project_id: trust.projectId, environment: "preview", iat: n, nbf: n, exp: n + 600, ...over } ].map(x => Buffer.from(JSON.stringify(x)).toString("base64url")).join(".");
