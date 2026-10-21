@@ -1,11 +1,11 @@
-// Workspace page (Phase 1 step 2): projects, threads and the open conversation, from /api/workspace.
+// Workspace page (Phase 1 steps 2-3): projects, threads and the open conversation, from /api/workspace.
 // Everything is rendered with textContent and never parsed as HTML, because messages are untrusted text.
 (function () {
   "use strict";
   const $ = (id) => document.getElementById(id);
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = String(text); return e; };
   const MODEL_NAMES = { claude: "Claude", chatgpt: "ChatGPT", gemini: "Gemini", perplexity: "Perplexity" };
-  let projectId = null, threadId = null, busy = false;
+  let projectId = null, threadId = null, busy = false, status = null;
 
   // The password lives in memory for this tab only; it is never written to browser storage (ARN-53).
   let password = "";
@@ -47,6 +47,20 @@
       (p) => p.name, (p) => "Created " + when(p.created_at), (p) => openProject(p.id));
   }
 
+  const money = (n) => "$" + Number(n || 0).toFixed(2);
+
+  // Which models can answer, shown on the model picker, and the spend so far.
+  async function loadStatus() {
+    status = await post("models", threadId ? { threadId } : {});
+    for (const opt of $("tModel").options) {
+      const m = status.models[opt.value];
+      opt.textContent = (MODEL_NAMES[opt.value] || opt.value) + (m && !m.ready ? " (" + m.reason.replace(/\.$/, "") + ")" : "");
+    }
+    const b = status.budget;
+    $("budget").textContent = "This month " + money(b.monthSpent) + " of " + money(b.month) +
+      (b.threadSpent == null ? "" : " · This thread " + money(b.threadSpent) + " of " + money(b.thread));
+  }
+
   async function openProject(id) {
     projectId = id; threadId = null;
     $("tNew").disabled = false;
@@ -84,7 +98,11 @@
     }
     list.scrollTop = list.scrollHeight;
     $("cForm").hidden = false;
-    await loadThreads();
+    const ms = status && status.models[thread.model];
+    $("cNote").textContent = ms && !ms.ready ? (MODEL_NAMES[thread.model] || "This AI") + " can't reply yet: " + ms.reason
+      : "Ctrl+Enter to send.";
+    $("cRetry").hidden = !(messages.length && messages[messages.length - 1].role === "user" && ms && ms.ready);
+    await Promise.all([loadThreads(), loadStatus()]);
   }
 
   // Run one user action at a time and report failures on the page.
@@ -115,13 +133,25 @@
     const text = $("cText").value;
     if (!text.trim()) return;
     $("cSend").disabled = true;
+    const ms = status && currentModel() && status.models[currentModel()];
+    say(ms && ms.ready ? "Waiting for the reply…" : "");
     try {
-      await post("add_message", { threadId, content: text });
+      // With no AI ready the message is only saved; otherwise the server saves it and asks the thread's AI.
+      if (ms && ms.ready) await post("chat", { threadId, content: text }).catch(async (e) => { await openThread(threadId); throw e; });
+      else await post("add_message", { threadId, content: text });
       $("cText").value = "";
+      say("");
       await openThread(threadId);
     } finally { $("cSend").disabled = false; }
   }));
+  $("cRetry").addEventListener("click", guard(async () => {
+    say("Waiting for the reply…");
+    await post("chat", { threadId }).catch(async (e) => { await openThread(threadId); throw e; });
+    say("");
+    await openThread(threadId);
+  }));
+  function currentModel() { return $("cModel").dataset.model || null; }
   $("cText").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) $("cForm").requestSubmit(); });
 
-  guard(loadProjects)();
+  guard(async () => { await loadStatus(); await loadProjects(); })();
 })();

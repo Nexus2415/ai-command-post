@@ -80,6 +80,7 @@ form.new{display:grid;gap:8px;padding:10px 14px;border-bottom:1px solid var(--li
   <div class="bar">
     <h1>Workspace</h1>
     <span class="grow"></span>
+    <span class="note mono" id="budget" aria-live="polite"></span>
     <a href="/">Back to Command Post</a>
   </div>
   <div id="pageMsg" class="msg" role="status" hidden></div>
@@ -106,7 +107,7 @@ form.new{display:grid;gap:8px;padding:10px 14px;border-bottom:1px solid var(--li
       <form class="composer" id="cForm" hidden>
         <label class="note" for="cText">Message</label>
         <textarea id="cText" maxlength="32000" required></textarea>
-        <div class="row"><button class="btn" type="submit" id="cSend">Send</button><span class="note">Ctrl+Enter to send. AI replies arrive with the next update.</span></div>
+        <div class="row"><button class="btn" type="submit" id="cSend">Send</button><button class="btn ghost" type="button" id="cRetry" hidden>Get reply</button><span class="note" id="cNote">Ctrl+Enter to send.</span></div>
       </form>
     </section>
   </div>

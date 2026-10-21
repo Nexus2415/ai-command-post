@@ -54,6 +54,10 @@ export function createSupabaseStore(env, f = fetch) {
       call("GET", `ws_messages?select=${MESSAGE_COLS}&thread_id=eq.${threadId}&order=created_at.asc&limit=500`),
     addMessage: async (threadId, msg) =>
       one(await call("POST", `ws_messages?select=${MESSAGE_COLS}`, { thread_id: threadId, ...msg })),
+    spend: async (threadId, since) => {
+      const row = one(await call("POST", "rpc/ws_spend", { p_thread: threadId, p_since: since }));
+      return { monthUsd: Number(row.month_usd) || 0, threadUsd: Number(row.thread_usd) || 0 };
+    },
   };
 }
 
@@ -90,5 +94,9 @@ export function createMemoryStore() {
       if (t) t.updated_at = m.created_at;
       return m;
     },
+    spend: async (threadId, since) => ({
+      monthUsd: messages.filter((m) => m.created_at >= since).reduce((n, m) => n + m.cost_usd, 0),
+      threadUsd: messages.filter((m) => m.thread_id === threadId).reduce((n, m) => n + m.cost_usd, 0),
+    }),
   };
 }
