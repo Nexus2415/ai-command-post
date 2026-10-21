@@ -19,6 +19,8 @@ export interface Config {
   /** Allow agents to open pull requests (never merge). */
   allowPullRequests: boolean;
   ledgerPath: string;
+  /** ACP_LEDGER_RESET=YYYY-MM: owner acknowledges that a lost ledger may restart at $0 for that month only. */
+  ledgerResetMonth: string | undefined;
   keys: {
     linear?: string;
     github?: string;
@@ -81,6 +83,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     maxStepsPerTask: num(env["ACP_MAX_STEPS"], 6),
     allowPullRequests: bool(env["ACP_ALLOW_PULL_REQUESTS"], false),
     ledgerPath: env["ACP_LEDGER_PATH"] ?? ".acp/ledger.json",
+    ledgerResetMonth: opt("ACP_LEDGER_RESET"),
     keys: {
       linear: opt("LINEAR_API_KEY"),
       github: opt("GITHUB_TOKEN"),

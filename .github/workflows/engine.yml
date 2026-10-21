@@ -33,6 +33,7 @@ jobs:
           ACP_ACTIVE: ${{ vars.ACP_ACTIVE }}
           ACP_DRY_RUN: ${{ vars.ACP_DRY_RUN || 'true' }}
           ACP_MONTHLY_BUDGET_USD: ${{ vars.ACP_MONTHLY_BUDGET_USD || '0' }}
+          ACP_LEDGER_RESET: ${{ vars.ACP_LEDGER_RESET }}
           ACP_ALLOW_PULL_REQUESTS: ${{ vars.ACP_ALLOW_PULL_REQUESTS || 'false' }}
           ACP_LINEAR_TEAM_KEY: ${{ vars.ACP_LINEAR_TEAM_KEY || 'ARN' }}
           ACP_DEFAULT_LEAD: ${{ vars.ACP_DEFAULT_LEAD || 'claude' }}
