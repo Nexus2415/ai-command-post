@@ -112,3 +112,13 @@ test("the schema keeps the workspace locked to the server", () => {
   assert.doesNotMatch(sql, /create policy/i, "no policies: only the service key reaches these tables");
   assert.match(sql, /model in \('claude', 'chatgpt', 'gemini', 'perplexity'\)/);
 });
+
+test("the workspace page renders untrusted text safely and keeps the password out of storage", () => {
+  const js = readFileSync(new URL("../dashboard/workspace.js", import.meta.url), "utf8");
+  assert.doesNotMatch(js, /innerHTML|outerHTML|insertAdjacentHTML|document\.write/);
+  assert.doesNotMatch(js, /localStorage|sessionStorage|indexedDB|document\.cookie/);
+  assert.match(js, /fetch\("\/api\/workspace"/);
+  const html = readFileSync(new URL("../dashboard/workspace.html", import.meta.url), "utf8");
+  assert.match(html, /<script src="workspace\.js"><\/script>/);
+  assert.match(readFileSync(new URL("../dashboard/index.html", import.meta.url), "utf8"), /href="\/workspace\.html"/);
+});
