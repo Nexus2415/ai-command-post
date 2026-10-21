@@ -87,8 +87,11 @@ export function runnableClients(clients: Deps["clients"]): Deps["clients"] {
  * compare-and-set, so two engine runs (or ACP and a person) that read the issue before either writes can both
  * claim it. What narrows the window: the scheduled workflow is the only ACP runner and Actions `concurrency`
  * serialises it; claims are re-read immediately before the claim is written; and the earliest claim comment wins,
- * so a run that loses the race sees the other claim on its next read and stops. A true guarantee needs an
- * atomic store (e.g. a KV with conditional writes); until then, duplicate execution is unlikely, not impossible.
+ * so a run that loses the race sees the other claim on its next read and stops. ACP also re-reads right after
+ * writing its own claim and backs off before any work if an earlier claim from another executor is now visible,
+ * so two writers that both see each other's comment agree on one winner. What remains: a rival claim that Linear
+ * has not yet shown on that re-read. A true guarantee needs an atomic store (e.g. the broker's database claim);
+ * until then, duplicate execution is unlikely, not impossible.
  */
 export type ExecutorClaim = { executor: string; source: "comment" | "label" };
 
@@ -141,11 +144,24 @@ async function commandLead(d: Deps, cmd: Issue, report: TickReport, input = cmd.
   }
   // Claim only when the lead can actually plan now, so a budget-blocked or offline lead never leaves a stale claim.
   const canPlan = !!d.clients[lead] && d.budget.check(lead, estimateTokens(input) + 1_000, PLAN_TOKENS).ok;
-  if (status === "free" && canPlan) await d.store.comment(cmd.id, `${EXECUTOR_MARKER} acp:${lead}\n\n${CLAIM_MARKER} ${AGENTS[lead].name} (AI Command Post), as lead.`);
+  if (status === "free" && canPlan) {
+    await d.store.comment(cmd.id, `${EXECUTOR_MARKER} acp:${lead}\n\n${CLAIM_MARKER} ${AGENTS[lead].name} (AI Command Post), as lead.`);
+    const first = (await claimsAfterWrite(d, cmd)).find((c) => c.source === "comment");
+    if (first && !first.executor.startsWith("acp:")) {
+      report.waiting.push(`${cmd.identifier}: another executor claimed the command first; ACP backed off`);
+      return null;
+    }
+  }
   return lead;
 }
 
 /** "own" = already claimed by this ACP agent; "foreign" = another executor holds it; "free" = unclaimed. */
+/** Claims as they stand right after ACP wrote its own, read fresh so a racing executor's earlier claim shows. */
+async function claimsAfterWrite(d: Deps, issue: Issue): Promise<ExecutorClaim[]> {
+  const labels = d.store.getLabels ? await d.store.getLabels(issue.id) : issue.labels;
+  return claimsOn(labels, await d.store.getComments(issue.id));
+}
+
 export function claimStatus(claims: ExecutorClaim[], agent: AgentKey): "own" | "foreign" | "free" {
   if (!claims.length) return "free";
   const me = `acp:${agent}`;
@@ -244,7 +260,13 @@ export async function work(d: Deps, task: Issue, agent: AgentKey, report: TickRe
     report.waiting.push(`${task.identifier}: claimed by another executor; ACP will not run it`);
     return;
   }
-  if (status === "free") await d.store.comment(task.id, `${EXECUTOR_MARKER} acp:${agent}\n\n${CLAIM_MARKER} ${profile.name} (AI Command Post).`);
+  if (status === "free") {
+    await d.store.comment(task.id, `${EXECUTOR_MARKER} acp:${agent}\n\n${CLAIM_MARKER} ${profile.name} (AI Command Post).`);
+    if (claimStatus(await claimsAfterWrite(d, task), agent) === "foreign") {
+      report.waiting.push(`${task.identifier}: another executor claimed it first; ACP backed off`);
+      return;
+    }
+  }
   await d.store.setState(task.id, d.cfg.linearTeamKey, "started");
 
   let toolCallAttempted = false;
