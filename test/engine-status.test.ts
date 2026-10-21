@@ -68,7 +68,7 @@ test("LinearStore creates the status document once in the fixed project, then up
   assert.deepEqual(calls[1].variables, { id: "doc-9", input: { content: "three" } }, "an existing document is reused, never duplicated");
 
   const failing = new LinearStore("k", (async () => Response.json({ data: { project: { documents: { nodes: [] } }, documentCreate: { success: false } } })) as typeof fetch);
-  await assert.rejects(failing.publishStatus("x"), /did not create/);
+  await assert.rejects(failing.publishStatus("x"), /did not create "AI Command Post: engine status"/);
 });
 
 const emptyStore = (publish?: (c: string) => Promise<void>): TaskStore => ({

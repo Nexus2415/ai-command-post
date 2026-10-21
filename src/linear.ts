@@ -1,6 +1,7 @@
 // Minimal Linear GraphQL client. Linear is the shared task queue: commands, sub-tasks, handoffs and evidence all live there.
 import { PROJECT_ID } from "../api/lib/console-state.js";
 import { STATUS_TITLE } from "../api/lib/engine-status.js";
+import { LEDGER_TITLE, ledgerFromContent } from "./budget.ts";
 
 type Fetch = typeof fetch;
 
@@ -32,6 +33,12 @@ export interface TaskStore {
   setState(issueId: string, teamKey: string, type: StateType): Promise<void>;
   /** Replaces the engine status document the dashboard reads. Optional so simple stores can skip it. */
   publishStatus?(content: string): Promise<void>;
+  /**
+   * The durable spend ledger's JSON value: `null` when the document doesn't exist yet, `"unreadable"` when it has no
+   * parseable ledger. Throws when Linear can't be read.
+   */
+  readLedger?(): Promise<unknown>;
+  saveLedger?(content: string): Promise<void>;
 }
 
 interface TeamInfo {
@@ -68,7 +75,7 @@ function toIssue(n: any): Issue {
 
 export class LinearStore implements TaskStore {
   private teamCache = new Map<string, TeamInfo>();
-  private statusDocId: string | null = null;
+  private docIds = new Map<string, string>();
   private readonly apiKey: string;
   private readonly f: Fetch;
 
@@ -169,25 +176,44 @@ export class LinearStore implements TaskStore {
     });
   }
 
-  async publishStatus(content: string) {
-    if (!this.statusDocId) {
-      const d = await this.gql(`query($p:String!){ project(id:$p){ documents(first:50){ nodes { id title } } } }`, { p: PROJECT_ID });
-      const found = (d.project?.documents?.nodes ?? []).find((n: { title?: string }) => n.title === STATUS_TITLE);
-      if (found) this.statusDocId = found.id;
-    }
-    if (this.statusDocId) {
+  publishStatus(content: string) {
+    return this.upsertDoc(STATUS_TITLE, content);
+  }
+
+  async readLedger(): Promise<unknown> {
+    const doc = await this.findDoc(LEDGER_TITLE);
+    if (!doc) return null;
+    return ledgerFromContent(doc.content ?? "") ?? "unreadable";
+  }
+
+  saveLedger(content: string) {
+    return this.upsertDoc(LEDGER_TITLE, content);
+  }
+
+  /** The engine's own document with this title in the fixed project (the oldest, if someone duplicated it). */
+  private async findDoc(title: string): Promise<{ id: string; content?: string } | null> {
+    const d = await this.gql(`query($p:String!){ project(id:$p){ documents(first:50){ nodes { id title content createdAt } } } }`, { p: PROJECT_ID });
+    const docs = (d.project?.documents?.nodes ?? []).filter((n: { title?: string }) => n.title === title);
+    docs.sort((a: { createdAt?: string }, b: { createdAt?: string }) => String(a.createdAt ?? "").localeCompare(String(b.createdAt ?? "")));
+    if (docs[0]) this.docIds.set(title, docs[0].id);
+    return docs[0] ?? null;
+  }
+
+  private async upsertDoc(title: string, content: string) {
+    const id = this.docIds.get(title) ?? (await this.findDoc(title))?.id;
+    if (id) {
       const d = await this.gql(`mutation($id:String!,$input:DocumentUpdateInput!){ documentUpdate(id:$id,input:$input){ success } }`, {
-        id: this.statusDocId,
+        id,
         input: { content },
       });
-      if (!d.documentUpdate?.success) throw new Error("Linear did not update the engine status document");
+      if (!d.documentUpdate?.success) throw new Error(`Linear did not update "${title}"`);
       return;
     }
     const d = await this.gql(`mutation($input:DocumentCreateInput!){ documentCreate(input:$input){ success document { id } } }`, {
-      input: { projectId: PROJECT_ID, title: STATUS_TITLE, content },
+      input: { projectId: PROJECT_ID, title, content },
     });
-    if (!d.documentCreate?.success || !d.documentCreate.document?.id) throw new Error("Linear did not create the engine status document");
-    this.statusDocId = d.documentCreate.document.id;
+    if (!d.documentCreate?.success || !d.documentCreate.document?.id) throw new Error(`Linear did not create "${title}"`);
+    this.docIds.set(title, d.documentCreate.document.id);
   }
 }
 
@@ -235,5 +261,12 @@ export class DryRunStore implements TaskStore {
   }
   async publishStatus(_content: string) {
     this.log.push("would update the engine status document");
+  }
+  /** Reads the real durable ledger, so a dry run checks spend exactly as a live run would. */
+  async readLedger(): Promise<unknown> {
+    return this.inner.readLedger ? this.inner.readLedger() : null;
+  }
+  async saveLedger(_content: string) {
+    this.log.push("would update the spend ledger document");
   }
 }
