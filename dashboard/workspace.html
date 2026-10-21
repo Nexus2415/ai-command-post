@@ -1,0 +1,114 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Command Post Workspace</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Workspace: projects on the left, threads in the middle, the open conversation on the right. */
+:root{
+  --bg:#eef1f4; --panel:#ffffff; --panel-2:#f6f8fa; --line:#d5dbe2; --fg:#16202b; --muted:#5b6876;
+  --accent:#1d5c86; --accent-fg:#ffffff; --accent-soft:#dbe9f3;
+  --good:#2f7a4a; --good-soft:#dcefe3; --warn:#9a6a10; --warn-soft:#f6ebd2; --bad:#a43b32; --bad-soft:#f6dedb;
+  --a-claude:#b4552d; --a-chatgpt:#2a7a62; --a-gemini:#4a5fc1; --a-perplexity:#1f8293; --a-none:#7a8590;
+  --display:"Barlow Condensed","Arial Narrow",system-ui,sans-serif;
+  --body:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0f151c; --panel:#161e27; --panel-2:#1b2530; --line:#2a3644; --fg:#e3e9ef; --muted:#93a1b0;
+  --accent:#6eb2e0; --accent-fg:#0b1824; --accent-soft:#1c3446;
+  --good:#6cc28d; --good-soft:#18301f; --warn:#e2b25a; --warn-soft:#33280f; --bad:#ec8a80; --bad-soft:#3a1d1a;
+  --a-claude:#e08a62; --a-chatgpt:#5cc4a3; --a-gemini:#8e9cf0; --a-perplexity:#5cc3d3; --a-none:#8995a1;
+  color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0f151c; --panel:#161e27; --panel-2:#1b2530; --line:#2a3644; --fg:#e3e9ef; --muted:#93a1b0;
+  --accent:#6eb2e0; --accent-fg:#0b1824; --accent-soft:#1c3446;
+  --good:#6cc28d; --good-soft:#18301f; --warn:#e2b25a; --warn-soft:#33280f; --bad:#ec8a80; --bad-soft:#3a1d1a;
+  --a-claude:#e08a62; --a-chatgpt:#5cc4a3; --a-gemini:#8e9cf0; --a-perplexity:#5cc3d3; --a-none:#8995a1;
+  color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);font:14px/1.5 var(--body)}
+.wrap{max-width:1240px;margin:0 auto;padding-inline:16px;padding-block:16px 40px;display:grid;gap:16px}
+h1,h2,h3{font-family:var(--display);font-weight:600;letter-spacing:.02em;margin:0;text-wrap:balance}
+.eyebrow{font:500 11px/1 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+button,select,textarea{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.bar{display:flex;flex-wrap:wrap;align-items:center;gap:12px 20px;padding-block:4px}
+.bar h1{font-size:30px;line-height:1;text-transform:uppercase}
+.bar .grow{flex:1 1 auto}
+.bar a{color:var(--accent)}
+[hidden]{display:none!important}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px}
+.ws{display:grid;grid-template-columns:220px 260px minmax(0,1fr);gap:16px;min-height:70vh}
+.col{display:grid;grid-template-rows:auto minmax(0,1fr);min-width:0}
+.col > header{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 14px;border-bottom:1px solid var(--line)}
+.list{list-style:none;margin:0;padding:6px;display:grid;gap:2px;align-content:start;overflow:auto}
+.list button{width:100%;text-align:left;border:0;background:none;border-radius:6px;padding:8px 10px;cursor:pointer;display:grid;gap:2px}
+.list button:hover{background:var(--panel-2)}
+.list button[aria-current="true"]{background:var(--accent-soft)}
+.list .sub{font:500 11px var(--mono);color:var(--muted)}
+.empty{color:var(--muted);padding:10px;font-size:13px}
+.btn{border:1px solid var(--accent);background:var(--accent);color:var(--accent-fg);border-radius:6px;padding:6px 12px;cursor:pointer;font-weight:600}
+.btn.ghost{background:var(--panel);color:var(--accent)}
+.btn:disabled{opacity:.5;cursor:default}
+.sel,input,textarea{border:1px solid var(--line);background:var(--panel);border-radius:6px;padding:6px 8px;width:100%}
+form.new{display:grid;gap:8px;padding:10px 14px;border-bottom:1px solid var(--line);background:var(--panel-2)}
+.convo{display:grid;grid-template-rows:auto minmax(0,1fr) auto;min-width:0}
+.msgs{overflow:auto;padding:16px;display:grid;gap:12px;align-content:start}
+.m{max-width:80%;padding:10px 12px;border-radius:8px;white-space:pre-wrap;overflow-wrap:anywhere}
+.m.user{justify-self:end;background:var(--accent-soft)}
+.m.assistant{justify-self:start;background:var(--panel-2);border-left:3px solid var(--ag,var(--a-none))}
+.m .who{display:block;font:500 11px var(--mono);color:var(--muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:.08em}
+.composer{display:grid;gap:8px;padding:12px 14px;border-top:1px solid var(--line)}
+.composer textarea{min-height:72px;resize:vertical}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.note{color:var(--muted);font-size:12px}
+.msg{padding:8px 12px;border-radius:6px;font-size:13px}
+.msg.err{background:var(--bad-soft);color:var(--bad)}
+.msg.warn{background:var(--warn-soft);color:var(--warn)}
+.chip{display:inline-flex;align-items:center;gap:6px;padding:2px 8px;border-radius:999px;font:500 11px/1.4 var(--mono);text-transform:uppercase;border:1px solid var(--line)}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--ag,var(--a-none));flex:none}
+[data-model="claude"]{--ag:var(--a-claude)} [data-model="chatgpt"]{--ag:var(--a-chatgpt)}
+[data-model="gemini"]{--ag:var(--a-gemini)} [data-model="perplexity"]{--ag:var(--a-perplexity)}
+@media (max-width:900px){.ws{grid-template-columns:minmax(0,1fr)}.m{max-width:100%}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+
+<div class="wrap">
+  <div class="bar">
+    <h1>Workspace</h1>
+    <span class="grow"></span>
+    <a href="/">Back to Command Post</a>
+  </div>
+  <div id="pageMsg" class="msg" role="status" hidden></div>
+  <div class="ws">
+    <section class="panel col" aria-labelledby="pH">
+      <header><h2 id="pH">Projects</h2><button class="btn ghost" id="pNew" type="button">New</button></header>
+      <div>
+        <form class="new" id="pForm" hidden><label class="note" for="pName">Project name</label><input id="pName" maxlength="120" required><div class="row"><button class="btn" type="submit">Create</button><button class="btn ghost" type="button" id="pCancel">Cancel</button></div></form>
+        <ul class="list" id="pList"><li class="empty">Loading…</li></ul>
+      </div>
+    </section>
+    <section class="panel col" aria-labelledby="tH">
+      <header><h2 id="tH">Threads</h2><button class="btn ghost" id="tNew" type="button" disabled>New</button></header>
+      <div>
+        <form class="new" id="tForm" hidden><label class="note" for="tTitle">Thread title</label><input id="tTitle" maxlength="200" required>
+          <label class="note" for="tModel">AI model</label><select id="tModel" class="sel"><option value="claude">Claude</option><option value="chatgpt">ChatGPT</option><option value="gemini">Gemini</option><option value="perplexity">Perplexity</option></select>
+          <div class="row"><button class="btn" type="submit">Create</button><button class="btn ghost" type="button" id="tCancel">Cancel</button></div></form>
+        <ul class="list" id="tList"><li class="empty">Pick a project.</li></ul>
+      </div>
+    </section>
+    <section class="panel convo" aria-labelledby="cH">
+      <header style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:12px 14px;border-bottom:1px solid var(--line)"><h2 id="cH">No thread open</h2><span id="cModel" class="chip" hidden><span class="dot"></span><span></span></span></header>
+      <div class="msgs" id="mList" aria-live="polite"></div>
+      <form class="composer" id="cForm" hidden>
+        <label class="note" for="cText">Message</label>
+        <textarea id="cText" maxlength="32000" required></textarea>
+        <div class="row"><button class="btn" type="submit" id="cSend">Send</button><span class="note">Ctrl+Enter to send. AI replies arrive with the next update.</span></div>
+      </form>
+    </section>
+  </div>
+</div>
+<script src="workspace.js"></script>
