@@ -56,6 +56,8 @@
       const m = status.models[opt.value];
       opt.textContent = (MODEL_NAMES[opt.value] || opt.value) + (m && !m.ready ? " (" + m.reason.replace(/\.$/, "") + ")" : "");
     }
+    const on = Object.values(status.plugins || {}).filter((x) => x.ready).map((x) => x.title);
+    $("plugins").textContent = "Plugins: " + (on.length ? on.join(", ") : "none connected yet");
     const b = status.budget;
     $("budget").textContent = "This month " + money(b.monthSpent) + " of " + money(b.month) +
       (b.threadSpent == null ? "" : " · This thread " + money(b.threadSpent) + " of " + money(b.thread));

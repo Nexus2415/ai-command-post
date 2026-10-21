@@ -26,3 +26,10 @@ In Vercel, open **arnexyia-command-post → Settings → Environment Variables**
 1. One AI key, for example `ANTHROPIC_API_KEY` (Claude), `OPENAI_API_KEY` (ChatGPT) or `PERPLEXITY_API_KEY`.
 2. `ACP_WORKSPACE_MONTHLY_BUDGET_USD`, for example `15`.
 3. Optional: `ACP_WORKSPACE_THREAD_BUDGET_USD` if $1 per thread is too low.
+
+## Step 4: plugins
+- One plugin format, shared by every AI that can use tools (Claude and ChatGPT; Perplexity searches the web itself). A plugin is a name, a description, a readiness check and its tools. Adding a plugin means adding one entry to `api/lib/workspace-plugins.js`.
+- First plugins, all read-only: **Linear** (search tasks on the Arnexyia Launch Operations board), **GitHub** (read files, search issues and PRs in `ACP_GITHUB_REPOS` only), **Web search** (Firecrawl).
+- A plugin switches on when its key is set in Vercel (`LINEAR_API_KEY`, `GITHUB_TOKEN` with `ACP_GITHUB_REPOS`, `FIRECRAWL_API_KEY`). The page lists which are on.
+- One reply may use tools for up to 3 rounds. The budget is checked again before each round, counting what the reply has already cost; when a cap is reached the reply stops and says so. Everything spent is recorded.
+- There is deliberately no "open any web page" tool. A page could instruct the AI to send private data it had read to an address the page chose. Writes stay with the engine, behind its safety policy.
