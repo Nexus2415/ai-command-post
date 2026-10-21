@@ -8,6 +8,7 @@ export const isId = (v) => typeof v === "string" && UUID.test(v);
 
 const PROJECT_COLS = "id,name,created_at";
 const THREAD_COLS = "id,project_id,title,model,created_at,updated_at";
+const NOTE_COLS = "id,project_id,content,created_at";
 const MESSAGE_COLS = "id,thread_id,role,content,model,input_tokens,output_tokens,cost_usd,created_at";
 
 export class StoreError extends Error {}
@@ -26,7 +27,7 @@ export function createSupabaseStore(env, f = fetch) {
       method,
       headers: {
         apikey: key, authorization: `Bearer ${key}`, "content-type": "application/json",
-        ...(method === "POST" ? { prefer: "return=representation" } : {}),
+        ...(method === "POST" || method === "DELETE" ? { prefer: "return=representation" } : {}),
       },
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: AbortSignal.timeout(15_000),
@@ -54,6 +55,11 @@ export function createSupabaseStore(env, f = fetch) {
       call("GET", `ws_messages?select=${MESSAGE_COLS}&thread_id=eq.${threadId}&order=created_at.asc&limit=500`),
     addMessage: async (threadId, msg) =>
       one(await call("POST", `ws_messages?select=${MESSAGE_COLS}`, { thread_id: threadId, ...msg })),
+    listNotes: (projectId) =>
+      call("GET", `ws_notes?select=${NOTE_COLS}&project_id=eq.${projectId}&order=created_at.asc&limit=50`),
+    addNote: async (projectId, content) =>
+      one(await call("POST", `ws_notes?select=${NOTE_COLS}`, { project_id: projectId, content })),
+    deleteNote: async (noteId) => (await call("DELETE", `ws_notes?id=eq.${noteId}&select=id`)).length > 0,
     spend: async (threadId, since) => {
       const row = one(await call("POST", "rpc/ws_spend", { p_thread: threadId, p_since: since }));
       return { monthUsd: Number(row.month_usd) || 0, threadUsd: Number(row.thread_usd) || 0 };
@@ -63,7 +69,7 @@ export function createSupabaseStore(env, f = fetch) {
 
 // In-memory store with the same behaviour, for tests and local runs.
 export function createMemoryStore() {
-  const projects = [], threads = [], messages = [];
+  const projects = [], threads = [], messages = [], notes = [];
   let clock = Date.parse("2026-10-21T00:00:00Z");
   const now = () => new Date(clock++).toISOString();
   const byNewest = (k) => (a, b) => (a[k] < b[k] ? 1 : -1);
@@ -93,6 +99,17 @@ export function createMemoryStore() {
       const t = threads.find((x) => x.id === threadId);
       if (t) t.updated_at = m.created_at;
       return m;
+    },
+    listNotes: async (projectId) => notes.filter((n) => n.project_id === projectId),
+    addNote: async (projectId, content) => {
+      const n = { id: randomUUID(), project_id: projectId, content, created_at: now() };
+      notes.push(n);
+      return n;
+    },
+    deleteNote: async (noteId) => {
+      const i = notes.findIndex((n) => n.id === noteId);
+      if (i >= 0) notes.splice(i, 1);
+      return i >= 0;
     },
     spend: async (threadId, since) => ({
       monthUsd: messages.filter((m) => m.created_at >= since).reduce((n, m) => n + m.cost_usd, 0),

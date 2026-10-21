@@ -32,6 +32,15 @@ create table if not exists ws_messages (
 );
 create index if not exists ws_messages_thread_idx on ws_messages (thread_id, created_at);
 
+-- Project memory: short notes every AI in the project reads at the start of each reply.
+create table if not exists ws_notes (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid not null references ws_projects(id) on delete cascade,
+  content text not null check (char_length(content) between 1 and 2000),
+  created_at timestamptz not null default now()
+);
+create index if not exists ws_notes_project_idx on ws_notes (project_id, created_at);
+
 -- A new message moves its thread to the top of the list.
 create or replace function ws_touch_thread() returns trigger language plpgsql set search_path = public as $$
 begin
@@ -44,7 +53,8 @@ create trigger ws_messages_touch after insert on ws_messages for each row execut
 alter table ws_projects enable row level security;
 alter table ws_threads enable row level security;
 alter table ws_messages enable row level security;
-revoke all on ws_projects, ws_threads, ws_messages from anon, authenticated;
+alter table ws_notes enable row level security;
+revoke all on ws_projects, ws_threads, ws_messages, ws_notes from anon, authenticated;
 
 -- Spend so far, for the chat route's budget checks: this month across the workspace, and one thread's lifetime.
 create or replace function ws_spend(p_thread uuid, p_since timestamptz)

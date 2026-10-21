@@ -159,3 +159,29 @@ test("history is trimmed to the newest messages and starts with the user", () =>
   ]);
   assert.deepEqual(h.map((m) => m.content), ["latest"]);
 });
+
+test("project notes reach every model's instructions, and only that project's", async () => {
+  const { call, calls } = setup();
+  const p = (await call("create_project", { name: "With notes" })).body as any;
+  const other = (await call("create_project", { name: "Other" })).body as any;
+  await call("add_note", { projectId: p.project.id, content: "Pilot clients are in South Florida." });
+  await call("add_note", { projectId: other.project.id, content: "Unrelated note" });
+  const t = (await call("create_thread", { projectId: p.project.id, title: "T" })).body as any;
+  await call("chat", { threadId: t.thread.id, content: "Hi" });
+  assert.match(calls[0]!.body.system, /Project notes from the owner[\s\S]*- Pilot clients are in South Florida\./);
+  assert.doesNotMatch(calls[0]!.body.system, /Unrelated/);
+
+  const notes = ((await call("list_notes", { projectId: p.project.id })).body as any).notes;
+  assert.equal((await call("delete_note", { noteId: notes[0].id })).status, 200);
+  assert.equal((await call("delete_note", { noteId: notes[0].id })).status, 404);
+  await call("chat", { threadId: t.thread.id, content: "Again" });
+  assert.doesNotMatch(calls[1]!.body.system, /Project notes/);
+});
+
+test("a project holds at most 20 notes of up to 2,000 characters", async () => {
+  const { call } = setup();
+  const p = (await call("create_project", { name: "P" })).body as any;
+  assert.equal((await call("add_note", { projectId: p.project.id, content: "x".repeat(2001) })).status, 400);
+  for (let i = 0; i < 20; i++) assert.equal((await call("add_note", { projectId: p.project.id, content: `n${i}` })).status, 200);
+  assert.equal((await call("add_note", { projectId: p.project.id, content: "one more" })).status, 409);
+});

@@ -48,6 +48,11 @@ button,select,textarea{font:inherit;color:inherit}
 .list button{width:100%;text-align:left;border:0;background:none;border-radius:6px;padding:8px 10px;cursor:pointer;display:grid;gap:2px}
 .list button:hover{background:var(--panel-2)}
 .list button[aria-current="true"]{background:var(--accent-soft)}
+.memory{display:grid;gap:6px;padding:12px 14px;border-top:1px solid var(--line);background:var(--panel-2)}
+.memory .list{padding:0}
+.list .nrow{display:flex;gap:8px;align-items:flex-start;padding:6px 4px;white-space:pre-wrap;overflow-wrap:anywhere}
+.list .nrow span{flex:1}
+.list .nrow button{width:auto;padding:2px 6px;font-size:12px;color:var(--bad)}
 .list .sub{font:500 11px var(--mono);color:var(--muted)}
 .empty{color:var(--muted);padding:10px;font-size:13px}
 .btn{border:1px solid var(--accent);background:var(--accent);color:var(--accent-fg);border-radius:6px;padding:6px 12px;cursor:pointer;font-weight:600}
@@ -91,6 +96,12 @@ form.new{display:grid;gap:8px;padding:10px 14px;border-bottom:1px solid var(--li
       <div>
         <form class="new" id="pForm" hidden><label class="note" for="pName">Project name</label><input id="pName" maxlength="120" required><div class="row"><button class="btn" type="submit">Create</button><button class="btn ghost" type="button" id="pCancel">Cancel</button></div></form>
         <ul class="list" id="pList"><li class="empty">Loading…</li></ul>
+        <section id="notes" class="memory" aria-labelledby="nH" hidden>
+          <h3 id="nH" class="eyebrow">Project memory</h3>
+          <p class="note">Every AI in this project reads these notes.</p>
+          <ul class="list" id="nList"></ul>
+          <form id="nForm" class="row"><label class="note" for="nText" style="width:100%">New note</label><textarea id="nText" maxlength="2000" rows="2" required></textarea><button class="btn ghost" type="submit">Add note</button></form>
+        </section>
       </div>
     </section>
     <section class="panel col" aria-labelledby="tH">

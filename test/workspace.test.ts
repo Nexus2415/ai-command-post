@@ -105,10 +105,10 @@ test("the REST adapter sends the key only in headers and hides database errors",
 
 test("the schema keeps the workspace locked to the server", () => {
   const sql = readFileSync(new URL("../db/workspace.sql", import.meta.url), "utf8");
-  for (const t of ["ws_projects", "ws_threads", "ws_messages"]) {
+  for (const t of ["ws_projects", "ws_threads", "ws_messages", "ws_notes"]) {
     assert.match(sql, new RegExp(`alter table ${t} enable row level security`));
   }
-  assert.match(sql, /revoke all on ws_projects, ws_threads, ws_messages from anon, authenticated/);
+  assert.match(sql, /revoke all on ws_projects, ws_threads, ws_messages, ws_notes from anon, authenticated/);
   assert.doesNotMatch(sql, /create policy/i, "no policies: only the service key reaches these tables");
   assert.match(sql, /model in \('claude', 'chatgpt', 'gemini', 'perplexity'\)/);
 });

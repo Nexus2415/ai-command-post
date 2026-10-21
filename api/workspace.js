@@ -25,6 +25,7 @@ function caps(env) {
 }
 const monthStart = (now) => new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
 const usd = (n) => "$" + n.toFixed(2);
+const MAX_NOTES = 20;
 
 const ACTIONS = Object.freeze({
   async list_projects(store) {
@@ -61,6 +62,23 @@ const ACTIONS = Object.freeze({
     if (!content) return error(400, "A message of 1 to 32,000 characters is required.");
     if (!(await store.getThread(args.threadId))) return error(404, "Unknown thread.");
     return { message: await store.addMessage(args.threadId, { role: "user", content }) };
+  },
+  async list_notes(store, args) {
+    if (!isId(args.projectId)) return error(400, "Unknown project.");
+    if (!(await store.getProject(args.projectId))) return error(404, "Unknown project.");
+    return { notes: await store.listNotes(args.projectId) };
+  },
+  async add_note(store, args) {
+    if (!isId(args.projectId)) return error(400, "Unknown project.");
+    const content = text(args.content, 2_000);
+    if (!content) return error(400, "A note of 1 to 2,000 characters is required.");
+    if (!(await store.getProject(args.projectId))) return error(404, "Unknown project.");
+    if ((await store.listNotes(args.projectId)).length >= MAX_NOTES) return error(409, `A project can hold ${MAX_NOTES} notes. Delete one first.`);
+    return { note: await store.addNote(args.projectId, content) };
+  },
+  async delete_note(store, args) {
+    if (!isId(args.noteId)) return error(400, "Unknown note.");
+    return (await store.deleteNote(args.noteId)) ? { deleted: true } : error(404, "Unknown note.");
   },
   // Which models can answer, and the budget so far.
   async models(store, args, env, deps) {
@@ -111,6 +129,7 @@ const ACTIONS = Object.freeze({
     try {
       reply = await runChat(env, model, sent, {
         f: deps.fetch, tools,
+        notes: (await store.listNotes(thread.project_id)).map((n) => n.content),
         runTool: (name, a) => runTool(env, tools, name, a, deps.fetch),
         // Every later round of tool use is checked again, counting what this reply has already cost.
         beforeCall: async (est, soFar) => {
