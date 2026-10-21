@@ -1,8 +1,12 @@
 // Workspace API (Phase 1): projects, threads and messages behind the site password.
-// Replies from AI models are added server-side by the chat route (a later step), so clients can only
-// post their own "user" messages here.
+// Clients can only post their own "user" messages; AI replies are written here, by the chat action, after the
+// budget checks.
 import { hasSitePassword, isSameOrigin } from "./lib/site-auth.js";
 import { MODELS, StoreError, createSupabaseStore, isId, workspaceConfigured } from "./lib/workspace-store.js";
+import { ModelError, RATES, callModel, estimateUsd, modelStatus, trimHistory } from "./lib/workspace-models.js";
+
+// Vercel: model replies can take a while.
+export const config = { maxDuration: 60 };
 
 const MAX_BODY = 65_536;
 const error = (status, message) => ({ status, body: { error: message } });
@@ -12,6 +16,14 @@ function text(v, max) {
   const t = v.trim();
   return t.length >= 1 && t.length <= max ? t : null;
 }
+
+// Caps in USD. Unset or invalid means 0 for the month (nothing paid runs) and $1 per thread.
+function caps(env) {
+  const num = (v, d) => { const n = Number(v); return v !== undefined && v !== "" && Number.isFinite(n) && n >= 0 ? n : d; };
+  return { month: num(env.ACP_WORKSPACE_MONTHLY_BUDGET_USD, 0), thread: num(env.ACP_WORKSPACE_THREAD_BUDGET_USD, 1) };
+}
+const monthStart = (now) => new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
+const usd = (n) => "$" + n.toFixed(2);
 
 const ACTIONS = Object.freeze({
   async list_projects(store) {
@@ -49,10 +61,63 @@ const ACTIONS = Object.freeze({
     if (!(await store.getThread(args.threadId))) return error(404, "Unknown thread.");
     return { message: await store.addMessage(args.threadId, { role: "user", content }) };
   },
+  // Which models can answer, and the budget so far.
+  async models(store, args, env, deps) {
+    const threadId = isId(args.threadId) ? args.threadId : null;
+    const spent = await store.spend(threadId, monthStart(deps.now()));
+    const models = Object.fromEntries(MODELS.map((m) => {
+      const s = modelStatus(env, m);
+      return [m, { ready: s.ready, reason: s.reason }];
+    }));
+    return { models, budget: { ...caps(env), monthSpent: spent.monthUsd, threadSpent: threadId ? spent.threadUsd : null } };
+  },
+  // Sends the user's message (or, with no content, retries the reply to the last one) to the thread's model.
+  async chat(store, args, env, deps) {
+    if (!isId(args.threadId)) return error(400, "Unknown thread.");
+    const content = args.content === undefined ? null : text(args.content, 32_000);
+    if (args.content !== undefined && !content) return error(400, "A message of 1 to 32,000 characters is required.");
+    const thread = await store.getThread(args.threadId);
+    if (!thread) return error(404, "Unknown thread.");
+    const model = thread.model;
+    const status = modelStatus(env, model);
+    if (!status.ready) return error(409, `This thread's AI isn't available: ${status.reason}`);
+
+    const history = (await store.listMessages(thread.id)).map((m) => ({ role: m.role, content: m.content }));
+    if (content) history.push({ role: "user", content });
+    else if (history.at(-1)?.role !== "user") return error(400, "There is no message waiting for a reply.");
+    const sent = trimHistory(history);
+
+    if (!RATES[model].freeTier) {
+      const cap = caps(env);
+      const est = estimateUsd(model, sent);
+      const spent = await store.spend(thread.id, monthStart(deps.now()));
+      if (spent.monthUsd + est > cap.month) {
+        return error(402, `This would go over the monthly workspace budget (${usd(spent.monthUsd)} of ${usd(cap.month)} used).`);
+      }
+      if (spent.threadUsd + est > cap.thread) {
+        return error(402, `This would go over this thread's budget (${usd(spent.threadUsd)} of ${usd(cap.thread)} used). Start a new thread to continue.`);
+      }
+    }
+
+    const saved = content ? await store.addMessage(thread.id, { role: "user", content }) : null;
+    let reply;
+    try {
+      reply = await callModel(env, model, sent, deps.fetch);
+    } catch (e) {
+      if (!(e instanceof ModelError)) throw e;
+      return { status: 502, body: { error: `${e.message} Your message was saved; try again for a reply.`, saved } };
+    }
+    const message = await store.addMessage(thread.id, {
+      role: "assistant", content: reply.text, model,
+      input_tokens: reply.inputTokens, output_tokens: reply.outputTokens, cost_usd: Math.round(reply.costUsd * 1e6) / 1e6,
+    });
+    return { saved, message };
+  },
 });
 
 // Pure request handler, so tests can drive it with a memory store.
-export async function handle(req, env, makeStore = createSupabaseStore) {
+export async function handle(req, env, makeStore = createSupabaseStore, deps = {}) {
+  const d = { fetch: deps.fetch ?? fetch, now: deps.now ?? (() => new Date()) };
   if (!env.ACP_SITE_PASSWORD) return error(503, "The website isn't configured yet.");
   if (!hasSitePassword(req, env)) return error(401, "Wrong password");
   if (req.method !== "POST") return error(405, "POST only");
@@ -73,7 +138,7 @@ export async function handle(req, env, makeStore = createSupabaseStore) {
   if (!args || typeof args !== "object" || Array.isArray(args)) return error(400, "Invalid arguments.");
 
   try {
-    const out = await ACTIONS[body.action](makeStore(env), args);
+    const out = await ACTIONS[body.action](makeStore(env, d.fetch), args, env, d);
     return "status" in out ? out : { status: 200, body: out };
   } catch (e) {
     if (e instanceof StoreError || e?.name === "TimeoutError" || e instanceof TypeError) {

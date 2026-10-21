@@ -45,3 +45,13 @@ alter table ws_projects enable row level security;
 alter table ws_threads enable row level security;
 alter table ws_messages enable row level security;
 revoke all on ws_projects, ws_threads, ws_messages from anon, authenticated;
+
+-- Spend so far, for the chat route's budget checks: this month across the workspace, and one thread's lifetime.
+create or replace function ws_spend(p_thread uuid, p_since timestamptz)
+returns table (month_usd numeric, thread_usd numeric)
+language sql stable set search_path = public as $$
+  select coalesce(sum(cost_usd) filter (where created_at >= p_since), 0),
+         coalesce(sum(cost_usd) filter (where thread_id = p_thread), 0)
+  from ws_messages
+$$;
+revoke all on function ws_spend(uuid, timestamptz) from public, anon, authenticated;
