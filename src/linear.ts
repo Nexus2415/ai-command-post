@@ -1,4 +1,6 @@
 // Minimal Linear GraphQL client. Linear is the shared task queue: commands, sub-tasks, handoffs and evidence all live there.
+import { PROJECT_ID } from "../api/lib/console-state.js";
+import { STATUS_TITLE } from "../api/lib/engine-status.js";
 
 type Fetch = typeof fetch;
 
@@ -28,6 +30,8 @@ export interface TaskStore {
   createIssue(input: { teamKey: string; title: string; description: string; parentId?: string; priority?: number }): Promise<Issue>;
   comment(issueId: string, body: string): Promise<void>;
   setState(issueId: string, teamKey: string, type: StateType): Promise<void>;
+  /** Replaces the engine status document the dashboard reads. Optional so simple stores can skip it. */
+  publishStatus?(content: string): Promise<void>;
 }
 
 interface TeamInfo {
@@ -64,6 +68,7 @@ function toIssue(n: any): Issue {
 
 export class LinearStore implements TaskStore {
   private teamCache = new Map<string, TeamInfo>();
+  private statusDocId: string | null = null;
   private readonly apiKey: string;
   private readonly f: Fetch;
 
@@ -163,6 +168,27 @@ export class LinearStore implements TaskStore {
       input: { stateId: state.id },
     });
   }
+
+  async publishStatus(content: string) {
+    if (!this.statusDocId) {
+      const d = await this.gql(`query($p:String!){ project(id:$p){ documents(first:50){ nodes { id title } } } }`, { p: PROJECT_ID });
+      const found = (d.project?.documents?.nodes ?? []).find((n: { title?: string }) => n.title === STATUS_TITLE);
+      if (found) this.statusDocId = found.id;
+    }
+    if (this.statusDocId) {
+      const d = await this.gql(`mutation($id:String!,$input:DocumentUpdateInput!){ documentUpdate(id:$id,input:$input){ success } }`, {
+        id: this.statusDocId,
+        input: { content },
+      });
+      if (!d.documentUpdate?.success) throw new Error("Linear did not update the engine status document");
+      return;
+    }
+    const d = await this.gql(`mutation($input:DocumentCreateInput!){ documentCreate(input:$input){ success document { id } } }`, {
+      input: { projectId: PROJECT_ID, title: STATUS_TITLE, content },
+    });
+    if (!d.documentCreate?.success || !d.documentCreate.document?.id) throw new Error("Linear did not create the engine status document");
+    this.statusDocId = d.documentCreate.document.id;
+  }
 }
 
 /** Wraps a store so writes are logged, not performed. Reads still hit Linear. */
@@ -206,5 +232,8 @@ export class DryRunStore implements TaskStore {
   }
   async setState(issueId: string, _teamKey: string, type: StateType) {
     this.log.push(`would move ${issueId} to ${type}`);
+  }
+  async publishStatus(_content: string) {
+    this.log.push("would update the engine status document");
   }
 }

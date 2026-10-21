@@ -1,3 +1,4 @@
+import { statusContent } from "../api/lib/engine-status.js";
 import { AGENTS, AGENT_LIST, agentFor, titleFor } from "./agents.ts";
 import { Budget, estimateTokens } from "./budget.ts";
 import { isAgentKey, isSuspended, type AgentKey, type Config } from "./config.ts";
@@ -427,6 +428,34 @@ export async function tick(deps: Deps): Promise<TickReport> {
       }
     }
   }
+  await publishStatus(d, report);
   d.log?.(JSON.stringify({ at: new Date().toISOString(), ...report, budget: d.budget.summary() }));
   return report;
+}
+
+/** Rewrites the Linear status document the dashboard reads. A failure is logged, never fails the run. */
+async function publishStatus(d: Deps, report: TickReport): Promise<void> {
+  if (!d.store.publishStatus) return;
+  const b: ReturnType<Budget["summary"]> & { ledgerProblem?: string | null } = d.budget.summary();
+  const snapshot = {
+    version: 1,
+    at: new Date().toISOString(),
+    active: d.cfg.active,
+    dryRun: d.cfg.dryRun,
+    lead: d.cfg.defaultLead,
+    agentsOnline: Object.keys(d.clients),
+    budget: { month: b.month, spentUsd: b.spentUsd, capUsd: b.capUsd, calls: b.calls, ledgerProblem: b.ledgerProblem ?? null },
+    counts: {
+      planned: report.planned.length,
+      worked: report.worked.length,
+      reconciled: report.reconciled.length,
+      waiting: report.waiting.length,
+      errors: report.errors.length,
+    },
+  };
+  try {
+    await d.store.publishStatus(statusContent(snapshot));
+  } catch (e) {
+    d.log?.(`engine status not published: ${(e as Error).message}`);
+  }
 }
