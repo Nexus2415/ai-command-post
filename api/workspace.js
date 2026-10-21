@@ -3,10 +3,11 @@
 // budget checks.
 import { hasSitePassword, isSameOrigin } from "./lib/site-auth.js";
 import { MODELS, StoreError, createSupabaseStore, isId, workspaceConfigured } from "./lib/workspace-store.js";
-import { ModelError, RATES, callModel, estimateUsd, modelStatus, trimHistory } from "./lib/workspace-models.js";
+import { BudgetStop, ModelError, RATES, estimateUsd, modelStatus, runChat, trimHistory } from "./lib/workspace-models.js";
+import { pluginStatus, readyTools, runTool } from "./lib/workspace-plugins.js";
 
 // Vercel: model replies can take a while.
-export const config = { maxDuration: 60 };
+export const config = { maxDuration: 120 };
 
 const MAX_BODY = 65_536;
 const error = (status, message) => ({ status, body: { error: message } });
@@ -69,7 +70,10 @@ const ACTIONS = Object.freeze({
       const s = modelStatus(env, m);
       return [m, { ready: s.ready, reason: s.reason }];
     }));
-    return { models, budget: { ...caps(env), monthSpent: spent.monthUsd, threadSpent: threadId ? spent.threadUsd : null } };
+    return {
+      models, plugins: pluginStatus(env),
+      budget: { ...caps(env), monthSpent: spent.monthUsd, threadSpent: threadId ? spent.threadUsd : null },
+    };
   },
   // Sends the user's message (or, with no content, retries the reply to the last one) to the thread's model.
   async chat(store, args, env, deps) {
@@ -87,30 +91,40 @@ const ACTIONS = Object.freeze({
     else if (history.at(-1)?.role !== "user") return error(400, "There is no message waiting for a reply.");
     const sent = trimHistory(history);
 
-    if (!RATES[model].freeTier) {
-      const cap = caps(env);
-      const est = estimateUsd(model, sent);
-      const spent = await store.spend(thread.id, monthStart(deps.now()));
-      if (spent.monthUsd + est > cap.month) {
-        return error(402, `This would go over the monthly workspace budget (${usd(spent.monthUsd)} of ${usd(cap.month)} used).`);
-      }
-      if (spent.threadUsd + est > cap.thread) {
-        return error(402, `This would go over this thread's budget (${usd(spent.threadUsd)} of ${usd(cap.thread)} used). Start a new thread to continue.`);
-      }
-    }
+    const paid = !RATES[model].freeTier;
+    const cap = caps(env);
+    const spent = paid ? await store.spend(thread.id, monthStart(deps.now())) : null;
+    const over = (est) => !paid ? null
+      : spent.monthUsd + est > cap.month ? `This would go over the monthly workspace budget (${usd(spent.monthUsd)} of ${usd(cap.month)} used).`
+      : spent.threadUsd + est > cap.thread ? `This would go over this thread's budget (${usd(spent.threadUsd)} of ${usd(cap.thread)} used). Start a new thread to continue.`
+      : null;
+    const first = over(estimateUsd(model, sent));
+    if (first) return error(402, first);
 
     const saved = content ? await store.addMessage(thread.id, { role: "user", content }) : null;
+    const tools = readyTools(env);
+    const record = (text, r) => store.addMessage(thread.id, {
+      role: "assistant", content: text, model,
+      input_tokens: r.inputTokens, output_tokens: r.outputTokens, cost_usd: Math.round(r.costUsd * 1e6) / 1e6,
+    });
     let reply;
     try {
-      reply = await callModel(env, model, sent, deps.fetch);
+      reply = await runChat(env, model, sent, {
+        f: deps.fetch, tools,
+        runTool: (name, a) => runTool(env, tools, name, a, deps.fetch),
+        // Every later round of tool use is checked again, counting what this reply has already cost.
+        beforeCall: async (est, soFar) => {
+          const why = soFar > 0 ? over(soFar + est) : null;
+          if (why) throw new BudgetStop("Stopped before finishing: " + why.charAt(0).toLowerCase() + why.slice(1));
+        },
+      });
     } catch (e) {
       if (!(e instanceof ModelError)) throw e;
+      // Calls made before the failure still cost money, so they are recorded.
+      if (e.usage?.costUsd > 0) await record(`(The AI provider failed partway through this reply: ${e.message})`, e.usage);
       return { status: 502, body: { error: `${e.message} Your message was saved; try again for a reply.`, saved } };
     }
-    const message = await store.addMessage(thread.id, {
-      role: "assistant", content: reply.text, model,
-      input_tokens: reply.inputTokens, output_tokens: reply.outputTokens, cost_usd: Math.round(reply.costUsd * 1e6) / 1e6,
-    });
+    const message = await record(reply.text, reply);
     return { saved, message };
   },
 });
