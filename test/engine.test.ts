@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { agentFor, titleFor } from "../src/agents.ts";
 import { Budget, DEFAULT_RATES } from "../src/budget.ts";
 import { loadConfig, type AgentKey } from "../src/config.ts";
@@ -124,6 +127,47 @@ test("paid calls are refused once worst-case cost would exceed the cap", () => {
   b.record({ agent: "claude", issue: "T-1", inputTokens: 5_000, outputTokens: 1_000 }); // $0.03
   assert.equal(b.check("claude", 1_000, 1_000).ok, false);
   assert.ok(Math.abs(b.spentUsd() - 0.03) < 1e-9);
+});
+
+test("a lost or unreadable spend ledger refuses paid calls until the owner resets that month (ARN-83 F5)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "acp-ledger-"));
+  const path = join(dir, "ledger.json");
+  const now = new Date("2026-10-20T12:00:00Z");
+  const paid = (b: Budget) => b.check("claude", 1_000, 1_000);
+
+  // Missing at a $0 cap: nothing paid can run, so a fresh ledger is written for later.
+  assert.equal(new Budget({ capUsd: 0, path, now }).ledgerProblem, null);
+  assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), { month: "2026-10", entries: [] });
+
+  // A real ledger carries over; last month's rolls over to a new month.
+  const b = new Budget({ capUsd: 1, path, now });
+  assert.equal(paid(b).ok, true);
+  b.record({ agent: "claude", issue: "T-1", inputTokens: 1_000, outputTokens: 1_000 });
+  assert.ok(new Budget({ capUsd: 1, path, now }).spentUsd() > 0);
+  assert.equal(new Budget({ capUsd: 1, path, now: new Date("2026-11-02T00:00:00Z") }).spentUsd(), 0);
+
+  for (const [setup, problem] of [
+    [() => rmSync(path), "missing"],
+    [() => writeFileSync(path, "{not json"), "unreadable"],
+    [() => writeFileSync(path, JSON.stringify({ month: "2026-10", entries: [{ usd: -5 }] })), "unreadable"],
+    [() => writeFileSync(path, JSON.stringify({ month: "2027-01", entries: [] })), "dated 2027-01"],
+  ] as const) {
+    setup();
+    const before = existsSync(path) ? readFileSync(path, "utf8") : null;
+    const lost = new Budget({ capUsd: 1, path, now });
+    assert.match(lost.ledgerProblem ?? "", new RegExp(problem));
+    assert.equal(paid(lost).ok, false, problem);
+    assert.match((paid(lost) as { reason: string }).reason, /ACP_LEDGER_RESET=2026-10/);
+    assert.equal(lost.check("gemini", 1_000, 1_000).ok, true, "free tier still runs");
+    lost.record({ agent: "gemini", issue: "T-2", inputTokens: 1, outputTokens: 1 });
+    assert.equal(existsSync(path) ? readFileSync(path, "utf8") : null, before, "an untrusted ledger is never replaced");
+    assert.equal(new Budget({ capUsd: 1, path, now, resetMonth: "2026-09" }).ledgerProblem !== null, true, "a stale reset does not count");
+    const reset = new Budget({ capUsd: 1, path, now, resetMonth: "2026-10" });
+    assert.equal(reset.ledgerProblem, null);
+    assert.equal(paid(reset).ok, true);
+    assert.equal(reset.spentUsd(), 0);
+  }
+  rmSync(dir, { recursive: true });
 });
 
 // ---------- policy ----------
