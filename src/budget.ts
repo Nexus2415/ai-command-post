@@ -3,21 +3,26 @@ import { dirname } from "node:path";
 import type { AgentKey } from "./config.ts";
 
 /**
- * USD per million tokens. Free-tier entries cost 0 but are still metered.
- * These are placeholders: confirm current list prices before raising the budget above $0.
+ * USD per million tokens, plus any flat per-request fee. Free-tier entries cost 0 but are still metered.
+ * List prices for the default models, checked 2026-10-20 (re-check before raising the budget above $0):
+ * claude-sonnet-5-5 $2/$10 (Anthropic model table); gpt-5-mini $0.25/$2 (OpenAI standard tier, per public
+ * price trackers); sonar $1/$1 plus a search fee of $5-$12 per 1,000 requests by context size, metered here at the
+ * highest ($0.012) so the cap check stays worst-case; gemini-2.5-flash on Google's free tier.
  */
 export interface Rate {
   inputPerM: number;
   outputPerM: number;
+  /** Flat USD charged per request on top of tokens (Perplexity's search fee). */
+  perRequestUsd?: number;
   /** True when the provider offers a no-cost tier for this model that the engine may use at a $0 cap. */
   freeTier: boolean;
 }
 
 export const DEFAULT_RATES: Record<AgentKey, Rate> = {
-  claude: { inputPerM: 3, outputPerM: 15, freeTier: false },
+  claude: { inputPerM: 2, outputPerM: 10, freeTier: false },
   chatgpt: { inputPerM: 0.25, outputPerM: 2, freeTier: false },
   gemini: { inputPerM: 0, outputPerM: 0, freeTier: true },
-  perplexity: { inputPerM: 1, outputPerM: 1, freeTier: false },
+  perplexity: { inputPerM: 1, outputPerM: 1, perRequestUsd: 0.012, freeTier: false },
 };
 
 export interface LedgerEntry {
@@ -66,7 +71,7 @@ export function monthKey(d = new Date()): string {
 }
 
 export function costUsd(rate: Rate, inputTokens: number, outputTokens: number): number {
-  return (inputTokens * rate.inputPerM + outputTokens * rate.outputPerM) / 1_000_000;
+  return (inputTokens * rate.inputPerM + outputTokens * rate.outputPerM) / 1_000_000 + (rate.perRequestUsd ?? 0);
 }
 
 export class Budget {
