@@ -1,4 +1,5 @@
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash } from "node:crypto";
+import { hasSitePassword, isSameOrigin } from "./lib/site-auth.js";
 
 // Owner command/question intake. Scope is fixed here, never taken from the browser.
 const LINEAR = "https://api.linear.app/graphql";
@@ -14,21 +15,6 @@ export const SUSPENDED_LEADS = Object.freeze(["gemini"]);
 const KEY_RE = /^[A-Za-z0-9_-]{16,64}$/;
 
 const error = (status, message) => ({ status, body: { error: message } });
-
-function authenticate(req, env) {
-  const provided = req.headers?.["x-acp-password"];
-  if (typeof provided !== "string" || provided.length > 1024) return false;
-  const a = Buffer.from(provided), b = Buffer.from(String(env.ACP_SITE_PASSWORD));
-  return a.length === b.length && timingSafeEqual(a, b);
-}
-
-// Writes must come from this site. Browsers always send Origin on POST.
-function sameOrigin(req) {
-  if (req.headers?.["sec-fetch-site"] && req.headers["sec-fetch-site"] !== "same-origin") return false;
-  const origin = req.headers?.origin;
-  if (!origin) return false;
-  try { return new URL(origin).host === req.headers?.host; } catch { return false; }
-}
 
 // Deterministic issue UUID from the idempotency key: Linear rejects a second create with the same id,
 // so a retried submit can't create a duplicate even across function instances.
@@ -88,8 +74,8 @@ const FIND = `query IntakeFind($id: String!) { issue(id: $id) { id identifier ur
 export async function handle(req, env, f = fetch, now = () => new Date()) {
   if (!env.ACP_SITE_PASSWORD || !env.LINEAR_API_KEY) return error(503, "Intake is not configured.");
   if (req.method !== "POST") return error(405, "POST only.");
-  if (!authenticate(req, env)) return error(401, "Authentication required.");
-  if (!sameOrigin(req)) return error(403, "Cross-site requests are not allowed.");
+  if (!hasSitePassword(req, env)) return error(401, "Authentication required.");
+  if (!isSameOrigin(req)) return error(403, "Cross-site requests are not allowed.");
   let body;
   try {
     if (typeof req.body === "string" && Buffer.byteLength(req.body) > MAX_BODY) return error(413, "Request too large.");

@@ -4,7 +4,7 @@
 // Dispatch is unsupported until its contract, budget reservation and ownership claim exist (see DISPATCH_UNSUPPORTED).
 // An ambiguous health answer (malformed 2xx) is reported as unknown, never as ready.
 // Turning this on in a preview is not production activation, and this file never mints or requests tokens.
-import { timingSafeEqual } from "node:crypto";
+import { hasSitePassword, isSameOrigin } from "./lib/site-auth.js";
 
 export const HEALTH_PATH = "/eve/v1/health"; // documented in HYBRID-ARCHITECTURE.md
 export const DISPATCH_UNSUPPORTED = "Eve dispatch is not implemented: its route, auth and payload are unverified, there is no budget reservation, and no ownership claim yet (ARN-52).";
@@ -13,20 +13,6 @@ const KEY_RE = /^[A-Za-z0-9_-]{16,64}$/;
 const MAX_TEXT = 4000;
 
 const out = (status, body) => ({ status, body });
-
-function authenticate(req, env) {
-  const provided = req.headers?.["x-acp-password"];
-  if (typeof provided !== "string" || provided.length > 1024) return false;
-  const a = Buffer.from(provided), b = Buffer.from(String(env.ACP_SITE_PASSWORD));
-  return a.length === b.length && timingSafeEqual(a, b);
-}
-
-function sameOrigin(req) {
-  if (req.headers?.["sec-fetch-site"] && req.headers["sec-fetch-site"] !== "same-origin") return false;
-  const origin = req.headers?.origin;
-  if (!origin) return false;
-  try { return new URL(origin).host === req.headers?.host; } catch { return false; }
-}
 
 // Returns the fixed https origin or null. Paths, queries, credentials in the URL are rejected.
 export function eveOrigin(env) {
@@ -61,9 +47,9 @@ async function call(env, f, method, path) {
 
 export async function handle(req, env, f = fetch) {
   if (!env.ACP_SITE_PASSWORD) return out(503, { status: "blocked", reason: "ACP_SITE_PASSWORD is not set.", nextStep: "Set ACP_SITE_PASSWORD on the server." });
-  if (!authenticate(req, env)) return out(401, { error: "Wrong password" });
+  if (!hasSitePassword(req, env)) return out(401, { error: "Wrong password" });
   if (req.method !== "POST") return out(405, { error: "POST only" });
-  if (!sameOrigin(req)) return out(403, { error: "Cross-origin request refused" });
+  if (!isSameOrigin(req)) return out(403, { error: "Cross-origin request refused" });
   let body;
   try { body = typeof req.body === "string" ? JSON.parse(req.body || "{}") : req.body || {}; } catch { return out(400, { error: "Invalid JSON" }); }
   if (!body || typeof body !== "object") return out(400, { error: "Invalid body" });
