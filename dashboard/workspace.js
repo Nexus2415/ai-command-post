@@ -66,8 +66,24 @@
   async function openProject(id) {
     projectId = id; threadId = null;
     $("tNew").disabled = false;
+    $("notes").hidden = false;
     closeThread();
-    await Promise.all([loadProjects(), loadThreads()]);
+    await Promise.all([loadProjects(), loadThreads(), loadNotes()]);
+  }
+
+  async function loadNotes() {
+    const { notes } = await post("list_notes", { projectId });
+    const list = $("nList"); list.replaceChildren();
+    if (!notes.length) list.append(el("li", "empty", "No notes yet."));
+    for (const n of notes) {
+      const row = el("li", "nrow");
+      const del = el("button", null, "Delete");
+      del.type = "button";
+      del.setAttribute("aria-label", "Delete note: " + n.content.slice(0, 40));
+      del.addEventListener("click", guard(async () => { await post("delete_note", { noteId: n.id }); await loadNotes(); }));
+      row.append(el("span", null, n.content), del);
+      list.append(row);
+    }
   }
 
   async function loadThreads() {
@@ -125,6 +141,11 @@
     const { project } = await post("create_project", { name: $("pName").value });
     $("pName").value = ""; toggle("pForm", "pName", false);
     await openProject(project.id);
+  }));
+  $("nForm").addEventListener("submit", guard(async () => {
+    await post("add_note", { projectId, content: $("nText").value });
+    $("nText").value = "";
+    await loadNotes();
   }));
   $("tForm").addEventListener("submit", guard(async () => {
     const { thread } = await post("create_thread", { projectId, title: $("tTitle").value, model: $("tModel").value });

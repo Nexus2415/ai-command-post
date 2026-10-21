@@ -33,3 +33,14 @@ In Vercel, open **arnexyia-command-post → Settings → Environment Variables**
 - A plugin switches on when its key is set in Vercel (`LINEAR_API_KEY`, `GITHUB_TOKEN` with `ACP_GITHUB_REPOS`, `FIRECRAWL_API_KEY`). The page lists which are on.
 - One reply may use tools for up to 3 rounds. The budget is checked again before each round, counting what the reply has already cost; when a cap is reached the reply stops and says so. Everything spent is recorded.
 - There is deliberately no "open any web page" tool. A page could instruct the AI to send private data it had read to an address the page chose. Writes stay with the engine, behind its safety policy.
+
+## Step 5: project memory
+- Each project has up to 20 short notes (2,000 characters each). Every AI in the project reads them at the start of each reply, up to 8,000 characters, newest kept first.
+- Add or delete notes under **Project memory** in the projects column.
+
+## Everything the owner does to start using the workspace
+1. Merge the workspace PRs in order (#61, #62, #63, #64, #65). Each merge goes live.
+2. Create the free Supabase project and run `db/workspace.sql` (see Owner setup above). If you ran an earlier copy, run the latest one again; it is safe to re-run.
+3. In Vercel, add `ACP_WORKSPACE_DB_URL` and `ACP_WORKSPACE_DB_KEY`.
+4. To chat, add one AI key and `ACP_WORKSPACE_MONTHLY_BUDGET_USD`, then redeploy.
+5. Optional plugins: `LINEAR_API_KEY`, `GITHUB_TOKEN` with `ACP_GITHUB_REPOS`, `FIRECRAWL_API_KEY`.

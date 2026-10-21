@@ -83,3 +83,6 @@ Only do this if you're sure nothing was spent that month that the record lost.
 - **Remove the Gemini key while Gemini is suspended.** In GitHub, go to **Settings**, then **Secrets and variables**, then **Actions**, then **Secrets**. Click **GEMINI_API_KEY**, then **Remove**.
 - **Turn on two-factor sign-in for your GitHub account.** Go to github.com, click **Settings**, then **Password and authentication**, then **Enable two-factor authentication**. This account can merge to a live site.
 - **Leave Eve alone.** Eve dispatch stays off. Its owner gates (intake grants and the JWT for `broker_intake`) are tracked in opsdesk-harmony.
+
+## Workspace (Phase 1)
+Setup for the new Workspace page (projects, threads, chat, plugins, project memory) is in `docs/WORKSPACE.md`, under "Everything the owner does to start using the workspace".
