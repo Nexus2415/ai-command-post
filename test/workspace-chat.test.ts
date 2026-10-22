@@ -108,7 +108,7 @@ test("suspended or keyless models are refused without a call", async () => {
   assert.match((outO.body as any).error, /No API key/);
   assert.equal(calls.length, 0);
   const m = (await call("models")).body as any;
-  assert.deepEqual(m.models.gemini, { ready: false, reason: "Turned off by the owner." });
+  assert.deepEqual(m.models.gemini, { ready: false, reason: "Turned off by the owner.", via: null });
   assert.equal(m.models.claude.ready, true);
 });
 

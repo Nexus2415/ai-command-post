@@ -18,6 +18,18 @@ const KEY_VARS = { claude: "ANTHROPIC_API_KEY", chatgpt: "OPENAI_API_KEY", gemin
 const MODEL_VARS = { claude: "ACP_MODEL_CLAUDE", chatgpt: "ACP_MODEL_CHATGPT", gemini: "ACP_MODEL_GEMINI", perplexity: "ACP_MODEL_PERPLEXITY" };
 const DEFAULT_IDS = { claude: "claude-sonnet-5-5", chatgpt: "gpt-5-mini", gemini: "gemini-2.5-flash", perplexity: "sonar" };
 
+// One OpenRouter key can stand in for every provider key. A model's own key, when set, still wins.
+const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
+const OR_MODEL_VARS = {
+  claude: "ACP_OPENROUTER_MODEL_CLAUDE", chatgpt: "ACP_OPENROUTER_MODEL_CHATGPT",
+  gemini: "ACP_OPENROUTER_MODEL_GEMINI", perplexity: "ACP_OPENROUTER_MODEL_PERPLEXITY",
+};
+const OR_DEFAULT_IDS = {
+  claude: "anthropic/claude-sonnet-5.5", chatgpt: "openai/gpt-5-mini", gemini: "google/gemini-2.5-flash", perplexity: "perplexity/sonar",
+};
+// OpenRouter adds a 5.5% fee when credits are bought, so every OpenRouter cost and estimate is raised by it.
+export const OPENROUTER_FEE = 1.055;
+
 export const MAX_OUTPUT_TOKENS = 2048;
 // History sent with each message: the newest messages up to this many characters.
 export const MAX_HISTORY_CHARS = 60_000;
@@ -26,9 +38,14 @@ export class ModelError extends Error {}
 
 export function modelStatus(env, model) {
   if (SUSPENDED_MODELS.includes(model)) return { ready: false, reason: "Turned off by the owner." };
-  if (!env[KEY_VARS[model]]) return { ready: false, reason: "No API key added yet." };
-  return { ready: true, reason: null, id: env[MODEL_VARS[model]] || DEFAULT_IDS[model] };
+  if (env[KEY_VARS[model]]) return { ready: true, reason: null, via: "direct", id: env[MODEL_VARS[model]] || DEFAULT_IDS[model] };
+  if (env.OPENROUTER_API_KEY) return { ready: true, reason: null, via: "openrouter", id: env[OR_MODEL_VARS[model]] || OR_DEFAULT_IDS[model] };
+  return { ready: false, reason: "No API key added yet." };
 }
+
+// True when calls for this model are paid for, even if the provider's own API has a free tier.
+export const isPaid = (env, model) => !RATES[model].freeTier || modelStatus(env, model).via === "openrouter";
+const feeFor = (env, model) => (modelStatus(env, model).via === "openrouter" ? OPENROUTER_FEE : 1);
 
 export function costUsd(model, inputTokens, outputTokens) {
   const r = RATES[model];
@@ -37,9 +54,9 @@ export function costUsd(model, inputTokens, outputTokens) {
 
 // Worst case for one reply, used before the call: about one token per 3 characters (tokens usually cover ~4),
 // and the full output allowance.
-export function estimateUsd(model, history) {
+export function estimateUsd(model, history, env = {}) {
   const chars = history.reduce((n, m) => n + m.content.length, 0);
-  return costUsd(model, Math.ceil(chars / 3) + 50, MAX_OUTPUT_TOKENS);
+  return costUsd(model, Math.ceil(chars / 3) + 50, MAX_OUTPUT_TOKENS) * feeFor(env, model);
 }
 
 // Newest messages that fit the character allowance, oldest first, starting with a user message.
@@ -100,6 +117,10 @@ export class BudgetStop extends Error {}
 // One model call. `convo` is the provider's own message list, so tool turns keep their exact shape.
 async function step(env, model, convo, tools, allowCalls, f, system) {
   const status = modelStatus(env, model);
+  if (status.via === "openrouter") {
+    return chatCompletions(f, OPENROUTER_URL, String(env.OPENROUTER_API_KEY).trim(), { "x-title": "AI Command Post" },
+      { model: status.id, max_tokens: MAX_OUTPUT_TOKENS }, model !== "perplexity", convo, tools, allowCalls, system);
+  }
   const key = String(env[KEY_VARS[model]]).trim();
   if (model === "claude") {
     const j = await postJson(f, "https://api.anthropic.com/v1/messages",
@@ -122,32 +143,10 @@ async function step(env, model, convo, tools, allowCalls, f, system) {
     };
   }
   if (model === "chatgpt" || model === "perplexity") {
-    const base = model === "chatgpt" ? "https://api.openai.com/v1" : "https://api.perplexity.ai";
+    const url = model === "chatgpt" ? "https://api.openai.com/v1/chat/completions" : "https://api.perplexity.ai/chat/completions";
     const limit = model === "chatgpt" ? { max_completion_tokens: MAX_OUTPUT_TOKENS } : { max_tokens: MAX_OUTPUT_TOKENS };
     // Perplexity searches the web itself and takes no tools.
-    const useTools = model === "chatgpt" && tools.length;
-    const j = await postJson(f, `${base}/chat/completions`, { authorization: `Bearer ${key}` }, {
-      model: status.id, messages: [{ role: "system", content: system }, ...convo], ...limit,
-      ...(useTools ? {
-        tools: tools.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: t.parameters } })),
-        ...(allowCalls ? {} : { tool_choice: "none" }),
-      } : {}),
-    });
-    const msg = j.choices?.[0]?.message ?? {};
-    let text = typeof msg.content === "string" ? msg.content : "";
-    const cites = Array.isArray(j.citations) ? j.citations.filter((c) => typeof c === "string") : [];
-    if (cites.length) text += `\n\nSources:\n${cites.map((c) => `- ${c}`).join("\n")}`;
-    const calls = (Array.isArray(msg.tool_calls) ? msg.tool_calls : []).map((c) => {
-      let args = {};
-      try { args = JSON.parse(c.function?.arguments ?? "{}"); } catch { args = {}; }
-      return { id: c.id, name: c.function?.name, args };
-    });
-    return {
-      text, calls,
-      assistantTurn: { role: "assistant", content: msg.content ?? null, ...(msg.tool_calls ? { tool_calls: msg.tool_calls } : {}) },
-      resultsTurns: (results) => results.map((r) => ({ role: "tool", tool_call_id: r.id, content: r.text })),
-      input: j.usage?.prompt_tokens, output: j.usage?.completion_tokens,
-    };
+    return chatCompletions(f, url, key, {}, { model: status.id, ...limit }, model === "chatgpt", convo, tools, allowCalls, system);
   }
   // Gemini: no tools here; it stays suspended in any case.
   const j = await postJson(f,
@@ -164,6 +163,39 @@ async function step(env, model, convo, tools, allowCalls, f, system) {
   };
 }
 
+// OpenAI-style chat completions, used by ChatGPT, Perplexity and OpenRouter.
+async function chatCompletions(f, url, key, headers, params, toolsAllowed, convo, tools, allowCalls, system) {
+  const useTools = toolsAllowed && tools.length;
+  const j = await postJson(f, url, { authorization: `Bearer ${key}`, ...headers }, {
+    ...params, messages: [{ role: "system", content: system }, ...convo],
+    ...(useTools ? {
+      tools: tools.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: t.parameters } })),
+      ...(allowCalls ? {} : { tool_choice: "none" }),
+    } : {}),
+  });
+  const msg = j.choices?.[0]?.message ?? {};
+  let text = typeof msg.content === "string" ? msg.content : "";
+  // Perplexity lists sources at the top level; OpenRouter passes them on as url_citation annotations.
+  const cites = [
+    ...(Array.isArray(j.citations) ? j.citations : []),
+    ...(Array.isArray(msg.annotations) ? msg.annotations.filter((a) => a?.type === "url_citation").map((a) => a.url_citation?.url) : []),
+  ].filter((c) => typeof c === "string" && /^https?:\/\//.test(c));
+  if (cites.length) text += `\n\nSources:\n${[...new Set(cites)].map((c) => `- ${c}`).join("\n")}`;
+  const calls = (Array.isArray(msg.tool_calls) ? msg.tool_calls : []).map((c) => {
+    let args = {};
+    try { args = JSON.parse(c.function?.arguments ?? "{}"); } catch { args = {}; }
+    return { id: c.id, name: c.function?.name, args };
+  });
+  return {
+    text, calls,
+    assistantTurn: { role: "assistant", content: msg.content ?? null, ...(msg.tool_calls ? { tool_calls: msg.tool_calls } : {}) },
+    resultsTurns: (results) => results.map((r) => ({ role: "tool", tool_call_id: r.id, content: r.text })),
+    input: j.usage?.prompt_tokens, output: j.usage?.completion_tokens,
+    // OpenRouter reports what the call cost in USD.
+    reportedUsd: Number.isFinite(j.usage?.cost) && j.usage.cost >= 0 ? j.usage.cost : 0,
+  };
+}
+
 const tokens = (n) => Math.max(0, Math.floor(Number(n) || 0));
 
 /**
@@ -174,6 +206,7 @@ const tokens = (n) => Math.max(0, Math.floor(Number(n) || 0));
 export async function runChat(env, model, history, { f = fetch, tools = [], runTool, beforeCall = async () => {}, now = Date.now, notes = [] } = {}) {
   const status = modelStatus(env, model);
   if (!status.ready) throw new ModelError(status.reason);
+  const fee = feeFor(env, model);
   const started = now();
   const system = systemPrompt(notes);
   const convo = history.map((m) => ({ role: m.role, content: m.content }));
@@ -183,7 +216,7 @@ export async function runChat(env, model, history, { f = fetch, tools = [], runT
   for (let round = 0; ; round++) {
     const allowCalls = round < MAX_TOOL_ROUNDS;
     try {
-      await beforeCall(costUsd(model, Math.ceil(JSON.stringify(convo).length / 3) + 50, MAX_OUTPUT_TOKENS), cost);
+      await beforeCall(costUsd(model, Math.ceil(JSON.stringify(convo).length / 3) + 50, MAX_OUTPUT_TOKENS) * fee, cost);
     } catch (e) {
       if (!(e instanceof BudgetStop)) throw e;
       note = e.message;
@@ -197,7 +230,9 @@ export async function runChat(env, model, history, { f = fetch, tools = [], runT
       throw e;
     }
     const i = tokens(r.input), o = tokens(r.output);
-    inputTokens += i; outputTokens += o; cost += costUsd(model, i, o);
+    inputTokens += i; outputTokens += o;
+    // Through OpenRouter, the higher of its reported cost and our own rates, plus the credit fee.
+    cost += status.via === "openrouter" ? Math.max(r.reportedUsd ?? 0, costUsd(model, i, o)) * fee : costUsd(model, i, o);
     text = r.text;
     if (!r.calls.length || !allowCalls || !tools.length) break;
     if (now() - started > DEADLINE_MS) { note = "Stopped early to stay inside the time limit."; break; }

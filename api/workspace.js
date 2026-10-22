@@ -3,7 +3,7 @@
 // budget checks.
 import { hasSitePassword, isSameOrigin } from "./lib/site-auth.js";
 import { MODELS, StoreError, createSupabaseStore, isId, workspaceConfigured } from "./lib/workspace-store.js";
-import { BudgetStop, ModelError, RATES, estimateUsd, modelStatus, runChat, trimHistory } from "./lib/workspace-models.js";
+import { BudgetStop, ModelError, estimateUsd, isPaid, modelStatus, runChat, trimHistory } from "./lib/workspace-models.js";
 import { pluginStatus, readyTools, runTool } from "./lib/workspace-plugins.js";
 
 // Vercel: model replies can take a while.
@@ -86,7 +86,7 @@ const ACTIONS = Object.freeze({
     const spent = await store.spend(threadId, monthStart(deps.now()));
     const models = Object.fromEntries(MODELS.map((m) => {
       const s = modelStatus(env, m);
-      return [m, { ready: s.ready, reason: s.reason }];
+      return [m, { ready: s.ready, reason: s.reason, via: s.via ?? null }];
     }));
     return {
       models, plugins: pluginStatus(env),
@@ -109,14 +109,14 @@ const ACTIONS = Object.freeze({
     else if (history.at(-1)?.role !== "user") return error(400, "There is no message waiting for a reply.");
     const sent = trimHistory(history);
 
-    const paid = !RATES[model].freeTier;
+    const paid = isPaid(env, model);
     const cap = caps(env);
     const spent = paid ? await store.spend(thread.id, monthStart(deps.now())) : null;
     const over = (est) => !paid ? null
       : spent.monthUsd + est > cap.month ? `This would go over the monthly workspace budget (${usd(spent.monthUsd)} of ${usd(cap.month)} used).`
       : spent.threadUsd + est > cap.thread ? `This would go over this thread's budget (${usd(spent.threadUsd)} of ${usd(cap.thread)} used). Start a new thread to continue.`
       : null;
-    const first = over(estimateUsd(model, sent));
+    const first = over(estimateUsd(model, sent, env));
     if (first) return error(402, first);
 
     const saved = content ? await store.addMessage(thread.id, { role: "user", content }) : null;
