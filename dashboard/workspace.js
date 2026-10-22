@@ -5,7 +5,7 @@
   const $ = (id) => document.getElementById(id);
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = String(text); return e; };
   const MODEL_NAMES = { claude: "Claude", chatgpt: "ChatGPT", gemini: "Gemini", perplexity: "Perplexity" };
-  let projectId = null, threadId = null, busy = false, status = null;
+  let projectId = null, threadId = null, busy = false, status = null, files = [];
 
   // The password lives in memory for this tab only; it is never written to browser storage (ARN-53).
   let password = "";
@@ -113,7 +113,8 @@
     messages.forEach((m, i) => {
       const box = el("div", "m " + (m.role === "assistant" ? "assistant" : "user"));
       if (m.model) box.dataset.model = m.model;
-      box.append(el("span", "who", m.role === "assistant" ? (MODEL_NAMES[m.model] || "AI") : "You"), document.createTextNode(m.content));
+      box.append(el("span", "who", m.role === "assistant" ? (MODEL_NAMES[m.model] || "AI") : "You"));
+      showContent(box, m.content);
       const prev = messages[i - 1], next = messages[i + 1];
       const grouped = m.role === "assistant" && ((prev && prev.role === "assistant") || (next && next.role === "assistant"));
       if (!grouped) { row = null; list.append(box); return; }
@@ -141,6 +142,33 @@
     }
     box.hidden = !others.length;
     await Promise.all([loadThreads(), loadStatus()]);
+  }
+
+  // Attached files arrive folded into the message between markers; each shows as a collapsible block.
+  const FILE_BLOCK = /<<<file: ([^\n]{1,120})>>>\n([\s\S]*?)\n<<<end of file>>>/g;
+  function showContent(box, content) {
+    let at = 0;
+    for (const f of content.matchAll(FILE_BLOCK)) {
+      const before = content.slice(at, f.index).trim();
+      if (before) box.append(document.createTextNode(before));
+      const d = el("details", "file");
+      d.append(el("summary", "", "File: " + f[1]), el("pre", "", f[2]));
+      box.append(d);
+      at = f.index + f[0].length;
+    }
+    const rest = content.slice(at).trim();
+    if (rest || at === 0) box.append(document.createTextNode(at === 0 ? content : rest));
+  }
+
+  // Text files picked for the next message, up to 3. They are read here and sent as text, never uploaded as files.
+  function showFiles() {
+    const row = $("cFiles"); row.replaceChildren();
+    files.forEach((f, i) => {
+      const chip = el("span", "chip", f.name + " (" + f.text.length.toLocaleString() + " characters)");
+      const x = el("button", "", "Remove"); x.type = "button"; x.setAttribute("aria-label", "Remove " + f.name);
+      x.addEventListener("click", () => { files.splice(i, 1); showFiles(); });
+      chip.append(x); row.append(chip);
+    });
   }
 
   // Run one user action at a time and report failures on the page.
@@ -172,9 +200,23 @@
     $("tTitle").value = ""; toggle("tForm", "tTitle", false);
     await openThread(thread.id);
   }));
+  $("cAttach").addEventListener("click", () => $("cFile").click());
+  $("cFile").addEventListener("change", guard(async () => {
+    try {
+      for (const file of $("cFile").files) {
+        if (files.length >= 3) throw new Error("Attach at most 3 files.");
+        if (file.size > 200000) throw new Error(file.name + " is too big. Text files up to 30,000 characters work.");
+        const text = await file.text();
+        if (!text.trim() || text.includes("\u0000")) throw new Error(file.name + " isn't a text file, or it's empty.");
+        if (text.length > 30000) throw new Error(file.name + " is over 30,000 characters. Attach a shorter file.");
+        files.push({ name: file.name.replace(/[\u0000-\u001f<>]/g, "_").slice(0, 120), text });
+      }
+    } finally { $("cFile").value = ""; showFiles(); }
+  }));
   $("cForm").addEventListener("submit", guard(async () => {
     const text = $("cText").value;
-    if (!text.trim()) return;
+    if (!text.trim() && !files.length) return;
+    const attachments = files.length ? files : undefined;
     $("cSend").disabled = true;
     const ms = status && currentModel() && status.models[currentModel()];
     say(ms && ms.ready ? "Waiting for the reply…" : "");
@@ -183,10 +225,10 @@
       const also = [...$("cCompare").querySelectorAll("input:checked")].map((i) => i.value);
       let failed = [];
       if (ms && ms.ready && also.length) {
-        failed = (await post("compare", { threadId, content: text, models: [currentModel(), ...also] })).failed || [];
-      } else if (ms && ms.ready) await post("chat", { threadId, content: text }).catch(async (e) => { await openThread(threadId); throw e; });
-      else await post("add_message", { threadId, content: text });
-      $("cText").value = "";
+        failed = (await post("compare", { threadId, content: text, attachments, models: [currentModel(), ...also] })).failed || [];
+      } else if (ms && ms.ready) await post("chat", { threadId, content: text, attachments }).catch(async (e) => { await openThread(threadId); throw e; });
+      else await post("add_message", { threadId, content: text, attachments });
+      $("cText").value = ""; files = []; showFiles();
       say(failed.map((f) => (MODEL_NAMES[f.model] || f.model) + " didn't answer: " + f.error).join(" "), failed.length ? "err" : "");
       await openThread(threadId);
     } finally { $("cSend").disabled = false; }

@@ -45,6 +45,11 @@ In Vercel, open **arnexyia-command-post → Settings → Environment Variables**
 - If one AI fails, the other answers are kept and the page says which AI didn't answer.
 - Later messages in the thread send the earlier answers back to the AI labelled by who gave them, so it can build on all of them.
 
+## Step 7: text files
+- **Attach text file** under the message box adds up to 3 text files (notes, CSV, JSON, code and similar) to the next message. A message can be just files.
+- The page reads each file as text and sends it inside the message, marked with its name; nothing is uploaded or stored anywhere else. The 32,000-character message limit covers the files too.
+- In the conversation each file shows as a block you can open and close. Images and PDFs aren't supported yet.
+
 ## Everything the owner does to start using the workspace
 1. Merge the workspace PRs in order (#61, #62, #63, #64, #65). Each merge goes live.
 2. Create the free Supabase project and run `db/workspace.sql` (see Owner setup above). If you ran an earlier copy, run the latest one again; it is safe to re-run.
