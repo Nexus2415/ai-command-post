@@ -5,6 +5,7 @@ import { hasSitePassword, isSameOrigin } from "./lib/site-auth.js";
 import { MODELS, StoreError, createSupabaseStore, isId, workspaceConfigured } from "./lib/workspace-store.js";
 import { BudgetStop, ModelError, estimateUsd, isPaid, mergeTurns, modelStatus, runChat, trimHistory } from "./lib/workspace-models.js";
 import { pluginStatus, readyTools, runTool } from "./lib/workspace-plugins.js";
+import { mcpStatus, mcpTools } from "./lib/workspace-mcp.js";
 
 // Vercel: model replies can take a while.
 export const config = { maxDuration: 120 };
@@ -126,7 +127,7 @@ const ACTIONS = Object.freeze({
       return [m, { ready: s.ready, reason: s.reason, via: s.via ?? null }];
     }));
     return {
-      models, plugins: pluginStatus(env),
+      models, plugins: { ...pluginStatus(env), ...mcpStatus(env) },
       budget: { ...caps(env), monthSpent: spent.monthUsd, threadSpent: threadId ? spent.threadUsd : null },
     };
   },
@@ -153,7 +154,8 @@ const ACTIONS = Object.freeze({
     if (first) return error(402, first);
 
     const saved = content ? await store.addMessage(thread.id, { role: "user", content }) : null;
-    const tools = readyTools(env);
+    // MCP servers are asked for their tools only for models that can use tools.
+    const tools = [...readyTools(env), ...(model === "perplexity" ? [] : await mcpTools(env, deps.fetch))];
     const record = (text, r) => reply(store, thread.id, model, text, r);
     let out;
     try {
