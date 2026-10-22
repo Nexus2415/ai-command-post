@@ -71,6 +71,10 @@ fieldset.row{border:0;margin:0;padding:0}
 fieldset.row legend{float:left;margin-right:4px}
 fieldset.row label{display:inline-flex;gap:4px;align-items:center;font-size:13px}
 fieldset.row input{width:auto}
+details.file{margin-top:6px;border:1px solid var(--line);border-radius:6px;padding:4px 8px;white-space:normal}
+details.file summary{cursor:pointer;font:500 12px var(--mono)}
+details.file pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:300px;overflow:auto;margin:6px 0 0;font:12px var(--mono)}
+#cFiles .chip button{margin-left:6px;border:0;background:none;color:var(--bad);cursor:pointer;font-size:12px}
 .m .who{display:block;font:500 11px var(--mono);color:var(--muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:.08em}
 .composer{display:grid;gap:8px;padding:12px 14px;border-top:1px solid var(--line)}
 .composer textarea{min-height:72px;resize:vertical}
@@ -124,7 +128,8 @@ fieldset.row input{width:auto}
       <div class="msgs" id="mList" aria-live="polite"></div>
       <form class="composer" id="cForm" hidden>
         <label class="note" for="cText">Message</label>
-        <textarea id="cText" maxlength="32000" required></textarea>
+        <textarea id="cText" maxlength="32000"></textarea>
+        <div class="row"><button class="btn ghost" type="button" id="cAttach">Attach text file</button><input type="file" id="cFile" multiple hidden accept=".txt,.md,.csv,.tsv,.json,.log,.xml,.yaml,.yml,.html,.css,.js,.ts,.py,.sql,.sh,text/plain,text/markdown,text/csv"><span class="row" id="cFiles"></span></div>
         <fieldset class="row" id="cCompare" hidden><legend class="note">Also ask, side by side:</legend></fieldset>
         <div class="row"><button class="btn" type="submit" id="cSend">Send</button><button class="btn ghost" type="button" id="cRetry" hidden>Get reply</button><span class="note" id="cNote">Ctrl+Enter to send.</span></div>
       </form>

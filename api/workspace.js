@@ -5,6 +5,7 @@ import { hasSitePassword, isSameOrigin } from "./lib/site-auth.js";
 import { MODELS, StoreError, createSupabaseStore, isId, workspaceConfigured } from "./lib/workspace-store.js";
 import { BudgetStop, ModelError, estimateUsd, isPaid, mergeTurns, modelStatus, runChat, trimHistory } from "./lib/workspace-models.js";
 import { pluginStatus, readyTools, runTool } from "./lib/workspace-plugins.js";
+import { mcpStatus, mcpTools } from "./lib/workspace-mcp.js";
 
 // Vercel: model replies can take a while.
 export const config = { maxDuration: 120 };
@@ -26,6 +27,26 @@ function caps(env) {
 const monthStart = (now) => new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
 const usd = (n) => "$" + n.toFixed(2);
 const MAX_NOTES = 20;
+// Text files attached to a message are folded into it, marked by name, so the 32,000-character limit covers them.
+const MAX_FILES = 3;
+const NOT_A_MESSAGE = "A message of 1 to 32,000 characters is required.";
+function userMessage(args) {
+  const files = args.attachments ?? [];
+  if (!Array.isArray(files) || files.length > MAX_FILES) return { error: `Attach at most ${MAX_FILES} files.` };
+  if (args.content !== undefined && typeof args.content !== "string") return { error: NOT_A_MESSAGE };
+  const typed = (args.content ?? "").trim();
+  const parts = typed ? [typed] : [];
+  for (const f of files) {
+    const name = typeof f?.name === "string" ? f.name.trim() : "";
+    if (!name || name.length > 120 || /[\u0000-\u001f<>]/.test(name)) return { error: "Each file needs a plain name of up to 120 characters." };
+    if (typeof f.text !== "string" || !f.text.trim() || f.text.includes("\u0000")) return { error: `${name} isn't a text file, or it's empty.` };
+    parts.push(`<<<file: ${name}>>>\n${f.text.replace(/\s+$/, "")}\n<<<end of file>>>`);
+  }
+  const content = parts.join("\n\n");
+  if (!content) return { error: NOT_A_MESSAGE };
+  if (content.length > 32_000) return { error: "The message and its files are over 32,000 characters. Attach a shorter file." };
+  return { content };
+}
 // Side-by-side answers: how many AIs one message may go to.
 const MAX_COMPARE = 3;
 const NAMES = { claude: "Claude", chatgpt: "ChatGPT", gemini: "Gemini", perplexity: "Perplexity" };
@@ -75,8 +96,8 @@ const ACTIONS = Object.freeze({
   },
   async add_message(store, args) {
     if (!isId(args.threadId)) return error(400, "Unknown thread.");
-    const content = text(args.content, 32_000);
-    if (!content) return error(400, "A message of 1 to 32,000 characters is required.");
+    const { content, error: bad } = userMessage(args);
+    if (bad) return error(400, bad);
     if (!(await store.getThread(args.threadId))) return error(404, "Unknown thread.");
     return { message: await store.addMessage(args.threadId, { role: "user", content }) };
   },
@@ -106,15 +127,16 @@ const ACTIONS = Object.freeze({
       return [m, { ready: s.ready, reason: s.reason, via: s.via ?? null }];
     }));
     return {
-      models, plugins: pluginStatus(env),
+      models, plugins: { ...pluginStatus(env), ...mcpStatus(env) },
       budget: { ...caps(env), monthSpent: spent.monthUsd, threadSpent: threadId ? spent.threadUsd : null },
     };
   },
   // Sends the user's message (or, with no content, retries the reply to the last one) to the thread's model.
   async chat(store, args, env, deps) {
     if (!isId(args.threadId)) return error(400, "Unknown thread.");
-    const content = args.content === undefined ? null : text(args.content, 32_000);
-    if (args.content !== undefined && !content) return error(400, "A message of 1 to 32,000 characters is required.");
+    const retry = args.content === undefined && args.attachments === undefined;
+    const { content = null, error: bad } = retry ? {} : userMessage(args);
+    if (bad) return error(400, bad);
     const thread = await store.getThread(args.threadId);
     if (!thread) return error(404, "Unknown thread.");
     const model = thread.model;
@@ -132,7 +154,8 @@ const ACTIONS = Object.freeze({
     if (first) return error(402, first);
 
     const saved = content ? await store.addMessage(thread.id, { role: "user", content }) : null;
-    const tools = readyTools(env);
+    // MCP servers are asked for their tools only for models that can use tools.
+    const tools = [...readyTools(env), ...(model === "perplexity" ? [] : await mcpTools(env, deps.fetch))];
     const record = (text, r) => reply(store, thread.id, model, text, r);
     let out;
     try {
@@ -159,8 +182,8 @@ const ACTIONS = Object.freeze({
   // off here, so the budget check before the calls covers everything they can spend.
   async compare(store, args, env, deps) {
     if (!isId(args.threadId)) return error(400, "Unknown thread.");
-    const content = text(args.content, 32_000);
-    if (!content) return error(400, "A message of 1 to 32,000 characters is required.");
+    const { content, error: bad } = userMessage(args);
+    if (bad) return error(400, bad);
     const models = Array.isArray(args.models) ? [...new Set(args.models)] : [];
     if (models.length < 2 || models.length > MAX_COMPARE || !models.every((m) => MODELS.includes(m))) {
       return error(400, `Pick 2 to ${MAX_COMPARE} AIs to compare.`);

@@ -45,9 +45,22 @@ In Vercel, open **arnexyia-command-post → Settings → Environment Variables**
 - If one AI fails, the other answers are kept and the page says which AI didn't answer.
 - Later messages in the thread send the earlier answers back to the AI labelled by who gave them, so it can build on all of them.
 
+## Step 7: text files
+- **Attach text file** under the message box adds up to 3 text files (notes, CSV, JSON, code and similar) to the next message. A message can be just files.
+- The page reads each file as text and sends it inside the message, marked with its name; nothing is uploaded or stored anywhere else. The 32,000-character message limit covers the files too.
+- In the conversation each file shows as a block you can open and close. Images and PDFs aren't supported yet.
+
+## Step 8: MCP plugins
+- Any remote MCP server (Streamable HTTP) can be added as a plugin by listing it in `ACP_MCP_SERVERS`, for example:
+  `[{"name":"notes","url":"https://mcp.example.com/mcp","tokenVar":"ACP_MCP_TOKEN_NOTES","tools":["search"]}]`
+- Only the tools you name in `tools` are offered, and only when the server marks them read-only. A tool that can change things is never offered, even if you name it. Writes stay with the engine.
+- A server's token goes in its own Vercel variable whose name starts with `ACP_MCP_TOKEN_`. No other variable can be used, so no other key can be sent to an MCP server.
+- Up to 5 servers. A server that can't be reached is skipped and the reply goes ahead. The page lists each server under Plugins. Claude and ChatGPT can use them; Perplexity and side-by-side answers don't use plugins.
+- Before naming a tool, check what it reads. A tool that fetches any web page brings back the risk described in Step 4.
+
 ## Everything the owner does to start using the workspace
 1. Merge the workspace PRs in order (#61, #62, #63, #64, #65). Each merge goes live.
 2. Create the free Supabase project and run `db/workspace.sql` (see Owner setup above). If you ran an earlier copy, run the latest one again; it is safe to re-run.
 3. In Vercel, add `ACP_WORKSPACE_DB_URL` and `ACP_WORKSPACE_DB_KEY`.
 4. To chat, add one AI key (`OPENROUTER_API_KEY` covers every AI) and `ACP_WORKSPACE_MONTHLY_BUDGET_USD`, then redeploy.
-5. Optional plugins: `LINEAR_API_KEY`, `GITHUB_TOKEN` with `ACP_GITHUB_REPOS`, `FIRECRAWL_API_KEY`.
+5. Optional plugins: `LINEAR_API_KEY`, `GITHUB_TOKEN` with `ACP_GITHUB_REPOS`, `FIRECRAWL_API_KEY`, and MCP servers in `ACP_MCP_SERVERS` (Step 8).
