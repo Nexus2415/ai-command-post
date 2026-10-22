@@ -108,18 +108,38 @@
     chip.lastElementChild.textContent = MODEL_NAMES[thread.model] || thread.model;
     const list = $("mList"); list.replaceChildren();
     if (!messages.length) list.append(el("p", "empty", "No messages yet."));
-    for (const m of messages) {
+    // Back-to-back AI answers to one message are side-by-side answers, shown in columns.
+    let row = null;
+    messages.forEach((m, i) => {
       const box = el("div", "m " + (m.role === "assistant" ? "assistant" : "user"));
       if (m.model) box.dataset.model = m.model;
       box.append(el("span", "who", m.role === "assistant" ? (MODEL_NAMES[m.model] || "AI") : "You"), document.createTextNode(m.content));
-      list.append(box);
-    }
+      const prev = messages[i - 1], next = messages[i + 1];
+      const grouped = m.role === "assistant" && ((prev && prev.role === "assistant") || (next && next.role === "assistant"));
+      if (!grouped) { row = null; list.append(box); return; }
+      if (!row || !(prev && prev.role === "assistant")) { row = el("div", "cmp"); list.append(row); }
+      row.append(box);
+    });
     list.scrollTop = list.scrollHeight;
     $("cForm").hidden = false;
     const ms = status && status.models[thread.model];
     $("cNote").textContent = ms && !ms.ready ? (MODEL_NAMES[thread.model] || "This AI") + " can't reply yet: " + ms.reason
       : "Ctrl+Enter to send.";
     $("cRetry").hidden = !(messages.length && messages[messages.length - 1].role === "user" && ms && ms.ready);
+    // Other ready AIs can answer the next message alongside this thread's AI (up to 3 in all; plugins are off then).
+    const box = $("cCompare");
+    box.replaceChildren(box.firstElementChild);
+    const others = ms && ms.ready && status ? Object.keys(MODEL_NAMES).filter((k) => k !== thread.model && status.models[k] && status.models[k].ready) : [];
+    for (const k of others) {
+      const input = el("input"); input.type = "checkbox"; input.value = k;
+      input.addEventListener("change", () => {
+        const on = box.querySelectorAll("input:checked").length;
+        for (const i of box.querySelectorAll("input")) i.disabled = !i.checked && on >= 2;
+      });
+      const label = el("label"); label.append(input, document.createTextNode(MODEL_NAMES[k]));
+      box.append(label);
+    }
+    box.hidden = !others.length;
     await Promise.all([loadThreads(), loadStatus()]);
   }
 
@@ -160,10 +180,14 @@
     say(ms && ms.ready ? "Waiting for the reply…" : "");
     try {
       // With no AI ready the message is only saved; otherwise the server saves it and asks the thread's AI.
-      if (ms && ms.ready) await post("chat", { threadId, content: text }).catch(async (e) => { await openThread(threadId); throw e; });
+      const also = [...$("cCompare").querySelectorAll("input:checked")].map((i) => i.value);
+      let failed = [];
+      if (ms && ms.ready && also.length) {
+        failed = (await post("compare", { threadId, content: text, models: [currentModel(), ...also] })).failed || [];
+      } else if (ms && ms.ready) await post("chat", { threadId, content: text }).catch(async (e) => { await openThread(threadId); throw e; });
       else await post("add_message", { threadId, content: text });
       $("cText").value = "";
-      say("");
+      say(failed.map((f) => (MODEL_NAMES[f.model] || f.model) + " didn't answer: " + f.error).join(" "), failed.length ? "err" : "");
       await openThread(threadId);
     } finally { $("cSend").disabled = false; }
   }));

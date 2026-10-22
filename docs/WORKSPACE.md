@@ -39,6 +39,12 @@ In Vercel, open **arnexyia-command-post → Settings → Environment Variables**
 - Each project has up to 20 short notes (2,000 characters each). Every AI in the project reads them at the start of each reply, up to 8,000 characters, newest kept first.
 - Add or delete notes under **Project memory** in the projects column.
 
+## Step 6: side-by-side answers
+- Under the message box, tick up to two other ready AIs ("Also ask, side by side"). The message then goes to the thread's AI and those AIs at once, and their answers show in columns.
+- The budget check covers every chosen AI's worst case together, before any call. Plugins stay off for side-by-side answers, so nothing can spend past that check.
+- If one AI fails, the other answers are kept and the page says which AI didn't answer.
+- Later messages in the thread send the earlier answers back to the AI labelled by who gave them, so it can build on all of them.
+
 ## Everything the owner does to start using the workspace
 1. Merge the workspace PRs in order (#61, #62, #63, #64, #65). Each merge goes live.
 2. Create the free Supabase project and run `db/workspace.sql` (see Owner setup above). If you ran an earlier copy, run the latest one again; it is safe to re-run.

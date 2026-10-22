@@ -59,6 +59,25 @@ export function estimateUsd(model, history, env = {}) {
   return costUsd(model, Math.ceil(chars / 3) + 50, MAX_OUTPUT_TOKENS) * feeFor(env, model);
 }
 
+const NAMES = { claude: "Claude", chatgpt: "ChatGPT", gemini: "Gemini", perplexity: "Perplexity" };
+
+// Stored messages as turns that alternate: back-to-back messages with the same role are joined, and when several
+// AIs answered one message (side-by-side answers), each answer is labelled with the AI that gave it.
+export function mergeTurns(messages) {
+  const out = [];
+  for (let i = 0; i < messages.length; i++) {
+    const m = messages[i];
+    const group = [m];
+    while (i + 1 < messages.length && messages[i + 1].role === m.role) group.push(messages[++i]);
+    const several = m.role === "assistant" && group.length > 1;
+    out.push({
+      role: m.role,
+      content: group.map((g) => (several ? `Answer from ${NAMES[g.model] ?? "another AI"}:\n${g.content}` : g.content)).join("\n\n"),
+    });
+  }
+  return out;
+}
+
 // Newest messages that fit the character allowance, oldest first, starting with a user message.
 export function trimHistory(messages) {
   const out = [];

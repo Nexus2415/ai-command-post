@@ -3,7 +3,7 @@
 // budget checks.
 import { hasSitePassword, isSameOrigin } from "./lib/site-auth.js";
 import { MODELS, StoreError, createSupabaseStore, isId, workspaceConfigured } from "./lib/workspace-store.js";
-import { BudgetStop, ModelError, estimateUsd, isPaid, modelStatus, runChat, trimHistory } from "./lib/workspace-models.js";
+import { BudgetStop, ModelError, estimateUsd, isPaid, mergeTurns, modelStatus, runChat, trimHistory } from "./lib/workspace-models.js";
 import { pluginStatus, readyTools, runTool } from "./lib/workspace-plugins.js";
 
 // Vercel: model replies can take a while.
@@ -26,6 +26,23 @@ function caps(env) {
 const monthStart = (now) => new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
 const usd = (n) => "$" + n.toFixed(2);
 const MAX_NOTES = 20;
+// Side-by-side answers: how many AIs one message may go to.
+const MAX_COMPARE = 3;
+const NAMES = { claude: "Claude", chatgpt: "ChatGPT", gemini: "Gemini", perplexity: "Perplexity" };
+
+// Returns a check that says why `est` more USD would go over a cap, or null. Free calls are never stopped.
+async function budgetCheck(store, env, deps, threadId, paid) {
+  if (!paid) return () => null;
+  const cap = caps(env);
+  const spent = await store.spend(threadId, monthStart(deps.now()));
+  return (est) => spent.monthUsd + est > cap.month ? `This would go over the monthly workspace budget (${usd(spent.monthUsd)} of ${usd(cap.month)} used).`
+    : spent.threadUsd + est > cap.thread ? `This would go over this thread's budget (${usd(spent.threadUsd)} of ${usd(cap.thread)} used). Start a new thread to continue.`
+    : null;
+}
+const reply = (store, threadId, model, text, r) => store.addMessage(threadId, {
+  role: "assistant", content: text, model,
+  input_tokens: r.inputTokens, output_tokens: r.outputTokens, cost_usd: Math.round(r.costUsd * 1e6) / 1e6,
+});
 
 const ACTIONS = Object.freeze({
   async list_projects(store) {
@@ -104,30 +121,22 @@ const ACTIONS = Object.freeze({
     const status = modelStatus(env, model);
     if (!status.ready) return error(409, `This thread's AI isn't available: ${status.reason}`);
 
-    const history = (await store.listMessages(thread.id)).map((m) => ({ role: m.role, content: m.content }));
+    const stored = await store.listMessages(thread.id);
+    const history = mergeTurns(stored);
     if (content) history.push({ role: "user", content });
-    else if (history.at(-1)?.role !== "user") return error(400, "There is no message waiting for a reply.");
-    const sent = trimHistory(history);
+    else if (stored.at(-1)?.role !== "user") return error(400, "There is no message waiting for a reply.");
+    const sent = trimHistory(mergeTurns(history));
 
-    const paid = isPaid(env, model);
-    const cap = caps(env);
-    const spent = paid ? await store.spend(thread.id, monthStart(deps.now())) : null;
-    const over = (est) => !paid ? null
-      : spent.monthUsd + est > cap.month ? `This would go over the monthly workspace budget (${usd(spent.monthUsd)} of ${usd(cap.month)} used).`
-      : spent.threadUsd + est > cap.thread ? `This would go over this thread's budget (${usd(spent.threadUsd)} of ${usd(cap.thread)} used). Start a new thread to continue.`
-      : null;
+    const over = await budgetCheck(store, env, deps, thread.id, isPaid(env, model));
     const first = over(estimateUsd(model, sent, env));
     if (first) return error(402, first);
 
     const saved = content ? await store.addMessage(thread.id, { role: "user", content }) : null;
     const tools = readyTools(env);
-    const record = (text, r) => store.addMessage(thread.id, {
-      role: "assistant", content: text, model,
-      input_tokens: r.inputTokens, output_tokens: r.outputTokens, cost_usd: Math.round(r.costUsd * 1e6) / 1e6,
-    });
-    let reply;
+    const record = (text, r) => reply(store, thread.id, model, text, r);
+    let out;
     try {
-      reply = await runChat(env, model, sent, {
+      out = await runChat(env, model, sent, {
         f: deps.fetch, tools,
         notes: (await store.listNotes(thread.project_id)).map((n) => n.content),
         runTool: (name, a) => runTool(env, tools, name, a, deps.fetch),
@@ -143,8 +152,46 @@ const ACTIONS = Object.freeze({
       if (e.usage?.costUsd > 0) await record(`(The AI provider failed partway through this reply: ${e.message})`, e.usage);
       return { status: 502, body: { error: `${e.message} Your message was saved; try again for a reply.`, saved } };
     }
-    const message = await record(reply.text, reply);
+    const message = await record(out.text, out);
     return { saved, message };
+  },
+  // Side-by-side answers: one message goes to 2-3 AIs at once and each answer is saved with its AI. Plugins stay
+  // off here, so the budget check before the calls covers everything they can spend.
+  async compare(store, args, env, deps) {
+    if (!isId(args.threadId)) return error(400, "Unknown thread.");
+    const content = text(args.content, 32_000);
+    if (!content) return error(400, "A message of 1 to 32,000 characters is required.");
+    const models = Array.isArray(args.models) ? [...new Set(args.models)] : [];
+    if (models.length < 2 || models.length > MAX_COMPARE || !models.every((m) => MODELS.includes(m))) {
+      return error(400, `Pick 2 to ${MAX_COMPARE} AIs to compare.`);
+    }
+    const thread = await store.getThread(args.threadId);
+    if (!thread) return error(404, "Unknown thread.");
+    for (const m of models) {
+      const status = modelStatus(env, m);
+      if (!status.ready) return error(409, `${NAMES[m]} isn't available: ${status.reason}`);
+    }
+    const history = mergeTurns(await store.listMessages(thread.id));
+    history.push({ role: "user", content });
+    const sent = trimHistory(mergeTurns(history));
+
+    const paid = models.filter((m) => isPaid(env, m));
+    const over = await budgetCheck(store, env, deps, thread.id, paid.length > 0);
+    const why = over(paid.reduce((n, m) => n + estimateUsd(m, sent, env), 0));
+    if (why) return error(402, why);
+
+    const saved = await store.addMessage(thread.id, { role: "user", content });
+    const notes = (await store.listNotes(thread.project_id)).map((n) => n.content);
+    const results = await Promise.all(models.map((m) => runChat(env, m, sent, { f: deps.fetch, notes })
+      .then((r) => ({ m, r }), (e) => { if (e instanceof ModelError) return { m, e }; throw e; })));
+    const messages = [], failed = [];
+    for (const { m, r, e } of results) {
+      if (r) { messages.push(await reply(store, thread.id, m, r.text, r)); continue; }
+      // Calls made before the failure still cost money, so they are recorded.
+      if (e.usage?.costUsd > 0) await reply(store, thread.id, m, `(The AI provider failed partway through this reply: ${e.message})`, e.usage);
+      failed.push({ model: m, error: e.message });
+    }
+    return { saved, messages, failed };
   },
 });
 
