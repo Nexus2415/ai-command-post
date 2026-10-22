@@ -19,11 +19,12 @@ Use a NEW Supabase project for the Command Post. Never use the Arnexyia client d
 - Before every reply, the server checks a worst-case cost against two caps: `ACP_WORKSPACE_MONTHLY_BUDGET_USD` (default 0, so nothing paid runs) and `ACP_WORKSPACE_THREAD_BUDGET_USD` (default $1). The real cost of each reply is saved with it.
 - Gemini stays off, matching the engine (ARN-115). An AI with no key shows "No API key added yet."
 - Provider error text is never shown. If a reply fails, your message is kept and **Get reply** tries again.
+- Through OpenRouter, each reply's saved cost is the higher of OpenRouter's reported cost and our own rates, plus OpenRouter's 5.5% credit fee; the worst-case check before the reply adds the fee too. Gemini stays off through OpenRouter as well. `ACP_OPENROUTER_MODEL_CLAUDE` (and `_CHATGPT`, `_PERPLEXITY`) pick a different OpenRouter model; a pricier model's pre-reply estimate is low, but its real cost is still recorded and counted.
 - Known limit: two replies sent at the same moment can each pass the check, so the cap can be exceeded by at most one reply.
 
 ### Owner setup to start chatting
 In Vercel, open **arnexyia-command-post → Settings → Environment Variables**, add these for Production, then redeploy:
-1. One AI key, for example `ANTHROPIC_API_KEY` (Claude), `OPENAI_API_KEY` (ChatGPT) or `PERPLEXITY_API_KEY`.
+1. One AI key. The simplest is `OPENROUTER_API_KEY`: one key and one prepaid balance that answers for Claude, ChatGPT and Perplexity. A provider's own key (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `PERPLEXITY_API_KEY`) also works, and wins over OpenRouter for that AI.
 2. `ACP_WORKSPACE_MONTHLY_BUDGET_USD`, for example `15`.
 3. Optional: `ACP_WORKSPACE_THREAD_BUDGET_USD` if $1 per thread is too low.
 
@@ -42,5 +43,5 @@ In Vercel, open **arnexyia-command-post → Settings → Environment Variables**
 1. Merge the workspace PRs in order (#61, #62, #63, #64, #65). Each merge goes live.
 2. Create the free Supabase project and run `db/workspace.sql` (see Owner setup above). If you ran an earlier copy, run the latest one again; it is safe to re-run.
 3. In Vercel, add `ACP_WORKSPACE_DB_URL` and `ACP_WORKSPACE_DB_KEY`.
-4. To chat, add one AI key and `ACP_WORKSPACE_MONTHLY_BUDGET_USD`, then redeploy.
+4. To chat, add one AI key (`OPENROUTER_API_KEY` covers every AI) and `ACP_WORKSPACE_MONTHLY_BUDGET_USD`, then redeploy.
 5. Optional plugins: `LINEAR_API_KEY`, `GITHUB_TOKEN` with `ACP_GITHUB_REPOS`, `FIRECRAWL_API_KEY`.
