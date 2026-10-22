@@ -65,6 +65,12 @@ form.new{display:grid;gap:8px;padding:10px 14px;border-bottom:1px solid var(--li
 .m{max-width:80%;padding:10px 12px;border-radius:8px;white-space:pre-wrap;overflow-wrap:anywhere}
 .m.user{justify-self:end;background:var(--accent-soft)}
 .m.assistant{justify-self:start;background:var(--panel-2);border-left:3px solid var(--ag,var(--a-none))}
+.cmp{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+.cmp .m{max-width:none}
+fieldset.row{border:0;margin:0;padding:0}
+fieldset.row legend{float:left;margin-right:4px}
+fieldset.row label{display:inline-flex;gap:4px;align-items:center;font-size:13px}
+fieldset.row input{width:auto}
 .m .who{display:block;font:500 11px var(--mono);color:var(--muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:.08em}
 .composer{display:grid;gap:8px;padding:12px 14px;border-top:1px solid var(--line)}
 .composer textarea{min-height:72px;resize:vertical}
@@ -119,6 +125,7 @@ form.new{display:grid;gap:8px;padding:10px 14px;border-bottom:1px solid var(--li
       <form class="composer" id="cForm" hidden>
         <label class="note" for="cText">Message</label>
         <textarea id="cText" maxlength="32000" required></textarea>
+        <fieldset class="row" id="cCompare" hidden><legend class="note">Also ask, side by side:</legend></fieldset>
         <div class="row"><button class="btn" type="submit" id="cSend">Send</button><button class="btn ghost" type="button" id="cRetry" hidden>Get reply</button><span class="note" id="cNote">Ctrl+Enter to send.</span></div>
       </form>
     </section>
