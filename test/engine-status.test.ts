@@ -128,7 +128,7 @@ test("dashboard engine rows: missing, stale, blocked and failing states are flag
   const missing = rows(null);
   assert.equal(missing.length, 1);
   assert.equal(missing[0].tone, "warn");
-  const fresh = rows(parseStatus(statusContent(snap())));
+  const fresh = rows(parseStatus(statusContent(snap({ lead: "claude", agentsOnline: ["claude"] }))));
   assert.ok(fresh.every((r: any) => r.tone === null), JSON.stringify(fresh));
   assert.match(fresh[0].value, /30 min ago/);
   assert.match(fresh.find((r: any) => r.label === "Paid AI calls").value, /cap is zero/);
@@ -137,4 +137,23 @@ test("dashboard engine rows: missing, stale, blocked and failing states are flag
   assert.equal(blocked.find((r: any) => r.label === "Paid AI calls").tone, "warn");
   const failing = rows(parseStatus(statusContent(snap({ counts: { planned: 0, worked: 0, reconciled: 0, waiting: 0, errors: 2 } }))));
   assert.equal(failing.at(-1).tone, "warn");
+});
+
+test("ARN-47: engine rows label the report as reported, never call an off engine live, and keep Gemini suspended", () => {
+  const sandbox: any = {};
+  vm.runInNewContext(readFileSync(new URL("../dashboard/console.js", import.meta.url), "utf8"), sandbox);
+  const rows = (e: any) => sandbox.ACPConsoleCore.engineRows(e, Date.parse("2026-10-20T22:30:00Z"));
+  const row = (r: any[], label: string) => r.find((x: any) => x.label === label);
+  const off = rows(parseStatus(statusContent(snap({ active: false, dryRun: false, agentsOnline: ["gemini"] }))));
+  assert.equal(row(off, "Last reported mode").value, "Engine off", "an inactive engine is never shown as live writes");
+  const ais = row(off, "AIs in last report (unverified)");
+  assert.equal(ais.value, "Gemini (suspended, not running)");
+  assert.equal(ais.tone, "warn");
+  assert.equal(row(rows(parseStatus(statusContent(snap({ agentsOnline: ["claude", "gemini"] })))), "AIs in last report (unverified)").value,
+    "Claude, Gemini (suspended, not running)");
+  assert.equal(row(rows(parseStatus(statusContent(snap({ dryRun: true })))), "Last reported mode").value, "Dry run, no writes");
+  assert.ok(off.every((r: any) => !/online/i.test(r.label + " " + r.value)), "nothing claims an AI is online");
+  const stale = rows(parseStatus(statusContent(snap({ at: "2026-10-19T10:00:00.000Z" }))));
+  assert.equal(stale[0].tone, "warn", "a stale report is flagged");
+  assert.equal(rows(null)[0].tone, "warn", "an unknown or malformed report shows as not reported");
 });
