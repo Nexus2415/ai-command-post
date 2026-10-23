@@ -104,13 +104,17 @@ export async function handle(req, env, f = fetch, now = () => new Date()) {
     if (created.ok && created.data.issueCreate.success && issue) {
       return { status: 201, body: { intent, duplicate: false, identifier: issue.identifier, url: issue.url } };
     }
-    // Create failed: if an issue with this id already exists in scope, it was our earlier submit.
+    // ARN-124: an existing Linear issue is editable, so team/project/id cannot
+    // prove that its original intent, text and lead match this request. Refuse
+    // ALL unverified same-key replays instead of acknowledging a different task.
+    // No second issue is created. Exact retry recovery requires a separate,
+    // server-authenticated immutable request identity (not a title/description).
     const found = await gql(env, f, FIND, { id });
     const prior = found.data?.issue;
     if (found.ok && prior && prior.team?.id === TEAM_ID && prior.project?.id === PROJECT_ID) {
-      return { status: 200, body: { intent, duplicate: true, identifier: prior.identifier, url: prior.url } };
+      return error(409, "Idempotency conflict: this key already has an issue, but the original request cannot be verified. No new issue was filed.");
     }
-    return error(502, "Linear did not accept the request. Nothing was filed; you can retry with the same key.");
+    return error(502, "Linear did not confirm the request. Do not change the key until its status is verified.");
   } catch {
     return error(502, "Linear is unavailable. Retry with the same key; it will not create a duplicate.");
   }
