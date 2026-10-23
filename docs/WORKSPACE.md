@@ -19,7 +19,7 @@ Use a NEW Supabase project for the Command Post. Never use the Arnexyia client d
 - Before every reply, the server checks a worst-case cost against two caps: `ACP_WORKSPACE_MONTHLY_BUDGET_USD` (default 0, so nothing paid runs) and `ACP_WORKSPACE_THREAD_BUDGET_USD` (default $1). The real cost of each reply is saved with it.
 - Gemini stays off, matching the engine (ARN-115). An AI with no key shows "No API key added yet."
 - Provider error text is never shown. If a reply fails, your message is kept and **Get reply** tries again.
-- Through OpenRouter, each reply's saved cost is the higher of OpenRouter's reported cost and our own rates, plus OpenRouter's 5.5% credit fee; the worst-case check before the reply adds the fee too. Gemini stays off through OpenRouter as well. `ACP_OPENROUTER_MODEL_CLAUDE` (and `_CHATGPT`, `_PERPLEXITY`) pick a different OpenRouter model; a pricier model's pre-reply estimate is low, but its real cost is still recorded and counted.
+- Through OpenRouter, each reply's saved cost is the higher of OpenRouter's reported cost and our own rates, plus OpenRouter's 5.5% credit fee; the worst-case check before the reply adds the fee too. Gemini stays off through OpenRouter as well. `ACP_OPENROUTER_MODEL_CLAUDE` (and `_CHATGPT`, `_PERPLEXITY`) pick a different OpenRouter model from that AI's own maker only (`anthropic/…`, `openai/…`, `perplexity/…`); anything else, including any `google/` model, leaves that AI switched off; a pricier model's pre-reply estimate is low, but its real cost is still recorded and counted.
 - Known limit: two replies sent at the same moment can each pass the check, so the cap can be exceeded by at most one reply.
 
 ### Owner setup to start chatting
