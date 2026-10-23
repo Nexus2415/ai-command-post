@@ -116,7 +116,7 @@ export async function handle(req, env, f = fetch, now = () => new Date()) {
     }
     return error(502, "Linear did not confirm the request. Do not change the key until its status is verified.");
   } catch {
-    return error(502, "Linear is unavailable. Retry with the same key; it will not create a duplicate.");
+    return error(502, "Linear may have received the request, but its status is unknown. Check Linear before resubmitting; do not change the key until verified.");
   }
 }
 
