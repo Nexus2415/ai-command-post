@@ -26,9 +26,26 @@ test("agent stats come from Linear lanes; canceled work and owner questions are 
   assert.equal(c.status, "running");
   assert.equal(core.agentStats(overview, "chatgpt").status, "blocked", "blocked outranks everything");
   assert.equal(core.agentStats(overview, "perplexity").status, "complete");
-  assert.equal(core.agentStats(overview, "gemini").status, "idle");
+  assert.equal(core.agentStats(overview, "gemini").status, "suspended");
   assert.equal(core.agentStats(overview, "none").total, 1, "the [Question] issue is not unclaimed work");
   assert.equal(core.agentStats(null, "claude").percent, 0);
+});
+
+test("ARN-47: done-only or queued-only work never reads as a busy worker, and Gemini stays suspended", () => {
+  const doneOnly = { issues: [issue("ARN-20", "done", "claude"), issue("ARN-21", "done", "chatgpt")] };
+  assert.equal(core.aisWithOpenTasks(doneOnly), 0, "two done-only AIs have no open tasks");
+  const queuedOnly = { issues: [issue("ARN-22", "queued", "perplexity")] };
+  assert.equal(core.aisWithOpenTasks(queuedOnly), 1, "counted as open work, not as a running worker");
+  assert.equal(core.agentStats(queuedOnly, "perplexity").status, "queued");
+  const geminiActive = { issues: [issue("ARN-23", "active", "gemini"), issue("ARN-24", "blocked", "gemini")] };
+  assert.equal(core.agentStats(geminiActive, "gemini").status, "suspended");
+  assert.equal(core.PILL[core.agentStats(geminiActive, "gemini").status], "Suspended");
+  assert.equal(core.aisWithOpenTasks(geminiActive), 0, "a suspended AI is not counted as having work in hand");
+  assert.equal(core.agentStats({ issues: [] }, "gemini").status, "suspended", "suspended even with no history");
+  assert.equal(core.aisWithOpenTasks(null), 0);
+  assert.equal(core.aisWithOpenTasks(overview), 3, "claude, chatgpt and codex; not perplexity (done only) or unclaimed");
+  assert.doesNotMatch(Object.values(core.PILL).join(" "), /Running|busy/i);
+  assert.doesNotMatch(html, /AIs busy/);
 });
 
 test("completion rate leaves canceled out, and an empty board is 0%, not 100%", () => {

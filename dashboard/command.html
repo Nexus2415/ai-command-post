@@ -70,8 +70,8 @@ button,select{font:inherit;color:inherit}
 .rail{display:grid;gap:16px}
 
 /* status pills and colour per state */
-.s-running{--st:var(--run)} .s-queued{--st:var(--queue)} .s-blocked{--st:var(--block)} .s-review{--st:var(--review)} .s-complete{--st:var(--done)} .s-idle{--st:var(--idle)}
-[data-s="running"]{--st:var(--run)} [data-s="queued"]{--st:var(--queue)} [data-s="blocked"]{--st:var(--block)} [data-s="review"]{--st:var(--review)} [data-s="complete"]{--st:var(--done)} [data-s="idle"]{--st:var(--idle)}
+.s-running{--st:var(--run)} .s-queued{--st:var(--queue)} .s-blocked{--st:var(--block)} .s-review{--st:var(--review)} .s-complete{--st:var(--done)} .s-idle{--st:var(--idle)} .s-suspended{--st:var(--idle)}
+[data-s="running"]{--st:var(--run)} [data-s="queued"]{--st:var(--queue)} [data-s="blocked"]{--st:var(--block)} [data-s="review"]{--st:var(--review)} [data-s="complete"]{--st:var(--done)} [data-s="idle"]{--st:var(--idle)} [data-s="suspended"]{--st:var(--idle)}
 .dot{width:8px;height:8px;border-radius:50%;background:var(--st,var(--muted));box-shadow:0 0 8px var(--st,transparent);flex:none}
 .pill{display:inline-flex;align-items:center;gap:6px;font:600 12px/1 var(--body);color:var(--st);white-space:nowrap}
 
@@ -201,7 +201,7 @@ button,select{font:inherit;color:inherit}
       <section class="hud" aria-labelledby="gH">
         <h2 id="gH">Global status</h2>
         <div class="gs">
-          <div class="ringbox"><div id="gRing"></div><div class="center"><b id="gAgents" class="mono">—</b><span>AIs busy</span></div></div>
+          <div class="ringbox"><div id="gRing"></div><div class="center"><b id="gAgents" class="mono">—</b><span>AIs with open tasks</span></div></div>
           <ul class="rows" id="gRows"></ul>
         </div>
       </section>
