@@ -107,6 +107,22 @@ test("ARN-124: unverifiable same-key retries and conflicting payloads all fail c
   }
 });
 
+test("ARN-124: ambiguous Linear transport failure never promises a safe retry", async () => {
+  // Simulate losing the response after Linear may have committed the issue.
+  // No live request is sent, and we must not encourage a new-key duplicate.
+  let calls = 0;
+  const f = (async () => {
+    calls++;
+    throw new Error("synthetic response lost after possible commit");
+  }) as typeof fetch;
+  const r = await handle(req({ intent: "question", text: "Status?", idempotencyKey: KEY }), env, f, now);
+  assert.equal(r.status, 502);
+  assert.match((r.body as any).error, /may have received the request/);
+  assert.match((r.body as any).error, /Check Linear before resubmitting/);
+  assert.doesNotMatch((r.body as any).error, /Retry with the same key|will not create a duplicate/);
+  assert.equal(calls, 1);
+});
+
 test("an existing issue outside scope is not reported as ours; upstream errors are not relayed", async () => {
   const { f } = fakeLinear(q => q.includes("issueCreate")
     ? { errors: [{ message: "secret upstream detail" }] }
