@@ -1,15 +1,37 @@
 // MCP plugins (Phase 2 step 4): remote MCP servers the owner lists in ACP_MCP_SERVERS, over Streamable HTTP.
-// Only tools the owner names for a server are offered, and only when the server marks them read-only
-// (readOnlyHint), so like the built-in plugins they can only read. Writes stay with the engine.
+// The owner's list is the authority (ARN-125). A tool is offered only when the owner names it AND the server
+// marks it read-only (readOnlyHint), but that hint is the server's own claim and can't be enforced from here,
+// so it is an extra check, never the permission. The owner also names each argument a tool may receive and its
+// type; a tool named without args takes none. The server's own input schema is never shown to the model, and
+// arguments are checked locally before anything is sent: unknown keys, wrong types, long values and any
+// configured secret value are refused with no request made.
 //
 // ACP_MCP_SERVERS is JSON, for example:
-//   [{"name":"notion","url":"https://mcp.example.com/mcp","tokenVar":"ACP_MCP_TOKEN_NOTION","tools":["search"]}]
+//   [{"name":"notion","url":"https://mcp.example.com/mcp","tokenVar":"ACP_MCP_TOKEN_NOTION",
+//     "tools":[{"name":"search","args":{"query":"string"}},"list_recent"]}]
 // A server's token can only come from a variable named ACP_MCP_TOKEN_*, so no other secret can be sent to it.
 import { ToolError } from "./workspace-plugins.js";
 
 const MAX_SERVERS = 5;
 const PROTOCOL = "2025-06-18";
 const MAX_BODY_CHARS = 1_000_000;
+const MAX_ARGS = 8;
+const MAX_ARG_CHARS = 300;
+const MAX_ARGS_JSON = 1_000;
+const MAX_DESCRIPTION = 300;
+const ARG_TYPES = ["string", "number", "boolean"];
+const SECRET_VAR = /(KEY|TOKEN|SECRET|PASSWORD)/i;
+
+// One owner-approved tool: a bare name (no arguments) or {name, args: {argName: "string"|"number"|"boolean"}}.
+function ownerTool(t) {
+  const name = typeof t === "string" ? t : t && typeof t === "object" && !Array.isArray(t) ? t.name : null;
+  if (typeof name !== "string" || !/^[A-Za-z0-9_-]{1,40}$/.test(name)) return null;
+  const raw = typeof t === "string" || t.args === undefined ? {} : t.args;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const entries = Object.entries(raw);
+  if (entries.length > MAX_ARGS || !entries.every(([k, v]) => /^[A-Za-z][A-Za-z0-9_]{0,39}$/.test(k) && ARG_TYPES.includes(v))) return null;
+  return { name, args: Object.fromEntries(entries) };
+}
 
 // The owner's server list, keeping only well-formed entries.
 export function mcpServers(env) {
@@ -22,10 +44,11 @@ export function mcpServers(env) {
       && typeof s.url === "string" && /^https:\/\/[^\s/?#@]+(\/[^\s]*)?$/.test(s.url)
       && (s.tokenVar === undefined || (typeof s.tokenVar === "string" && /^ACP_MCP_TOKEN_[A-Z0-9_]{1,40}$/.test(s.tokenVar)))
       && Array.isArray(s.tools) && s.tools.length > 0 && s.tools.length <= 20
-      && s.tools.every((t) => typeof t === "string" && /^[A-Za-z0-9_-]{1,40}$/.test(t));
+      && s.tools.every((t) => ownerTool(t) !== null)
+      && new Set(s.tools.map((t) => ownerTool(t).name)).size === s.tools.length;
     if (ok) seen.add(s.name);
     return ok;
-  }).slice(0, MAX_SERVERS).map((s) => ({ name: s.name, url: s.url, tokenVar: s.tokenVar ?? null, tools: [...s.tools] }));
+  }).slice(0, MAX_SERVERS).map((s) => ({ name: s.name, url: s.url, tokenVar: s.tokenVar ?? null, tools: s.tools.map(ownerTool) }));
 }
 
 // A server is ready when it is listed and, if it names a token variable, that variable is set.
@@ -33,7 +56,7 @@ export const mcpReady = (env, s) => !s.tokenVar || Boolean(env[s.tokenVar]);
 
 export function mcpStatus(env) {
   return Object.fromEntries(mcpServers(env).map((s) => [`mcp_${s.name}`, {
-    title: `MCP: ${s.name}`, description: `Owner-approved read-only tools: ${s.tools.join(", ")}.`, ready: mcpReady(env, s),
+    title: `MCP: ${s.name}`, description: `Owner-approved read-only tools: ${s.tools.map((t) => t.name).join(", ")}.`, ready: mcpReady(env, s),
   }]));
 }
 
@@ -96,12 +119,31 @@ async function connect(f, s, env) {
   return { session, listed };
 }
 
+// Checked before any request: only the owner's argument names and types, short values, and never a secret this
+// deployment holds. A refusal goes back to the model and nothing is sent to the server.
+export function checkArgs(env, tool, args) {
+  if (!args || typeof args !== "object" || Array.isArray(args)) throw new ToolError("Arguments must be an object.");
+  const secrets = Object.entries(env).filter(([k, v]) => SECRET_VAR.test(k) && typeof v === "string" && v.trim().length >= 8).map(([, v]) => v.trim());
+  const out = {};
+  for (const [k, v] of Object.entries(args)) {
+    const type = Object.hasOwn(tool.args, k) ? tool.args[k] : null;
+    if (!type) throw new ToolError(`"${k.slice(0, 40)}" is not an argument the owner approved for ${tool.name}.`);
+    if (typeof v !== type || (type === "number" && !Number.isFinite(v))) throw new ToolError(`"${k}" must be a ${type}.`);
+    if (type === "string" && (v.length > MAX_ARG_CHARS || secrets.some((x) => v.includes(x)))) {
+      throw new ToolError(`"${k}" is too long or contains private data, so it wasn't sent.`);
+    }
+    out[k] = v;
+  }
+  if (JSON.stringify(out).length > MAX_ARGS_JSON) throw new ToolError("The arguments are too long, so they weren't sent.");
+  return out;
+}
+
 const flatten = (content) => (Array.isArray(content) ? content : [])
   .map((c) => (c?.type === "text" && typeof c.text === "string" ? c.text : `[${String(c?.type ?? "item").slice(0, 20)} left out]`))
   .join("\n");
 
 /**
- * The tools of every ready MCP server: the ones the owner named, that the server lists and marks read-only.
+ * The tools of every ready MCP server: the ones the owner named, that the server lists and also marks read-only.
  * A server that can't be reached is skipped, so the reply still goes ahead.
  */
 export async function mcpTools(env, f = fetch) {
@@ -113,16 +155,23 @@ export async function mcpTools(env, f = fetch) {
     if (!item) continue;
     const { s, session, listed } = item;
     for (const t of listed) {
-      if (!t || typeof t.name !== "string" || !s.tools.includes(t.name) || t.annotations?.readOnlyHint !== true) continue;
-      const name = `mcp_${s.name}_${t.name}`.slice(0, 64);
+      const own = t && typeof t.name === "string" ? s.tools.find((o) => o.name === t.name) : null;
+      if (!own || t.annotations?.readOnlyHint !== true) continue;
+      const name = `mcp_${s.name}_${own.name}`.slice(0, 64);
       if (tools.some((x) => x.name === name)) continue;
-      const schema = t.inputSchema && typeof t.inputSchema === "object" && t.inputSchema.type === "object" ? t.inputSchema : { type: "object", properties: {} };
+      // The schema comes from the owner's list, not the server.
+      const schema = {
+        type: "object", additionalProperties: false,
+        properties: Object.fromEntries(Object.entries(own.args).map(([k, type]) => [k, { type }])),
+      };
+      const remote = typeof t.description === "string" ? t.description.replace(/\s+/g, " ").slice(0, MAX_DESCRIPTION) : "";
       tools.push({
         name,
-        description: `[${s.name}] ${typeof t.description === "string" ? t.description : t.name}`.slice(0, 1_000),
+        description: `[${s.name}, remote MCP tool] ${remote || own.name}`,
         parameters: schema,
         async run(env2, args, f2) {
-          const r = await rpc(f2, s, env2, session, { id: nextId++, method: "tools/call", params: { name: t.name, arguments: args } });
+          const safe = checkArgs(env2, own, args);
+          const r = await rpc(f2, s, env2, session, { id: nextId++, method: "tools/call", params: { name: own.name, arguments: safe } });
           const text = flatten(r.content);
           if (r.isError) throw new ToolError(`The ${s.name} tool reported a problem: ${text.slice(0, 500)}`);
           return text || "(The tool returned nothing.)";

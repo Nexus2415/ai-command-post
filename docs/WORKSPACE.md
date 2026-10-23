@@ -52,8 +52,9 @@ In Vercel, open **arnexyia-command-post → Settings → Environment Variables**
 
 ## Step 8: MCP plugins
 - Any remote MCP server (Streamable HTTP) can be added as a plugin by listing it in `ACP_MCP_SERVERS`, for example:
-  `[{"name":"notes","url":"https://mcp.example.com/mcp","tokenVar":"ACP_MCP_TOKEN_NOTES","tools":["search"]}]`
-- Only the tools you name in `tools` are offered, and only when the server marks them read-only. A tool that can change things is never offered, even if you name it. Writes stay with the engine.
+  `[{"name":"notes","url":"https://mcp.example.com/mcp","tokenVar":"ACP_MCP_TOKEN_NOTES","tools":[{"name":"search","args":{"query":"string"}}]}]`
+- Only the tools you name in `tools` are offered, and only when the server also marks them read-only. That mark is the server's own claim and can't be checked from here, so only name tools whose documentation says they only read. Your list is what decides.
+- For each tool, name the arguments it may receive and their type (`string`, `number` or `boolean`). A tool named on its own (`"list_recent"`) receives no arguments. Anything else the AI tries to send is refused before it leaves, as are values over 300 characters and any value that contains one of this site's keys or passwords.
 - A server's token goes in its own Vercel variable whose name starts with `ACP_MCP_TOKEN_`. No other variable can be used, so no other key can be sent to an MCP server.
 - Up to 5 servers. A server that can't be reached is skipped and the reply goes ahead. The page lists each server under Plugins. Claude and ChatGPT can use them; Perplexity and side-by-side answers don't use plugins.
 - Before naming a tool, check what it reads. A tool that fetches any web page brings back the risk described in Step 4.
