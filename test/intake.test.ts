@@ -78,14 +78,49 @@ test("question never carries the engine marker, even if typed by the user", asyn
   assert.ok(input.description.includes("read-only"));
 });
 
-test("a retried submit with the same key returns the existing issue instead of a duplicate", async () => {
-  const { f, calls } = fakeLinear((q, v) => q.includes("issueCreate")
-    ? { errors: [{ message: "Entity already exists" }] }
-    : { data: { issue: { id: v.id, identifier: "ARN-99", url: "https://linear.app/x/ARN-99", team: { id: TEAM_ID }, project: { id: PROJECT_ID } } } });
-  const r = await handle(req({ intent: "command", text: "x", idempotencyKey: KEY }), env, f, now);
-  assert.equal(r.status, 200);
-  assert.equal((r.body as any).duplicate, true);
-  assert.equal(calls[1]!.vars.id, issueIdFor(KEY));
+test("ARN-124: unverifiable same-key retries and conflicting payloads all fail closed", async () => {
+  // Linear issue title/description/lead are mutable and cannot prove original
+  // request identity. Even an apparently identical retry must not be acknowledged.
+  const cases = [
+    { name: "identical command", intent: "command", text: "Ship A", priorTitle: "[Claude] Ship A" },
+    { name: "changed command text", intent: "command", text: "Ship B", priorTitle: "[Claude] Ship A" },
+    { name: "question reused as command", intent: "command", text: "Execute task", priorTitle: "[Question] What is blocked?" },
+    { name: "changed command lead", intent: "command", text: "Ship A", priorTitle: "[ChatGPT] Ship A" },
+    { name: "command reused as question", intent: "question", text: "What is blocked?", priorTitle: "[Claude] Execute task" },
+    { name: "identical question", intent: "question", text: "What is blocked?", priorTitle: "[Question] What is blocked?" },
+  ] as const;
+  for (const c of cases) {
+    const { f, calls } = fakeLinear((q, v) => q.includes("issueCreate")
+      ? { errors: [{ message: "Entity already exists" }] }
+      : { data: { issue: {
+          id: v.id, identifier: "ARN-99", url: "https://linear.app/x/ARN-99",
+          team: { id: TEAM_ID }, project: { id: PROJECT_ID },
+          title: c.priorTitle, description: "Editable Linear content is not request provenance",
+        } } });
+    const r = await handle(req({ intent: c.intent, text: c.text, idempotencyKey: KEY }), env, f, now);
+    assert.equal(r.status, 409, c.name);
+    assert.match((r.body as any).error, /cannot be verified/, c.name);
+    assert.equal((r.body as any).duplicate, undefined, c.name);
+    assert.equal(calls.length, 2, c.name);
+    assert.equal(calls[0]!.vars.input.id, issueIdFor(KEY), c.name);
+    assert.equal(calls[1]!.vars.id, issueIdFor(KEY), c.name);
+  }
+});
+
+test("ARN-124: ambiguous Linear transport failure never promises a safe retry", async () => {
+  // Simulate losing the response after Linear may have committed the issue.
+  // No live request is sent, and we must not encourage a new-key duplicate.
+  let calls = 0;
+  const f = (async () => {
+    calls++;
+    throw new Error("synthetic response lost after possible commit");
+  }) as typeof fetch;
+  const r = await handle(req({ intent: "question", text: "Status?", idempotencyKey: KEY }), env, f, now);
+  assert.equal(r.status, 502);
+  assert.match((r.body as any).error, /may have received the request/);
+  assert.match((r.body as any).error, /Check Linear before resubmitting/);
+  assert.doesNotMatch((r.body as any).error, /Retry with the same key|will not create a duplicate/);
+  assert.equal(calls, 1);
 });
 
 test("an existing issue outside scope is not reported as ours; upstream errors are not relayed", async () => {
