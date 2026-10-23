@@ -27,6 +27,13 @@ const OR_MODEL_VARS = {
 const OR_DEFAULT_IDS = {
   claude: "anthropic/claude-sonnet-5.5", chatgpt: "openai/gpt-5-mini", gemini: "google/gemini-2.5-flash", perplexity: "perplexity/sonar",
 };
+// ARN-126: through OpenRouter a slot may only reach its own vendor, so a model labelled Claude is always an
+// Anthropic model, and nothing can route to suspended Gemini under another name. Anything else is refused.
+const OR_VENDORS = { claude: "anthropic", chatgpt: "openai", perplexity: "perplexity" };
+export function openRouterIdOk(model, id) {
+  const vendor = OR_VENDORS[model];
+  return Boolean(vendor) && typeof id === "string" && new RegExp(`^${vendor}/[A-Za-z0-9._:-]{1,100}$`).test(id);
+}
 // OpenRouter adds a 5.5% fee when credits are bought, so every OpenRouter cost and estimate is raised by it.
 export const OPENROUTER_FEE = 1.055;
 
@@ -39,7 +46,11 @@ export class ModelError extends Error {}
 export function modelStatus(env, model) {
   if (SUSPENDED_MODELS.includes(model)) return { ready: false, reason: "Turned off by the owner." };
   if (env[KEY_VARS[model]]) return { ready: true, reason: null, via: "direct", id: env[MODEL_VARS[model]] || DEFAULT_IDS[model] };
-  if (env.OPENROUTER_API_KEY) return { ready: true, reason: null, via: "openrouter", id: env[OR_MODEL_VARS[model]] || OR_DEFAULT_IDS[model] };
+  if (env.OPENROUTER_API_KEY) {
+    const id = env[OR_MODEL_VARS[model]] || OR_DEFAULT_IDS[model];
+    if (!openRouterIdOk(model, id)) return { ready: false, reason: `The OpenRouter model for ${NAMES[model]} must be a ${OR_VENDORS[model]}/ model.` };
+    return { ready: true, reason: null, via: "openrouter", id };
+  }
   return { ready: false, reason: "No API key added yet." };
 }
 
@@ -136,7 +147,9 @@ export class BudgetStop extends Error {}
 // One model call. `convo` is the provider's own message list, so tool turns keep their exact shape.
 async function step(env, model, convo, tools, allowCalls, f, system) {
   const status = modelStatus(env, model);
+  if (!status.ready) throw new ModelError(status.reason);
   if (status.via === "openrouter") {
+    if (!openRouterIdOk(model, status.id)) throw new ModelError("That OpenRouter model isn't allowed.");
     return chatCompletions(f, OPENROUTER_URL, String(env.OPENROUTER_API_KEY).trim(), { "x-title": "AI Command Post" },
       { model: status.id, max_tokens: MAX_OUTPUT_TOKENS }, model !== "perplexity", convo, tools, allowCalls, system);
   }

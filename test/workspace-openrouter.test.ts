@@ -120,3 +120,25 @@ test("the models list says which AIs run through OpenRouter, and an OpenRouter e
   assert.doesNotMatch(JSON.stringify(out.body), /sk-or-secret/);
   assert.match((out.body as any).error, /\(402\)/);
 });
+
+test("ARN-126: an OpenRouter slot only reaches its own vendor, so suspended Gemini can't run under another name", async () => {
+  for (const [model, v] of [["claude", "CLAUDE"], ["chatgpt", "CHATGPT"], ["perplexity", "PERPLEXITY"]] as const) {
+    for (const id of ["google/gemini-2.5-flash", "google/gemini-2.5-pro:free", "openrouter/auto", "gemini-2.5-flash", "anthropic/../google/gemini", ""]) {
+      if (!id) continue;
+      const s = modelStatus({ ...base, [`ACP_OPENROUTER_MODEL_${v}`]: id }, model);
+      assert.equal(s.ready, false, `${model} -> ${id}`);
+    }
+  }
+  // Each slot's own vendor still works, and a model can't borrow another approved vendor either.
+  assert.equal(modelStatus({ ...base, ACP_OPENROUTER_MODEL_CHATGPT: "openai/gpt-5" }, "chatgpt").ready, true);
+  assert.equal(modelStatus({ ...base, ACP_OPENROUTER_MODEL_PERPLEXITY: "perplexity/sonar-pro" }, "perplexity").ready, true);
+  assert.equal(modelStatus({ ...base, ACP_OPENROUTER_MODEL_CLAUDE: "openai/gpt-5" }, "claude").ready, false);
+
+  const env = { ...base, ACP_OPENROUTER_MODEL_CLAUDE: "google/gemini-2.5-flash" };
+  const { call, calls } = harness(env, () => orReply("should not happen", { prompt_tokens: 1, completion_tokens: 1 }));
+  const t = await thread(call, "claude");
+  const out = await call("chat", { threadId: t.id, content: "Hi" });
+  assert.equal(out.status, 409);
+  assert.match((out.body as any).error, /anthropic\/ model/);
+  assert.equal(calls.length, 0, "nothing is sent to OpenRouter");
+});
