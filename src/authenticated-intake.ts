@@ -128,7 +128,8 @@ export function createAuthenticatedIntake(deps?: IntakeDeps) {
       const r = await deps.record(c);
       if (!receipt(r, c)) return blocked("unconfirmed_record");
       // The store has committed. Past the stored deadline or under the kill switch the caller must not act on it,
-      // but this is not a refusal either: identical replay recovers the same receipt.
+      // but this is not a refusal either. After a kill switch lifts, identical replay recovers the same receipt; past
+      // the deadline it cannot (authority has expired), so that case needs a read-only receipt lookup (not built).
       const afterRecord = deps.now();
       if (deps.kill() !== "off" || !whole(afterRecord) || afterRecord >= r.validUntil) return blocked("committed_after_deadline");
       return { status: "recorded" as const, sent: false as const, receipt: Object.freeze({ ...r }), command: c };

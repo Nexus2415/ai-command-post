@@ -20,6 +20,7 @@ function token(over: object = {}, header: object = {}) {
 function rig() {
   let clock = NOW, kill: "off" | "on" | "error" = "off";
   const writes: IntakeCommand[] = [], rows = new Map<string, { command: IntakeCommand; receipt: IntakeReceipt }>();
+  const claimed = new Map<string, string>(); // claimKey -> idempotencyKey, like UNIQUE (tenant_id, claim_key) in SQL 0035
   const approval: IntakeApproval = { tenantId: T, taskId: "task-a", intent: "review_result",
     actionRef: "22222222-2222-4222-8222-222222222222", approvalRef: "33333333-3333-4333-8333-333333333333",
     expiresAt: NOW + 300, approved: true, mode: "shadow", maxBudgetMicros: 0, authorizationBasis: "owner_intake_grant" };
@@ -35,16 +36,18 @@ function rig() {
         if (JSON.stringify(prior.command) !== JSON.stringify(c)) throw new Error("immutable replay conflict");
         return { ...prior.receipt, created: false };
       }
+      // SQL 0035 refuses a new event for a task that already has a receipt (task_already_recorded).
+      if (claimed.has(c.claimKey)) throw new Error("task_already_recorded");
       writes.push(c);
       const r: IntakeReceipt = { ok: true, committed: true, created: true,
         commandId: "44444444-4444-4444-8444-444444444444", tenantId: c.event.tenantId, eventId: c.event.eventId,
         taskId: c.event.taskId, seq: c.event.seq, claimKey: c.claimKey, idempotencyKey: c.idempotencyKey,
         actionRef: c.approval.actionRef, approvalRef: c.approval.approvalRef,
         subject: c.scope.subject, grantId: "55555555-5555-4555-8555-555555555555", validUntil: c.validUntil };
-      rows.set(c.idempotencyKey, { command: structuredClone(c), receipt: r }); return r;
+      rows.set(c.idempotencyKey, { command: structuredClone(c), receipt: r }); claimed.set(c.claimKey, c.idempotencyKey); return r;
     },
   };
-  return { deps, writes, approval, setClock: (n: number) => { clock = n; }, setKill: (v: typeof kill) => { kill = v; }, run: () => createAuthenticatedIntake(deps) };
+  return { deps, writes, approval, setClock: (n: number) => { if (n < clock) throw new Error("fixture clock only moves forward"); clock = n; }, setKill: (v: typeof kill) => { kill = v; }, run: () => createAuthenticatedIntake(deps) };
 }
 
 test("valid signed workload records one approved scoped command; identity token reuse is allowed", async () => {
@@ -56,8 +59,13 @@ test("valid signed workload records one approved scoped command; identity token 
   assert.equal(a.command.validUntil, NOW + 300);
   assert.ok(!JSON.stringify(a).includes(jwt));
   assert.equal((await intake(jwt, event)).status, "recorded"); assert.equal(r.writes.length, 1);
-  assert.equal((await intake(jwt, { ...event, eventId: "evt-b", seq: 2 })).status, "recorded");
-  assert.equal(r.writes.length, 2, "same Vercel workload token is valid for a distinct event");
+  const sameTask = await intake(jwt, { ...event, eventId: "evt-b", seq: 2 });
+  assert.equal(sameTask.status, "blocked", "one durable intake per task, as SQL 0035 enforces");
+  assert.equal(r.writes.length, 1);
+  // Token reuse is still allowed for a different task with its own owner grant.
+  r.deps.approval = async e => (e.taskId === "task-b" ? { ...r.approval, taskId: "task-b" } : r.approval);
+  assert.equal((await intake(jwt, { ...event, eventId: "evt-c", taskId: "task-b", seq: 3 })).status, "recorded");
+  assert.equal(r.writes.length, 2, "same Vercel workload token is valid for a separately authorized task");
   assert.equal((await intake(jwt, { ...event, seq: 9 })).status, "blocked"); assert.equal(r.writes.length, 2);
 });
 test("disabled by default; no browser role or generic execution input", async () => {
@@ -121,19 +129,38 @@ test("receipt must carry the verified subject, a grant and a deadline no later t
   const out = await r.run()(token(), event);
   assert.equal(out.status, "blocked"); assert.equal(out.reason, "unconfirmed_record", "a receipt without its grant is not confirmed");
 });
-test("a commit that lands after the deadline or under the kill switch is reported as such, then recovered by replay", async () => {
-  for (const after of ["late", "kill"] as const) {
-    const r = rig(), real = r.deps.record;
-    r.deps.record = async c => {
-      const out = await real(c) as IntakeReceipt;
-      if (after === "late") r.setClock(out.validUntil); else r.setKill("on");
-      return out;
-    };
-    const first = await r.run()(token(), event);
-    assert.equal(first.status, "blocked"); assert.equal(first.reason, "committed_after_deadline");
-    assert.equal(r.writes.length, 1, "the store did commit");
-    r.deps.record = real; r.setClock(NOW); r.setKill("off");
-    const again = await r.run()(token(), event);
-    assert.equal(again.status, "recorded"); assert.equal(again.receipt.created, false); assert.equal(r.writes.length, 1);
-  }
+test("a commit under the kill switch is reported as such, then recovered by identical replay once it lifts", async () => {
+  const r = rig(), real = r.deps.record;
+  r.deps.record = async c => { const out = await real(c) as IntakeReceipt; r.setKill("on"); return out; };
+  const first = await r.run()(token(), event);
+  assert.equal(first.status, "blocked"); assert.equal(first.reason, "committed_after_deadline");
+  assert.equal(r.writes.length, 1, "the store did commit");
+  r.deps.record = real; r.setKill("off");
+  const again = await r.run()(token(), event);
+  assert.equal(again.status, "recorded"); assert.equal(again.receipt.created, false); assert.equal(r.writes.length, 1);
+});
+
+test("a commit that lands after the deadline is not recoverable by replay: time only moves forward", async () => {
+  const r = rig(), real = r.deps.record;
+  r.deps.record = async c => { const out = await real(c) as IntakeReceipt; r.setClock(out.validUntil); return out; };
+  const jwt = token();
+  const first = await r.run()(jwt, event);
+  assert.equal(first.status, "blocked"); assert.equal(first.reason, "committed_after_deadline");
+  assert.equal(r.writes.length, 1, "the store did commit");
+  r.deps.record = real;
+  const replay = await r.run()(jwt, event);
+  assert.equal(replay.status, "blocked"); assert.equal(replay.reason, "authority_expired_or_killed", "same token, clock never rewound");
+  // A newly issued token at the same (forward-only) time is refused before any write: the grant itself has expired.
+  const fresh = await r.run()(token({ iat: NOW + 300, nbf: NOW + 300, exp: NOW + 900 }), event);
+  assert.equal(fresh.status, "blocked"); assert.equal(fresh.reason, "authority_expired_or_killed");
+  assert.equal(r.writes.length, 1, "no second write; post-deadline receipt recovery needs a read-only lookup (not implemented, owner-gated)");
+});
+
+test("before the deadline, a replay with a different token deadline is an immutable conflict, not a second write", async () => {
+  const r = rig();
+  const first = await r.run()(token(), event);
+  assert.equal(first.status, "recorded"); assert.equal(r.writes.length, 1);
+  const changed = await r.run()(token({ exp: NOW + 280 }), event);
+  assert.equal(changed.status, "blocked"); assert.equal(changed.reason, "intake_unavailable", "store refused the changed command");
+  assert.equal(r.writes.length, 1);
 });
