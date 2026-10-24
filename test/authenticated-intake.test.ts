@@ -47,7 +47,7 @@ function rig() {
       rows.set(c.idempotencyKey, { command: structuredClone(c), receipt: r }); claimed.set(c.claimKey, c.idempotencyKey); return r;
     },
   };
-  return { deps, writes, approval, setClock: (n: number) => { clock = n; }, setKill: (v: typeof kill) => { kill = v; }, run: () => createAuthenticatedIntake(deps) };
+  return { deps, writes, approval, setClock: (n: number) => { if (n < clock) throw new Error("fixture clock only moves forward"); clock = n; }, setKill: (v: typeof kill) => { kill = v; }, run: () => createAuthenticatedIntake(deps) };
 }
 
 test("valid signed workload records one approved scoped command; identity token reuse is allowed", async () => {
@@ -150,9 +150,17 @@ test("a commit that lands after the deadline is not recoverable by replay: time 
   r.deps.record = real;
   const replay = await r.run()(jwt, event);
   assert.equal(replay.status, "blocked"); assert.equal(replay.reason, "authority_expired_or_killed", "same token, clock never rewound");
-  // A fresh token changes validUntil, so the store sees a conflicting replay, not the same command.
-  r.setClock(NOW + 200);
-  const fresh = await r.run()(token({ iat: NOW + 100, nbf: NOW + 100, exp: NOW + 280 }), event);
-  assert.equal(fresh.status, "blocked");
+  // A newly issued token at the same (forward-only) time is refused before any write: the grant itself has expired.
+  const fresh = await r.run()(token({ iat: NOW + 300, nbf: NOW + 300, exp: NOW + 900 }), event);
+  assert.equal(fresh.status, "blocked"); assert.equal(fresh.reason, "authority_expired_or_killed");
   assert.equal(r.writes.length, 1, "no second write; post-deadline receipt recovery needs a read-only lookup (not implemented, owner-gated)");
+});
+
+test("before the deadline, a replay with a different token deadline is an immutable conflict, not a second write", async () => {
+  const r = rig();
+  const first = await r.run()(token(), event);
+  assert.equal(first.status, "recorded"); assert.equal(r.writes.length, 1);
+  const changed = await r.run()(token({ exp: NOW + 280 }), event);
+  assert.equal(changed.status, "blocked"); assert.equal(changed.reason, "intake_unavailable", "store refused the changed command");
+  assert.equal(r.writes.length, 1);
 });
