@@ -271,3 +271,18 @@ test("closing a thread returns focus to the control that opened it, even after m
     assert.equal(doc.activeElement, origin, nested ? "parent -> sub-task -> Close" : "parent -> Close");
   }
 });
+
+test("closing a thread after its opener was redrawn away focuses the task list, even while Refresh is disabled", async () => {
+  const t = setup((_p, init) => {
+    const b = JSON.parse(init.body);
+    if (b.action === "thread") return ok({ issue: { id: b.identifier, title: "T" }, comments: [] });
+    return ok({ ...overviewJson, issues: [{ id: "ARN-1", lane: "active", title: "parent" }], lanes: { active: ["ARN-1"] } });
+  });
+  await flush();
+  const origin = t.$("cList").all().find((e: any) => e.className === "linkbtn");
+  origin.focus(); origin.click(); await flush();
+  doc.contains = (n: any) => n !== origin; // a list redraw detached the opener
+  t.$("cRefresh").disabled = true; // a reload is in flight
+  t.$("cDetailClose").onclick({});
+  assert.equal(doc.activeElement, t.$("cList"));
+});

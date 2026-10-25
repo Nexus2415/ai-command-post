@@ -261,8 +261,9 @@
     threadSeq++;
     detailOpen = false;
     $("cDetail").hidden = true;
-    if (lastFocus && lastFocus.focus && document.contains(lastFocus)) lastFocus.focus();
-    else $("cRefresh").focus();
+    if (lastFocus && lastFocus.focus && !lastFocus.disabled && document.contains(lastFocus)) lastFocus.focus();
+    // The task list is always present and focusable (tabindex=0); Refresh can be disabled mid-reload.
+    else $("cList").focus();
   }
 
   // Composer
