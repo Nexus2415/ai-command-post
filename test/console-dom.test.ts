@@ -20,6 +20,7 @@ class FakeEl {
   set innerHTML(_v: string) { throw new Error("innerHTML must not be used by the console"); }
   insertAdjacentHTML() { throw new Error("insertAdjacentHTML must not be used by the console"); }
   append(...n: any[]) { this.children.push(...n); }
+  prepend(...n: any[]) { this.children.unshift(...n); }
   appendChild(n: any) { this.children.push(n); return n; }
   replaceChildren(...n: any[]) { this._text = ""; this.children = n; }
   setAttribute(k: string, v: string) { this.attrs[k] = String(v); }
@@ -223,6 +224,29 @@ test("stale thread responses don't overwrite a closed or newer thread", async ()
   pending["ARN-2"]!(); await flush();
   pending["ARN-1"]!(); await flush();
   assert.match(t.$("cDetailTitle").textContent, /ARN-2/);
+});
+
+test("closing a thread returns focus to the control that opened it, even after moving to a sub-task", async () => {
+  for (const nested of [false, true]) {
+    const t = setup((_p, init) => {
+      const b = JSON.parse(init.body);
+      if (b.action === "thread") return ok({ issue: { id: b.identifier, title: "T" + b.identifier }, comments: [],
+        lifecycle: b.identifier === "ARN-1" ? { stage: "claimed", label: "Claimed", detail: "", evidence: [{ kind: "issue", issue: "ARN-2" }] } : null });
+      return ok({ ...overviewJson, issues: [{ id: "ARN-1", lane: "active", title: "parent" }], lanes: { active: ["ARN-1"] } });
+    });
+    await flush();
+    const origin = t.$("cList").all().find((e: any) => e.className === "linkbtn");
+    origin.focus(); origin.click(); await flush();
+    assert.match(t.$("cDetailTitle").textContent, /ARN-1/);
+    if (nested) {
+      const sub = t.$("cDetailBody").all().find((e: any) => e.tagName === "BUTTON" && /Open sub-task ARN-2/.test(e.textContent));
+      sub.focus(); sub.click(); await flush();
+      assert.match(t.$("cDetailTitle").textContent, /ARN-2/);
+    }
+    t.$("cDetailClose").onclick({});
+    assert.equal(t.$("cDetail").hidden, true);
+    assert.equal(doc.activeElement, origin, nested ? "parent -> sub-task -> Close" : "parent -> Close");
+  }
 });
 
 test("ARN-77 malformed successful intake preserves the draft and retry key", async () => {
