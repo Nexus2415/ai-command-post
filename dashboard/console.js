@@ -11,10 +11,10 @@
   const QUESTION_EXPLANATION = "Submitting a question creates a Linear issue for an answer. It does not authorize agents to execute tools or change existing work.";
 
   // ---- pure helpers (unit-tested in test/console-ui.test.ts) ----
+  // Counts come from the same issue list the tabs show, so a count can never disagree with its list.
   function laneCounts(overview) {
-    const lanes = (overview && overview.lanes) || {};
     const out = {};
-    TABS.forEach(k => { out[k] = Array.isArray(lanes[k]) ? lanes[k].length : 0; });
+    TABS.forEach(k => { out[k] = laneIssues(overview, k).length; });
     return out;
   }
   // Minimum overview contract. A 200 whose body isn't this (e.g. a proxy page parsed as {}) is a failed read.
