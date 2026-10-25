@@ -81,7 +81,7 @@
   // ---- DOM ----
   const $ = id => document.getElementById(id);
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = String(text); return e; };
-  let pendingKey = null, overview = null, tab = "active", intent = "command", busy = false, lastFocus = null, threadSeq = 0, detailOpen = false;
+  let pendingKey = null, overview = null, tab = "active", intent = "command", busy = false, lastFocus = null, threadSeq = 0;
 
   // The password lives in memory for this tab only; it is never written to browser storage (ARN-53).
   let password = "";
@@ -200,6 +200,7 @@
   }
 
   // Detail thread
+  let detailOpen = false; // true from the first open until Close, across sub-task moves
   async function openThread(id) {
     if (!api.isIssueId(id)) return;
     const seq = ++threadSeq;
