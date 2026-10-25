@@ -52,6 +52,9 @@ export function lifecycleOf(issue, comments, children, complete = {}) {
     if (complete.commentsComplete !== true) return unknown("Marked done, but older comments weren't loaded, so the result can't be confirmed.");
     const openKids = children.filter(c => !TERMINAL.includes(c?.state?.type));
     if (openKids.length) return unknown("Marked done, but " + openKids.length + " sub-task(s) are still open.");
+    // Canceled or duplicate sub-tasks are closed, not done: a command is only Completed when every sub-task is.
+    const droppedKids = children.filter(c => c?.state?.type !== "completed");
+    if (droppedKids.length) return unknown("Marked done, but " + droppedKids.length + " sub-task(s) were canceled, not done.");
     return { stage: "completed", label: "Completed",
       detail: "Done in Linear with a recorded result. The result was posted from a shared account, so it isn't proof of which AI wrote it.",
       evidence: [ref(doneResult)] };
