@@ -25,7 +25,7 @@ You ──command──▶ Linear issue "[Claude] …"  (created from the dashbo
 | Control | Default |
 |---|---|
 | `ACP_ACTIVE` kill switch | `false`: reads and reports only |
-| `ACP_DRY_RUN` | `true`: Linear and GitHub writes are logged, not made |
+| `ACP_DRY_RUN` | `true`: Linear and GitHub writes are logged, not made, and no Firecrawl (paid credits) call is made |
 | `ACP_MONTHLY_BUDGET_USD` | `0`: only free-tier models run (Gemini). Paid calls are checked against worst-case cost before they run |
 | Pull requests | off; when on, **draft** PRs only on allow-listed repos, never the default branch |
 | Owner-only actions | merge, delete, deploy, purchase, send email, change credentials or release gates are refused in code and posted to the issue as "Owner approval needed" |
