@@ -254,6 +254,31 @@ test("overlapping overview reads: only the newest request updates the snapshot, 
   }
 });
 
+test("a malformed 200 overview is a failed read: never shown as a fresh empty board, never replaces good data", async () => {
+  for (const bad of [{}, [], { ...overviewJson, issues: null }, { ...overviewJson, agents: undefined }, { ...overviewJson, lanes: [] },
+    { ...overviewJson, lanes: { active: "ARN-1" } }, { ...overviewJson, fetchedAt: "not a date" }, { ...overviewJson, fetchedAt: undefined }]) {
+    // Initial malformed reply: nothing is presented as loaded.
+    let t = setup(() => ok(bad));
+    await flush();
+    assert.equal(t.$("cUpdated").textContent, "Not loaded");
+    assert.match(t.$("cOverviewMsg").textContent, /incomplete/);
+    assert.equal(t.$("cOverviewMsg").hidden, false);
+    assert.equal(t.$("cRefresh").disabled, false);
+    // Healthy snapshot, then a malformed refresh: the good snapshot stays, labelled stale.
+    let n = 0;
+    t = setup(() => n++ === 0
+      ? ok({ ...overviewJson, issues: [{ id: "ARN-1", lane: "active", title: "kept" }], lanes: { active: ["ARN-1"] } })
+      : ok(bad));
+    await flush();
+    const good = t.$("cList").textContent;
+    assert.match(good, /kept/);
+    t.$("cRefresh").onclick(); await flush();
+    assert.match(t.$("cUpdated").textContent, /stale/);
+    assert.match(t.$("cOverviewMsg").textContent, /incomplete.*Showing the last data received/);
+    assert.equal(t.$("cList").textContent, good);
+  }
+});
+
 test("ARN-77 malformed successful intake preserves the draft and retry key", async () => {
   for (const intent of ["command", "question"]) {
     let receipt: any = {};

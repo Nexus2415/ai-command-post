@@ -17,6 +17,13 @@
     TABS.forEach(k => { out[k] = Array.isArray(lanes[k]) ? lanes[k].length : 0; });
     return out;
   }
+  // Minimum overview contract. A 200 whose body isn't this (e.g. a proxy page parsed as {}) is a failed read.
+  function isOverview(o) {
+    if (!o || typeof o !== "object" || Array.isArray(o)) return false;
+    if (!Array.isArray(o.issues) || !Array.isArray(o.agents)) return false;
+    if (!o.lanes || typeof o.lanes !== "object" || Array.isArray(o.lanes) || !Object.values(o.lanes).every(Array.isArray)) return false;
+    return typeof o.fetchedAt === "string" && !Number.isNaN(Date.parse(o.fetchedAt));
+  }
   function laneIssues(overview, lane) {
     const issues = (overview && Array.isArray(overview.issues)) ? overview.issues : [];
     return issues.filter(i => i && i.lane === lane);
@@ -112,6 +119,7 @@
     try {
       const next = await post("/api/console", { action: "overview" });
       if (seq !== overviewSeq) return;
+      if (!isOverview(next)) throw new Error("The overview reply was incomplete, so it wasn't used.");
       overview = next;
       setMsg($("cOverviewMsg"), overview.hasNextPage ? "Showing the latest 250 issues; older ones are not counted." : "", "warn");
       $("cUpdated").textContent = "Last updated " + fmtTime(overview.fetchedAt);
