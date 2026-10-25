@@ -81,7 +81,7 @@
   // ---- DOM ----
   const $ = id => document.getElementById(id);
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = String(text); return e; };
-  let pendingKey = null, overview = null, tab = "active", intent = "command", busy = false, lastFocus = null, threadSeq = 0;
+  let pendingKey = null, overview = null, tab = "active", intent = "command", busy = false, lastFocus = null, threadSeq = 0, overviewSeq = 0;
 
   // The password lives in memory for this tab only; it is never written to browser storage (ARN-53).
   let password = "";
@@ -105,16 +105,22 @@
 
   // Overview
   async function loadOverview() {
+    // Timer, Refresh and post-send reloads can overlap; only the newest request may update the page.
+    const seq = ++overviewSeq;
     $("cRefresh").disabled = true;
     $("cUpdated").textContent = overview ? "Refreshing…" : "Loading…";
     try {
-      overview = await post("/api/console", { action: "overview" });
+      const next = await post("/api/console", { action: "overview" });
+      if (seq !== overviewSeq) return;
+      overview = next;
       setMsg($("cOverviewMsg"), overview.hasNextPage ? "Showing the latest 250 issues; older ones are not counted." : "", "warn");
       $("cUpdated").textContent = "Last updated " + fmtTime(overview.fetchedAt);
     } catch (e) {
+      if (seq !== overviewSeq) return;
       setMsg($("cOverviewMsg"), e.message + (overview ? " Showing the last data received." : ""), "err");
       $("cUpdated").textContent = overview ? "Last updated " + fmtTime(overview.fetchedAt) + " (stale)" : "Not loaded";
-    } finally { $("cRefresh").disabled = false; }
+    }
+    $("cRefresh").disabled = false;
     renderTabs(); renderList(); renderRoster(); renderEngine();
   }
 

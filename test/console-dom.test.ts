@@ -225,6 +225,35 @@ test("stale thread responses don't overwrite a closed or newer thread", async ()
   assert.match(t.$("cDetailTitle").textContent, /ARN-2/);
 });
 
+test("overlapping overview reads: only the newest request updates the snapshot, freshness and Refresh button", async () => {
+  const at = (n: number) => `2026-10-0${n}T12:00:00Z`;
+  for (const [older, newer] of [["ok", "ok"], ["err", "ok"], ["ok", "err"], ["err", "err"]] as const) {
+    const pending: ((r: any) => void)[] = [];
+    let n = 0;
+    const t = setup(() => {
+      if (n++ === 0) return ok({ ...overviewJson, fetchedAt: at(1), issues: [{ id: "ARN-1", lane: "active", title: "base" }], lanes: { active: ["ARN-1"] } });
+      return new Promise(r => pending.push(r));
+    });
+    await flush();
+    // Older read (e.g. the 60-second timer) and a newer one (e.g. Refresh after a send) overlap.
+    t.$("cRefresh").onclick(); t.$("cRefresh").onclick(); await flush();
+    assert.equal(t.$("cRefresh").disabled, true);
+    const reply = (kind: string, day: number) => kind === "ok"
+      ? ok({ ...overviewJson, fetchedAt: at(day), issues: [{ id: "ARN-" + day, lane: "active", title: "day" + day }], lanes: { active: ["ARN-" + day] } })
+      : { status: 500, json: { error: "boom" } };
+    pending[1]!(reply(newer, 3)); await flush();
+    const afterNewer = { updated: t.$("cUpdated").textContent, msg: t.$("cOverviewMsg").textContent, list: t.$("cList").textContent };
+    assert.equal(t.$("cRefresh").disabled, false, "the newest request settled");
+    if (newer === "ok") assert.doesNotMatch(afterNewer.updated, /stale/);
+    else assert.match(afterNewer.updated, /stale/);
+    pending[0]!(reply(older, 2)); await flush();
+    assert.equal(t.$("cUpdated").textContent, afterNewer.updated, `${older}->${newer}: late older reply must not change freshness`);
+    assert.equal(t.$("cOverviewMsg").textContent, afterNewer.msg, `${older}->${newer}: late older reply must not change the message`);
+    assert.equal(t.$("cList").textContent, afterNewer.list, `${older}->${newer}: late older reply must not replace the list`);
+    assert.doesNotMatch(t.$("cList").textContent, /day2/);
+  }
+});
+
 test("ARN-77 malformed successful intake preserves the draft and retry key", async () => {
   for (const intent of ["command", "question"]) {
     let receipt: any = {};
