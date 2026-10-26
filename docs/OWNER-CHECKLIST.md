@@ -1,6 +1,8 @@
 # Owner checklist
 
-Steps only Darius can take, as of 2026-10-20. They are listed in the order to do them. Claude cannot do any of these. Each one either changes the live site, a setting, a secret or billing, or needs an account Claude can't reach.
+Historical 2026-10-20 owner notes. The old step order is no longer authoritative; verify each prerequisite and approval afresh.
+
+> **Safety status, 2026-10-26 (source-only):** This reference is **not an authorization to execute**. Verify current GitHub `main`, exact PR heads and checks, Linear owner decisions, and authoritative deployed state before acting. Darius alone merges. Production/deployment, schema migration, secrets, flags, billing, live workers, role grants, Stage 3, `limited_live_ready`, and client-data actions require Darius's specific written Linear approval. Merged source and synthetic tests do not prove live readiness. Gemini remains suspended; engine activation and spending remain blocked. See [ARN-45](https://linear.app/arnexyia/issue/ARN-45).
 
 ## 1. Source merge decisions (owner-only, not an execution queue)
 
@@ -10,7 +12,7 @@ The current ACP open-PR queue and its independent reviews are tracked in [ARN-45
 
 ## 2. Rate-limit the website password (F3)
 
-Without a rate limit, someone can guess the site password as fast as they like. Claude tried three ways to set the limit and all were refused for the `arnexyia` team: the Vercel connector, the Vercel CLI and the Vercel API. Pick one:
+Any production firewall rule requires Darius's specific written Linear approval before publishing. The procedure below is historical and must be reverified against the current provider UI and plan. Without a rate limit, someone can guess the site password as fast as they like. Claude tried three ways to set the limit and all were refused for the `arnexyia` team: the Vercel connector, the Vercel CLI and the Vercel API. Pick one:
 
 **A. Let Claude do it.**
 1. On claude.ai, open **Settings**, then **Connectors**, then **Vercel**.
@@ -49,7 +51,7 @@ The engine refuses paid calls when it can't trust its spend record.
 1. Add the repo variable `ACP_LEDGER_RESET` with the current month, for example `2026-10`. This restarts that month's record at $0.
 2. Delete the variable after the next run.
 
-Only do this if you're sure nothing was spent that month that the record lost.
+Only do this after a separate specific written owner decision, verified spend reconciliation and a safe recovery plan. A reset can erase evidence of prior spend; do not infer zero usage from a missing ledger.
 
 ## 6. Tidy-ups
 
