@@ -2,29 +2,11 @@
 
 Steps only Darius can take, as of 2026-10-20. They are listed in the order to do them. Claude cannot do any of these. Each one either changes the live site, a setting, a secret or billing, or needs an account Claude can't reach.
 
-## 1. Merge the open pull requests, in this order
+## 1. Source merge decisions (owner-only, not an execution queue)
 
-Merging to `main` redeploys https://ai-command-post.vercel.app within a minute or two. None of these PRs switches the engine on.
+This document's 2026-10-20 PR sequence is superseded. ACP PRs #54–#60 and opsdesk #199 are historical work; do **not** merge or re-open them based on this checklist. Confirm each PR's current merged/open/draft state and exact head from GitHub before considering any change. Opsdesk #199 and #200 are merged **source**; that does not establish canonical Supabase application.
 
-| Order | PR | What it does |
-|---|---|---|
-| 1 | #54 | The spend ledger fails closed if it's missing, unreadable or dated in the future |
-| 2 | #55 | One shared password check for every website endpoint |
-| 3 | #56 | "Engine & budget" panel on the website console |
-| 4 | #57 | Keeps a copy of the spend ledger in Linear so it survives cache loss (built on #54 and #56) |
-| 5 | #58 | Current AI prices (Claude, ChatGPT, Perplexity per-request fee) |
-| 6 | #59 | The engine backs off when someone else claimed a task first |
-| 7 | #60 | This checklist plus refreshed HANDOFF, README and RUNBOOK |
-
-For each one:
-1. Open `github.com/Nexus2415/ai-command-post/pull/<number>`.
-2. If it says **Draft**, click **Ready for review**.
-3. Wait for the green check. Then click **Merge pull request**, then **Confirm merge**.
-4. If GitHub says **This branch has conflicts**, stop and tell Claude in the project. Claude fixes it.
-
-To undo a merge on the live site, open Vercel and go to the **ai-command-post** project. Click **Deployments**, then the previous good deployment, then **⋯**, then **Instant Rollback**.
-
-Also in opsdesk-harmony: merge **#199** (atomic offboarding, ARN-123) once its checks are green. Claude fixed its migration order on 2026-10-20.
+The current ACP open-PR queue and its independent reviews are tracked in [ARN-45](https://linear.app/arnexyia/issue/ARN-45), not this static document. No ACP PR is approved for merge by this checklist. A successful GitHub check or Vercel preview is not a production acceptance test. Darius alone makes merge decisions and records any required production/deployment authorization in Linear. No agent may merge or switch a deployment.
 
 ## 2. Rate-limit the website password (F3)
 
@@ -48,26 +30,17 @@ Without a rate limit, someone can guess the site password as fast as they like. 
 
 Your plan may limit how many rate-limit rules you can have. If Vercel won't offer **Rate Limit**, tell Claude and it will add a slower-retry check in code instead.
 
-## 3. Wake up Supabase and apply the waiting migrations (opsdesk-harmony)
+## 3. Canonical Supabase preflight (owner-gated)
 
-The free Supabase project was paused for inactivity. These migrations are merged but not applied: `0030`, `0033` and `0035`, plus `0034` once #199 merges.
+Canonical Supabase migration state is **not established** by GitHub source or by this checklist. Do not assume a particular project is paused, restored, healthy, or migrated. Migrations 0030–0035 must be assessed individually against the owner-identified authoritative database.
 
-1. Go to supabase.com/dashboard and open the Arnexyia project. Click **Restore project** (or **Resume**) and wait until it shows as healthy.
-2. Tell Claude it's awake. Claude will check which migrations are actually applied and give you the exact run order. Apply them through your usual migration path, never by hand-editing tables.
+Before any connection, Darius must record in Linear the exact database/project, named operator and permitted **read-only metadata** scope. Inspect only the approved catalog and migration-ledger metadata; no row data, secrets, grants, writes, role changes or migrations. A separate specific written owner decision is required for any canonical schema application and rollout. A migration existing on `main` is not evidence of deployment. See [ARN-45](https://linear.app/arnexyia/issue/ARN-45), [ARN-122](https://linear.app/arnexyia/issue/ARN-122) and [ARN-123](https://linear.app/arnexyia/issue/ARN-123).
 
-Until this is done, the broker's database claim and owner intake grants exist only in code. That claim is the only real fix for two engines taking the same task.
+## 4. Engine activation remains blocked
 
-## 4. Decide whether the engine should run at all
+Keep the engine off, dry-run on and the model budget at $0. Gemini is suspended in source; neither an existing API key nor an older runbook restores it. Do not set `ACP_ACTIVE=true`, `ACP_DRY_RUN=false`, `ACP_ALLOW_PULL_REQUESTS=true`, `ACP_MONTHLY_BUDGET_USD>0`, or restore Gemini based on this document.
 
-Right now nothing runs, on purpose. Gemini is suspended in code (ARN-115), the budget is $0, and `ACP_ACTIVE` is not `true`. To run it you need **both**:
-
-- **An AI it may use.** Either tell Claude to lift the Gemini suspension (free tier), or add a paid key and a budget:
-  1. Open GitHub and go to **Settings**, then **Secrets and variables**, then **Actions**.
-  2. On the **Secrets** tab, click **New repository secret**. Use `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` or `PERPLEXITY_API_KEY`.
-  3. On the **Variables** tab, set `ACP_MONTHLY_BUDGET_USD` to the most you'll spend per month, for example `20`. Also set `ACP_DEFAULT_LEAD` to that AI: `claude`, `chatgpt` or `perplexity`.
-- **The switch.** On the **Variables** tab, set `ACP_ACTIVE` to `true`. Setting it back to `false` stops it at the next run.
-
-The console's **Engine & budget** panel shows the result after the next run.
+The next internal milestone remains: an explicitly owner-issued, unseeded/default-deny subject+tenant+task+expiry grant, tenant-bound durable intake/claim, one synthetic zero-cost execution or refusal, independently verified receipt and truthful console state, then restart/kill/idempotency. Existing synthetic/disposable PostgreSQL proofs do not establish deployed OIDC mapping, canonical Supabase state, or a real worker. Each restricted activation, role mapping, credential, billing or deployment step needs its own specific written owner approval in Linear. Stage 3 and Limited Live remain closed.
 
 ## 5. Only if the panel says "Blocked: … spend ledger"
 
