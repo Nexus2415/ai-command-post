@@ -64,6 +64,10 @@ const PROTECTED: RegExp[] = [
   /(^|\/)(npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?)$/i,
   /(^|\/)\.husky(\/|$)/i,
   /(^|\/)\.vercel(\/|$)/i,
+  // Instruction files that coding agents read as their rules: an agent PR must not rewrite its own (or another AI's) rules.
+  /(^|\/)(AGENTS|CLAUDE|GEMINI|CLAUDE\.local)\.md$/i,
+  /(^|\/)\.(cursorrules|windsurfrules|clinerules)$/i,
+  /(^|\/)\.(claude|cursor)(\/|$)/i,
 ];
 
 /** A plain relative path: no empty, ".", ".." or dot/space-terminated segments (".." would climb out of the API path). */
@@ -86,7 +90,7 @@ export function prBranch(v: unknown): string {
 
 export function prPath(v: unknown): string {
   const p = plainPath(v, "File");
-  if (PROTECTED.some((re) => re.test(p))) throw new Error(`File path "${p}" is protected: agents may not change CI, ownership, git, install-time or secret files`);
+  if (PROTECTED.some((re) => re.test(p))) throw new Error(`File path "${p}" is protected: agents may not change CI, ownership, git, install-time, secret or agent-instruction files`);
   return p;
 }
 

@@ -151,3 +151,12 @@ test("install-time, dot-terminated and .envrc paths are refused, and sizes are c
     assert.equal(calls.length, 0);
   }
 });
+
+// ARN-45 finding: AI instruction files (AGENTS.md, CLAUDE.md, ...) were writable through agent PRs.
+test("agent-instruction files are protected at any depth", () => {
+  for (const p of ["AGENTS.md", "CLAUDE.md", "GEMINI.md", "CLAUDE.local.md", "src/AGENTS.md", "agents.md", "docs/Claude.md",
+    ".cursorrules", ".windsurfrules", ".clinerules", "web/.cursorrules", ".claude/settings.json", ".cursor/rules/x.mdc"]) {
+    assert.throws(() => prPath(p), /protected/, p);
+  }
+  for (const p of ["docs/notes.md", "docs/agents-overview.md", "src/agents.ts", "CLAUDE-notes.md", "claude/x.md"]) assert.equal(prPath(p), p);
+});
