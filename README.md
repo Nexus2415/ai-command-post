@@ -26,7 +26,7 @@ You ──command──▶ Linear issue "[Claude] …"  (created from the dashbo
 |---|---|
 | `ACP_ACTIVE` kill switch | `false`: reads and reports only |
 | `ACP_DRY_RUN` | `true`: Linear and GitHub writes are logged, not made, and no Firecrawl (paid credits) call is made |
-| `ACP_MONTHLY_BUDGET_USD` | `0`: only free-tier models run (Gemini). Paid calls are checked against worst-case cost before they run |
+| `ACP_MONTHLY_BUDGET_USD` | `0`: no paid model call runs, and Gemini (the free-tier model) is suspended, so no model runs at all. Paid calls are checked against worst-case cost before they run. The budget covers model calls only, not Firecrawl credits |
 | Pull requests | off; when on, **draft** PRs only on allow-listed repos, never the default branch |
 | Owner-only actions | merge, delete, deploy, purchase, send email, change credentials or release gates are refused in code and posted to the issue as "Owner approval needed" |
 
@@ -46,7 +46,7 @@ npm run tick                # one cycle (dry run until ACP_DRY_RUN=false)
 npm start                   # loop every ACP_POLL_SECONDS
 ```
 
-**Free hosting:** `.github/workflows/engine.yml` runs one cycle every 15 minutes on GitHub Actions. It stays off until you set the repository variable `ACP_ACTIVE=true` and add the keys as repository secrets.
+**Free hosting:** `.github/workflows/engine.yml` runs one cycle every 15 minutes on GitHub Actions. It stays off until the repository variable `ACP_ACTIVE=true` is set and the keys are added as repository secrets. The defaults above are what the code assumes when a variable is unset; check the repository's Actions variables for the real settings. Switching the engine on, adding keys or raising the budget is the owner's decision (`docs/OWNER-CHECKLIST.md`).
 
 ## Dashboard
 
