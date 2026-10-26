@@ -146,8 +146,8 @@ async function commandLead(d: Deps, cmd: Issue, report: TickReport, input = cmd.
   const canPlan = !!d.clients[lead] && d.budget.check(lead, estimateTokens(input) + 1_000, PLAN_TOKENS).ok;
   if (status === "free" && canPlan) {
     await d.store.comment(cmd.id, `${EXECUTOR_MARKER} acp:${lead}\n\n${CLAIM_MARKER} ${AGENTS[lead].name} (AI Command Post), as lead.`);
-    const first = (await claimsAfterWrite(d, cmd)).find((c) => c.source === "comment");
-    if (first && !first.executor.startsWith("acp:")) {
+    // Any earlier claim but this lead's own wins, another ACP agent's included (two engine runs racing on one command).
+    if (claimStatus(await claimsAfterWrite(d, cmd), lead) === "foreign") {
       report.waiting.push(`${cmd.identifier}: another executor claimed the command first; ACP backed off`);
       return null;
     }

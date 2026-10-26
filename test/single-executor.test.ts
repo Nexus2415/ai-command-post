@@ -438,3 +438,13 @@ test("a command claimed by a racing executor just before ACP's claim is neither 
   assert.equal(store.issues.filter((i) => i.parentId === cmd.id).length, 0, "no sub-issues");
   assert.ok(r.waiting.some((w) => w.includes("claimed the command first")));
 });
+
+test("a command claimed first by a different ACP agent in a race: the losing lead backs off", async () => {
+  const store = new RacingStore("acp:claude");
+  const cmd = store.add({ title: "Do the thing", description: COMMAND_MARKER });
+  const seen: ChatMessage[][] = [];
+  const r = await tick(deps(store, { chatgpt: scripted(["{}"], seen) }, { ACP_DEFAULT_LEAD: "chatgpt" }));
+  assert.equal(seen.length, 0, "lead never called");
+  assert.equal(store.issues.filter((i) => i.parentId === cmd.id).length, 0, "no sub-issues");
+  assert.ok(r.waiting.some((w) => w.includes("claimed the command first")));
+});
