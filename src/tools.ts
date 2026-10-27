@@ -67,8 +67,9 @@ const PROTECTED: RegExp[] = [
   // Instruction files that coding agents read as their rules: an agent PR must not rewrite its own (or another AI's) rules.
   // Rule files and rule/hook directories (Windsurf hooks.json can launch local commands).
   /(^|\/)(AGENTS|CLAUDE|GEMINI)(\.local)?\.md$/i,
-  /(^|\/)\.(cursorrules|windsurfrules|clinerules)(\/|$)/i,
-  /(^|\/)\.(claude|cursor|cline|windsurf|devin|gemini)(\/|$)/i,
+  /(^|\/)\.(cursorrules|windsurfrules|clinerules|roorules|goosehints)(\/|$)/i,
+  /(^|\/)\.(agents|claude|codex|cursor|cline|windsurf|devin|gemini|continue|roo|kiro|amazonq|junie)(\/|$)/i,
+  /(^|\/)\.aider[^/]*$/i,
 ];
 
 /** A plain relative path: no empty, ".", ".." or dot/space-terminated segments (".." would climb out of the API path). */
