@@ -65,9 +65,10 @@ const PROTECTED: RegExp[] = [
   /(^|\/)\.husky(\/|$)/i,
   /(^|\/)\.vercel(\/|$)/i,
   // Instruction files that coding agents read as their rules: an agent PR must not rewrite its own (or another AI's) rules.
-  /(^|\/)(AGENTS|CLAUDE|GEMINI|CLAUDE\.local)\.md$/i,
-  /(^|\/)\.(cursorrules|windsurfrules|clinerules)$/i,
-  /(^|\/)\.(claude|cursor)(\/|$)/i,
+  // Rule files and rule/hook directories (Windsurf hooks.json can launch local commands).
+  /(^|\/)(AGENTS|CLAUDE|GEMINI)(\.local)?\.md$/i,
+  /(^|\/)\.(cursorrules|windsurfrules|clinerules)(\/|$)/i,
+  /(^|\/)\.(claude|cursor|cline|windsurf|devin|gemini)(\/|$)/i,
 ];
 
 /** A plain relative path: no empty, ".", ".." or dot/space-terminated segments (".." would climb out of the API path). */

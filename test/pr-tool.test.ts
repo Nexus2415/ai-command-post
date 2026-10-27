@@ -155,8 +155,11 @@ test("install-time, dot-terminated and .envrc paths are refused, and sizes are c
 // ARN-45 finding: AI instruction files (AGENTS.md, CLAUDE.md, ...) were writable through agent PRs.
 test("agent-instruction files are protected at any depth", () => {
   for (const p of ["AGENTS.md", "CLAUDE.md", "GEMINI.md", "CLAUDE.local.md", "src/AGENTS.md", "agents.md", "docs/Claude.md",
-    ".cursorrules", ".windsurfrules", ".clinerules", "web/.cursorrules", ".claude/settings.json", ".cursor/rules/x.mdc"]) {
+    ".cursorrules", ".windsurfrules", ".clinerules", "web/.cursorrules", ".claude/settings.json", ".cursor/rules/x.mdc",
+    "AGENTS.local.md", "GEMINI.local.md", ".clinerules/security.md", ".cline/rules/security.md", ".windsurf/rules/security.md",
+    ".windsurf/hooks.json", ".devin/rules/security.md", ".gemini/settings.json", "web/.windsurf/hooks.json"]) {
     assert.throws(() => prPath(p), /protected/, p);
   }
-  for (const p of ["docs/notes.md", "docs/agents-overview.md", "src/agents.ts", "CLAUDE-notes.md", "claude/x.md"]) assert.equal(prPath(p), p);
+  for (const p of ["docs/notes.md", "docs/agents-overview.md", "src/agents.ts", "CLAUDE-notes.md", "claude/x.md",
+    "docs/windsurf.md", "cline/notes.md", "docs/devin-rules.md"]) assert.equal(prPath(p), p);
 });
