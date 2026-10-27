@@ -46,7 +46,7 @@ npm run tick                # one cycle (dry run until ACP_DRY_RUN=false)
 npm start                   # loop every ACP_POLL_SECONDS
 ```
 
-With `ACP_ACTIVE=true` and `ACP_DRY_RUN=false`, every cycle writes the engine's ledger and status documents to Linear, even when no model can run. Check the variables in your `.env` (and the repository's Actions variables) before running `tick` or `start`.
+With `ACP_ACTIVE=true` and `ACP_DRY_RUN=false`, every cycle writes the engine's ledger and status documents to Linear, even when no model can run. Check the variables in your `.env` (and the repository's Actions variables) before running `tick` or `start`, and don't run either with those settings without the owner's written OK in Linear.
 
 **Free hosting:** `.github/workflows/engine.yml` runs one cycle every 15 minutes on GitHub Actions. It stays off until the repository variable `ACP_ACTIVE=true` is set and the keys are added as repository secrets. The defaults above are what the code assumes when a variable is unset; check the repository's Actions variables for the real settings. Switching the engine on, adding keys or raising the budget is the owner's decision (`docs/OWNER-CHECKLIST.md`).
 
