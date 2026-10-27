@@ -151,3 +151,19 @@ test("install-time, dot-terminated and .envrc paths are refused, and sizes are c
     assert.equal(calls.length, 0);
   }
 });
+
+// ARN-45 finding: AI instruction files (AGENTS.md, CLAUDE.md, ...) were writable through agent PRs.
+test("agent-instruction files are protected at any depth", () => {
+  for (const p of ["AGENTS.md", "CLAUDE.md", "GEMINI.md", "CLAUDE.local.md", "src/AGENTS.md", "agents.md", "docs/Claude.md",
+    ".cursorrules", ".windsurfrules", ".clinerules", "web/.cursorrules", ".claude/settings.json", ".cursor/rules/x.mdc",
+    "AGENTS.local.md", "GEMINI.local.md", ".clinerules/security.md", ".cline/rules/security.md", ".windsurf/rules/security.md",
+    ".windsurf/hooks.json", ".devin/rules/security.md", ".gemini/settings.json", "web/.windsurf/hooks.json",
+    ".agents/skills/review/SKILL.md", "tools/.agents/skills/review/SKILL.md", ".codex/skills/review/SKILL.md", ".codex/config.toml",
+    ".continue/rules/x.md", ".roo/rules/x.md", ".roorules", ".kiro/steering/x.md", ".amazonq/rules/x.md", ".junie/guidelines.md",
+    ".goosehints", ".aider.conf.yml"]) {
+    assert.throws(() => prPath(p), /protected/, p);
+  }
+  for (const p of ["docs/notes.md", "docs/agents-overview.md", "src/agents.ts", "CLAUDE-notes.md", "claude/x.md",
+    "docs/windsurf.md", "cline/notes.md", "docs/devin-rules.md",
+    "agents/skills/review/SKILL.md", "docs/aider.md", "src/codex.ts"]) assert.equal(prPath(p), p);
+});
