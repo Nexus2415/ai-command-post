@@ -128,7 +128,7 @@ test("dashboard engine rows: missing, stale, blocked and failing states are flag
   const missing = rows(null);
   assert.equal(missing.length, 1);
   assert.equal(missing[0].tone, "warn");
-  const fresh = rows(parseStatus(statusContent(snap())));
+  const fresh = rows(parseStatus(statusContent(snap({ lead: "claude", agentsOnline: ["claude"] }))));
   assert.ok(fresh.every((r: any) => r.tone === null), JSON.stringify(fresh));
   assert.match(fresh[0].value, /30 min ago/);
   assert.match(fresh.find((r: any) => r.label === "Paid AI calls").value, /cap is zero/);
@@ -137,4 +137,49 @@ test("dashboard engine rows: missing, stale, blocked and failing states are flag
   assert.equal(blocked.find((r: any) => r.label === "Paid AI calls").tone, "warn");
   const failing = rows(parseStatus(statusContent(snap({ counts: { planned: 0, worked: 0, reconciled: 0, waiting: 0, errors: 2 } }))));
   assert.equal(failing.at(-1).tone, "warn");
+});
+
+test("ARN-47: the paid-calls row follows the reported state and never reads a cap as permission", () => {
+  const sandbox: any = {};
+  vm.runInNewContext(readFileSync(new URL("../dashboard/console.js", import.meta.url), "utf8"), sandbox);
+  const paid = (o: any) => {
+    const parsed = parseStatus(statusContent(snap(o)));
+    assert.ok(parsed, "the server parser accepts the synthetic report");
+    return sandbox.ACPConsoleCore.engineRows(parsed, Date.parse("2026-10-20T22:30:00Z")).find((r: any) => r.label === "Paid AI calls");
+  };
+  const budget = (capUsd: number, ledgerProblem: string | null = null) => ({ budget: { month: "2026-10", spentUsd: 0, capUsd, calls: 0, ledgerProblem } });
+  const cases: [any, RegExp, string | null][] = [
+    [{ active: false, dryRun: false, ...budget(5) }, /^Off: the engine was off/, null],
+    [{ active: false, dryRun: true, ...budget(5, "the spend ledger is missing") }, /^Off: the engine was off/, null],
+    [{ active: true, dryRun: false, ...budget(5, "the spend ledger is missing") }, /^Blocked: the spend ledger is missing$/, "warn"],
+    [{ active: true, dryRun: false, ...budget(0) }, /^Off: the monthly cap is zero$/, null],
+    [{ active: true, dryRun: true, ...budget(0) }, /^Off: the monthly cap is zero$/, null],
+    [{ active: true, dryRun: false, ...budget(5) }, /^Cap set at \$5\.00 a month\. A cap is a limit, not a permission; calls are not verified$/, null],
+    [{ active: true, dryRun: true, ...budget(5) }, /^Cap set at \$5\.00 a month\..*not verified\. Dry run still runs the AIs and only skips writes$/, null],
+  ];
+  for (const [o, value, tone] of cases) {
+    const r = paid(o);
+    assert.match(r.value, value, JSON.stringify(o));
+    assert.equal(r.tone, tone, JSON.stringify(o));
+    assert.doesNotMatch(r.value, /allowed/i, "a cap is never shown as permission");
+  }
+});
+
+test("ARN-47: engine rows label the report as reported, never call an off engine live, and keep Gemini suspended", () => {
+  const sandbox: any = {};
+  vm.runInNewContext(readFileSync(new URL("../dashboard/console.js", import.meta.url), "utf8"), sandbox);
+  const rows = (e: any) => sandbox.ACPConsoleCore.engineRows(e, Date.parse("2026-10-20T22:30:00Z"));
+  const row = (r: any[], label: string) => r.find((x: any) => x.label === label);
+  const off = rows(parseStatus(statusContent(snap({ active: false, dryRun: false, agentsOnline: ["gemini"] }))));
+  assert.equal(row(off, "Last reported mode").value, "Engine off", "an inactive engine is never shown as live writes");
+  const ais = row(off, "AIs in last report (unverified)");
+  assert.equal(ais.value, "Gemini (suspended, not running)");
+  assert.equal(ais.tone, "warn");
+  assert.equal(row(rows(parseStatus(statusContent(snap({ agentsOnline: ["claude", "gemini"] })))), "AIs in last report (unverified)").value,
+    "Claude, Gemini (suspended, not running)");
+  assert.equal(row(rows(parseStatus(statusContent(snap({ dryRun: true })))), "Last reported mode").value, "Dry run, no writes");
+  assert.ok(off.every((r: any) => !/online/i.test(r.label + " " + r.value)), "nothing claims an AI is online");
+  const stale = rows(parseStatus(statusContent(snap({ at: "2026-10-19T10:00:00.000Z" }))));
+  assert.equal(stale[0].tone, "warn", "a stale report is flagged");
+  assert.equal(rows(null)[0].tone, "warn", "an unknown or malformed report shows as not reported");
 });
