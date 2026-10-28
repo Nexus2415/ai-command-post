@@ -287,7 +287,9 @@ test("a malformed engine report is a failed read: it never throws or replaces th
   const { agentsOnline: _a, ...noAgents } = engine;
   for (const badEngine of [{}, [], "engine", noCounts, noAgents, { ...engine, budget: null }, { ...engine, budget: { ...engine.budget, month: undefined } },
     { ...engine, counts: { ...engine.counts, errors: "0" } }, { ...engine, agentsOnline: [1] }, { ...engine, at: "not a date" }, { ...engine, dryRun: "yes" },
-    { ...engine, budget: { ...engine.budget, ledgerProblem: {} } }]) {
+    { ...engine, budget: { ...engine.budget, ledgerProblem: {} } }, { ...engine, budget: { ...engine.budget, spentUsd: -1 } },
+    { ...engine, budget: { ...engine.budget, capUsd: -5 } }, { ...engine, counts: { ...engine.counts, errors: -1 } },
+    { ...engine, counts: { ...engine.counts, planned: 1.5 } }, { ...engine, budget: { ...engine.budget, spentUsd: Infinity } }]) {
     const bad = { ...overviewJson, engine: badEngine };
     // Initial reply with a malformed engine report: nothing is presented as loaded, and nothing throws.
     let t = setup(() => ok(bad));
@@ -311,6 +313,12 @@ test("a malformed engine report is a failed read: it never throws or replaces th
     assert.equal(t.$("cList").textContent, good.list);
     assert.equal(t.$("cRefresh").disabled, false);
   }
+  // Zero amounts and counts, fractional dollars and a reported ledger problem are real values and are shown.
+  const t0 = setup(() => ok({ ...overviewJson, engine: { ...engine, budget: { ...engine.budget, spentUsd: 0.0125, capUsd: 0, ledgerProblem: "ledger unreadable" }, counts: { planned: 0, worked: 0, reconciled: 0, waiting: 0, errors: 0 } } }));
+  await flush();
+  assert.doesNotMatch(t0.$("cUpdated").textContent, /Not loaded|stale/);
+  assert.match(t0.$("cEngine").textContent, /0 planned.*0 errors/);
+  assert.match(t0.$("cEngine").textContent, /Blocked: ledger unreadable/);
   // No engine report yet (absent or null) is still a valid overview.
   for (const e of [undefined, null]) {
     const t = setup(() => ok({ ...overviewJson, engine: e }));
