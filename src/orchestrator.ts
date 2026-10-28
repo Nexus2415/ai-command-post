@@ -146,9 +146,13 @@ async function commandLead(d: Deps, cmd: Issue, report: TickReport, input = cmd.
   const canPlan = !!d.clients[lead] && d.budget.check(lead, estimateTokens(input) + 1_000, PLAN_TOKENS).ok;
   if (status === "free" && canPlan) {
     await d.store.comment(cmd.id, `${EXECUTOR_MARKER} acp:${lead}\n\n${CLAIM_MARKER} ${AGENTS[lead].name} (AI Command Post), as lead.`);
-    const first = (await claimsAfterWrite(d, cmd)).find((c) => c.source === "comment");
-    if (first && !first.executor.startsWith("acp:")) {
-      report.waiting.push(`${cmd.identifier}: another executor claimed the command first; ACP backed off`);
+    // Any earlier claim but this lead's own wins, another ACP agent's included (two engine runs racing on one command).
+    // Proceed only on a read-back that shows our own claim; a read that shows none is unconfirmed, not ownership.
+    const after = claimStatus(await claimsAfterWrite(d, cmd), lead);
+    if (after !== "own") {
+      report.waiting.push(after === "foreign"
+        ? `${cmd.identifier}: another executor claimed the command first; ACP backed off`
+        : `${cmd.identifier}: ACP could not confirm its claim on the command; it will check again next run`);
       return null;
     }
   }
@@ -262,8 +266,11 @@ export async function work(d: Deps, task: Issue, agent: AgentKey, report: TickRe
   }
   if (status === "free") {
     await d.store.comment(task.id, `${EXECUTOR_MARKER} acp:${agent}\n\n${CLAIM_MARKER} ${profile.name} (AI Command Post).`);
-    if (claimStatus(await claimsAfterWrite(d, task), agent) === "foreign") {
-      report.waiting.push(`${task.identifier}: another executor claimed it first; ACP backed off`);
+    const after = claimStatus(await claimsAfterWrite(d, task), agent);
+    if (after !== "own") {
+      report.waiting.push(after === "foreign"
+        ? `${task.identifier}: another executor claimed it first; ACP backed off`
+        : `${task.identifier}: ACP could not confirm its claim; it will check again next run`);
       return;
     }
   }
