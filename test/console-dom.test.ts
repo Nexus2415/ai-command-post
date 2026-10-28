@@ -280,16 +280,18 @@ test("a malformed 200 overview is a failed read: never shown as a fresh empty bo
 });
 
 test("a malformed engine report is a failed read: it never throws or replaces the last good engine panel", async () => {
-  const engine = { at: "2026-10-01T00:00:00Z", dryRun: true, agentsOnline: ["claude"],
+  const engine = { at: "2026-10-01T00:00:00Z", active: true, dryRun: true, agentsOnline: ["claude"],
     budget: { month: "2026-10", spentUsd: 0, capUsd: 0, calls: 0, ledgerProblem: null },
     counts: { planned: 1, worked: 0, reconciled: 0, waiting: 0, errors: 0 } };
   const { counts: _c, ...noCounts } = engine;
   const { agentsOnline: _a, ...noAgents } = engine;
+  const { active: _act, ...noActive } = engine;
   for (const badEngine of [{}, [], "engine", noCounts, noAgents, { ...engine, budget: null }, { ...engine, budget: { ...engine.budget, month: undefined } },
     { ...engine, counts: { ...engine.counts, errors: "0" } }, { ...engine, agentsOnline: [1] }, { ...engine, at: "not a date" }, { ...engine, dryRun: "yes" },
     { ...engine, budget: { ...engine.budget, ledgerProblem: {} } }, { ...engine, budget: { ...engine.budget, spentUsd: -1 } },
     { ...engine, budget: { ...engine.budget, capUsd: -5 } }, { ...engine, counts: { ...engine.counts, errors: -1 } },
-    { ...engine, counts: { ...engine.counts, planned: 1.5 } }, { ...engine, budget: { ...engine.budget, spentUsd: Infinity } }]) {
+    { ...engine, counts: { ...engine.counts, planned: 1.5 } }, { ...engine, budget: { ...engine.budget, spentUsd: Infinity } },
+    noActive, { ...engine, active: null }, { ...engine, active: "false" }, { ...engine, active: 0 }]) {
     const bad = { ...overviewJson, engine: badEngine };
     // Initial reply with a malformed engine report: nothing is presented as loaded, and nothing throws.
     let t = setup(() => ok(bad));
@@ -319,6 +321,13 @@ test("a malformed engine report is a failed read: it never throws or replaces th
   assert.doesNotMatch(t0.$("cUpdated").textContent, /Not loaded|stale/);
   assert.match(t0.$("cEngine").textContent, /0 planned.*0 errors/);
   assert.match(t0.$("cEngine").textContent, /Blocked: ledger unreadable/);
+  // A boolean active, either way, is a valid report.
+  for (const active of [true, false]) {
+    const t = setup(() => ok({ ...overviewJson, engine: { ...engine, active } }));
+    await flush();
+    assert.doesNotMatch(t.$("cUpdated").textContent, /Not loaded|stale/);
+    assert.match(t.$("cEngine").textContent, /1 planned/);
+  }
   // No engine report yet (absent or null) is still a valid overview.
   for (const e of [undefined, null]) {
     const t = setup(() => ok({ ...overviewJson, engine: e }));

@@ -29,7 +29,7 @@
   // with amounts and counts that can be real (never negative; counts are whole numbers).
   function isEngineReport(e) {
     const num = v => typeof v === "number" && Number.isFinite(v) && v >= 0, count = v => Number.isInteger(v) && v >= 0, obj = v => !!v && typeof v === "object" && !Array.isArray(v);
-    if (!obj(e) || typeof e.at !== "string" || Number.isNaN(Date.parse(e.at)) || typeof e.dryRun !== "boolean") return false;
+    if (!obj(e) || typeof e.at !== "string" || Number.isNaN(Date.parse(e.at)) || typeof e.active !== "boolean" || typeof e.dryRun !== "boolean") return false;
     const b = e.budget, c = e.counts;
     if (!obj(b) || typeof b.month !== "string" || !num(b.spentUsd) || !num(b.capUsd)) return false;
     if (b.ledgerProblem != null && typeof b.ledgerProblem !== "string") return false;
