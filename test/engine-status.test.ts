@@ -139,6 +139,32 @@ test("dashboard engine rows: missing, stale, blocked and failing states are flag
   assert.equal(failing.at(-1).tone, "warn");
 });
 
+test("ARN-47: the paid-calls row follows the reported state and never reads a cap as permission", () => {
+  const sandbox: any = {};
+  vm.runInNewContext(readFileSync(new URL("../dashboard/console.js", import.meta.url), "utf8"), sandbox);
+  const paid = (o: any) => {
+    const parsed = parseStatus(statusContent(snap(o)));
+    assert.ok(parsed, "the server parser accepts the synthetic report");
+    return sandbox.ACPConsoleCore.engineRows(parsed, Date.parse("2026-10-20T22:30:00Z")).find((r: any) => r.label === "Paid AI calls");
+  };
+  const budget = (capUsd: number, ledgerProblem: string | null = null) => ({ budget: { month: "2026-10", spentUsd: 0, capUsd, calls: 0, ledgerProblem } });
+  const cases: [any, RegExp, string | null][] = [
+    [{ active: false, dryRun: false, ...budget(5) }, /^Off: the engine was off/, null],
+    [{ active: false, dryRun: true, ...budget(5, "the spend ledger is missing") }, /^Off: the engine was off/, null],
+    [{ active: true, dryRun: false, ...budget(5, "the spend ledger is missing") }, /^Blocked: the spend ledger is missing$/, "warn"],
+    [{ active: true, dryRun: false, ...budget(0) }, /^Off: the monthly cap is zero$/, null],
+    [{ active: true, dryRun: true, ...budget(0) }, /^Off: the monthly cap is zero$/, null],
+    [{ active: true, dryRun: false, ...budget(5) }, /^Cap set at \$5\.00 a month\. A cap is a limit, not a permission; calls are not verified$/, null],
+    [{ active: true, dryRun: true, ...budget(5) }, /^Cap set at \$5\.00 a month\..*not verified\. Dry run still runs the AIs and only skips writes$/, null],
+  ];
+  for (const [o, value, tone] of cases) {
+    const r = paid(o);
+    assert.match(r.value, value, JSON.stringify(o));
+    assert.equal(r.tone, tone, JSON.stringify(o));
+    assert.doesNotMatch(r.value, /allowed/i, "a cap is never shown as permission");
+  }
+});
+
 test("ARN-47: engine rows label the report as reported, never call an off engine live, and keep Gemini suspended", () => {
   const sandbox: any = {};
   vm.runInNewContext(readFileSync(new URL("../dashboard/console.js", import.meta.url), "utf8"), sandbox);

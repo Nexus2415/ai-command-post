@@ -70,11 +70,20 @@
       { label: "Last engine run", value: fmtTime(engine.at) + " (" + ago + ")", tone: age > STALE_MS ? "warn" : null },
       { label: "Last reported mode", value: !engine.active ? "Engine off" : engine.dryRun ? "Dry run, no writes" : "Live writes", tone: null },
       { label: "Spent " + b.month, value: usd(b.spentUsd, 4) + " of " + usd(b.capUsd, 2) + " cap", tone: null },
-      { label: "Paid AI calls", value: b.ledgerProblem ? "Blocked: " + b.ledgerProblem : b.capUsd > 0 ? "Allowed within the cap" : "Off: the monthly cap is zero", tone: b.ledgerProblem ? "warn" : null },
+      { label: "Paid AI calls", ...paidCalls(engine, b) },
       { label: "AIs in last report (unverified)", value: engine.agentsOnline.map(reportedAgent).join(", ") || "None",
         tone: engine.agentsOnline.some(k => SUSPENDED.includes(k)) ? "warn" : null },
       { label: "Last run", value: c.planned + " planned, " + c.worked + " worked, " + c.reconciled + " reconciled, " + c.waiting + " waiting, " + c.errors + " errors", tone: c.errors ? "warn" : null },
     ];
+  }
+  // A cap is a limit on spend, never a permission, and the report can't prove which calls ran.
+  // Dry run only skips writes: the AIs still run, so it can still spend within the cap.
+  function paidCalls(engine, b) {
+    if (!engine.active) return { value: "Off: the engine was off in the last report", tone: null };
+    if (b.ledgerProblem) return { value: "Blocked: " + b.ledgerProblem, tone: "warn" };
+    if (!(b.capUsd > 0)) return { value: "Off: the monthly cap is zero", tone: null };
+    return { value: "Cap set at " + usd(b.capUsd, 2) + " a month. A cap is a limit, not a permission; calls are not verified" +
+      (engine.dryRun ? ". Dry run still runs the AIs and only skips writes" : ""), tone: null };
   }
   // Only plain http(s) links are rendered; javascript:, data: and the like are dropped.
   function safeUrl(u) { const s = String(u || "").trim(); return /^https?:\/\/[^\s]+$/i.test(s) ? s : null; }
