@@ -22,7 +22,18 @@
     if (!o || typeof o !== "object" || Array.isArray(o)) return false;
     if (!Array.isArray(o.issues) || !Array.isArray(o.agents)) return false;
     if (!o.lanes || typeof o.lanes !== "object" || Array.isArray(o.lanes) || !Object.values(o.lanes).every(Array.isArray)) return false;
+    if (o.engine != null && !isEngineReport(o.engine)) return false;
     return typeof o.fetchedAt === "string" && !Number.isNaN(Date.parse(o.fetchedAt));
+  }
+  // The engine report is optional, but when present every field the engine panel reads must be there.
+  function isEngineReport(e) {
+    const num = v => typeof v === "number" && Number.isFinite(v), obj = v => !!v && typeof v === "object" && !Array.isArray(v);
+    if (!obj(e) || typeof e.at !== "string" || Number.isNaN(Date.parse(e.at)) || typeof e.dryRun !== "boolean") return false;
+    const b = e.budget, c = e.counts;
+    if (!obj(b) || typeof b.month !== "string" || !num(b.spentUsd) || !num(b.capUsd)) return false;
+    if (b.ledgerProblem != null && typeof b.ledgerProblem !== "string") return false;
+    if (!Array.isArray(e.agentsOnline) || !e.agentsOnline.every(k => typeof k === "string")) return false;
+    return obj(c) && ["planned", "worked", "reconciled", "waiting", "errors"].every(k => num(c[k]));
   }
   function laneIssues(overview, lane) {
     const issues = (overview && Array.isArray(overview.issues)) ? overview.issues : [];

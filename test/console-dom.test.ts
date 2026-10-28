@@ -279,6 +279,47 @@ test("a malformed 200 overview is a failed read: never shown as a fresh empty bo
   }
 });
 
+test("a malformed engine report is a failed read: it never throws or replaces the last good engine panel", async () => {
+  const engine = { at: "2026-10-01T00:00:00Z", dryRun: true, agentsOnline: ["claude"],
+    budget: { month: "2026-10", spentUsd: 0, capUsd: 0, calls: 0, ledgerProblem: null },
+    counts: { planned: 1, worked: 0, reconciled: 0, waiting: 0, errors: 0 } };
+  const { counts: _c, ...noCounts } = engine;
+  const { agentsOnline: _a, ...noAgents } = engine;
+  for (const badEngine of [{}, [], "engine", noCounts, noAgents, { ...engine, budget: null }, { ...engine, budget: { ...engine.budget, month: undefined } },
+    { ...engine, counts: { ...engine.counts, errors: "0" } }, { ...engine, agentsOnline: [1] }, { ...engine, at: "not a date" }, { ...engine, dryRun: "yes" },
+    { ...engine, budget: { ...engine.budget, ledgerProblem: {} } }]) {
+    const bad = { ...overviewJson, engine: badEngine };
+    // Initial reply with a malformed engine report: nothing is presented as loaded, and nothing throws.
+    let t = setup(() => ok(bad));
+    await flush();
+    assert.equal(t.$("cUpdated").textContent, "Not loaded");
+    assert.match(t.$("cOverviewMsg").textContent, /incomplete/);
+    assert.equal(t.$("cEngine").textContent, "");
+    assert.equal(t.$("cRefresh").disabled, false);
+    // Healthy engine report, then a malformed one: the good panel and list stay, labelled stale.
+    let n = 0;
+    t = setup(() => n++ === 0
+      ? ok({ ...overviewJson, engine, issues: [{ id: "ARN-1", lane: "active", title: "kept" }], lanes: { active: ["ARN-1"] } })
+      : ok(bad));
+    await flush();
+    const good = { engine: t.$("cEngine").textContent, list: t.$("cList").textContent };
+    assert.match(good.engine, /1 planned/);
+    t.$("cRefresh").onclick(); await flush();
+    assert.match(t.$("cUpdated").textContent, /stale/);
+    assert.match(t.$("cOverviewMsg").textContent, /incomplete.*Showing the last data received/);
+    assert.equal(t.$("cEngine").textContent, good.engine);
+    assert.equal(t.$("cList").textContent, good.list);
+    assert.equal(t.$("cRefresh").disabled, false);
+  }
+  // No engine report yet (absent or null) is still a valid overview.
+  for (const e of [undefined, null]) {
+    const t = setup(() => ok({ ...overviewJson, engine: e }));
+    await flush();
+    assert.doesNotMatch(t.$("cUpdated").textContent, /Not loaded|stale/);
+    assert.match(t.$("cEngine").textContent, /Not reported yet/);
+  }
+});
+
 test("ARN-77 malformed successful intake preserves the draft and retry key", async () => {
   for (const intent of ["command", "question"]) {
     let receipt: any = {};
