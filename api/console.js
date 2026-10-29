@@ -1,6 +1,6 @@
 import { TEAM_ID, PROJECT_ID, overviewOf, projectIssue, safeLinearUrl } from "./lib/console-state.js";
 import { lifecycleOf } from "./lib/command-lifecycle.js";
-import { engineStatusOf } from "./lib/engine-status.js";
+import { engineStatusRead } from "./lib/engine-status.js";
 import { hasSitePassword, isCrossSite } from "./lib/site-auth.js";
 
 const LINEAR = "https://api.linear.app/graphql";
@@ -67,12 +67,12 @@ export async function handle(req, env, f = fetch, now = () => new Date()) {
     if (body.action === "overview") {
       const [data, engine] = await Promise.all([
         gql(env, f, OVERVIEW, { team: TEAM_ID, project: PROJECT_ID }),
-        gql(env, f, STATUS, { project: PROJECT_ID }).then(s => engineStatusOf(s.project?.documents?.nodes), () => null),
+        gql(env, f, STATUS, { project: PROJECT_ID }).then(s => engineStatusRead(s.project?.documents?.nodes), () => ({ engineStatus: "unavailable", engine: null })),
       ]);
       if (!Array.isArray(data.issues?.nodes) || !data.issues?.pageInfo) throw new Error("Invalid response");
       // Defense in depth: don't trust upstream filtering to authorize an out-of-scope row.
       const scoped = data.issues.nodes.filter(inScope);
-      return { status: 200, body: { ...overviewOf(scoped, now().toISOString(), Boolean(data.issues.pageInfo.hasNextPage)), engine } };
+      return { status: 200, body: { ...overviewOf(scoped, now().toISOString(), Boolean(data.issues.pageInfo.hasNextPage)), ...engine } };
     }
     const data = await gql(env, f, THREAD, { identifier: body.identifier });
     if (!data.issue || !inScope(data.issue)) return error(404, "Issue not found in this operation.");

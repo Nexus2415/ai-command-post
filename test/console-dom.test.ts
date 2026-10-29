@@ -337,6 +337,49 @@ test("a malformed engine report is a failed read: it never throws or replaces th
   }
 });
 
+test("ARN-47: a failed engine report read keeps the last verified report, flagged, and recovers", async () => {
+  const engine = { at: "2026-10-01T00:00:00Z", active: true, dryRun: true, agentsOnline: ["claude"],
+    budget: { month: "2026-10", spentUsd: 0, capUsd: 0, calls: 0, ledgerProblem: null },
+    counts: { planned: 1, worked: 0, reconciled: 0, waiting: 0, errors: 0 } };
+  const reported = { ...overviewJson, engine, engineStatus: "reported" };
+  const unavailable = { ...overviewJson, engine: null, engineStatus: "unavailable" };
+  // Healthy, then the report read fails, then it recovers.
+  const replies = [reported, unavailable, unavailable, { ...reported, engine: { ...engine, counts: { ...engine.counts, planned: 2 } } }];
+  let n = 0;
+  const t = setup(() => ok(replies[Math.min(n++, replies.length - 1)]));
+  await flush();
+  const good = t.$("cEngine").textContent;
+  assert.match(good, /1 planned/);
+  for (let i = 0; i < 2; i++) {
+    t.$("cRefresh").onclick(); await flush();
+    const shown = t.$("cEngine").textContent;
+    assert.match(shown, /Unavailable: the engine report could not be read.*last verified report/);
+    assert.match(shown, /1 planned/, "the last verified report is kept");
+    assert.ok(shown.endsWith(good), "kept with its original run time");
+    assert.doesNotMatch(shown, /Not reported yet/);
+    assert.doesNotMatch(t.$("cUpdated").textContent, /stale|Not loaded/, "the board itself is current");
+  }
+  t.$("cRefresh").onclick(); await flush();
+  assert.match(t.$("cEngine").textContent, /2 planned/);
+  assert.doesNotMatch(t.$("cEngine").textContent, /Unavailable/);
+  // Unavailable with nothing kept says so; absent is still "not reported yet".
+  const t1 = setup(() => ok(unavailable));
+  await flush();
+  assert.match(t1.$("cEngine").textContent, /^Engine statusUnavailable/);
+  assert.doesNotMatch(t1.$("cEngine").textContent, /Not reported yet/);
+  const t2 = setup(() => ok({ ...overviewJson, engine: null, engineStatus: "absent" }));
+  await flush();
+  assert.match(t2.$("cEngine").textContent, /Not reported yet/);
+  // engineStatus must agree with engine; a mismatch is an incomplete reply.
+  for (const bad of [{ ...overviewJson, engine: null, engineStatus: "reported" }, { ...overviewJson, engine, engineStatus: "unavailable" },
+    { ...overviewJson, engine, engineStatus: "absent" }, { ...overviewJson, engine: null, engineStatus: "down" }]) {
+    const t3 = setup(() => ok(bad));
+    await flush();
+    assert.match(t3.$("cOverviewMsg").textContent, /incomplete/);
+    assert.equal(t3.$("cEngine").textContent, "");
+  }
+});
+
 test("ARN-77 malformed successful intake preserves the draft and retry key", async () => {
   for (const intent of ["command", "question"]) {
     let receipt: any = {};

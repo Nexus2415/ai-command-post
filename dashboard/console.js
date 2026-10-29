@@ -23,10 +23,13 @@
     if (!Array.isArray(o.issues) || !Array.isArray(o.agents)) return false;
     if (!o.lanes || typeof o.lanes !== "object" || Array.isArray(o.lanes) || !Object.values(o.lanes).every(Array.isArray)) return false;
     if (o.engine != null && !isEngineReport(o.engine)) return false;
+    // engineStatus (when sent) must agree with engine: only "reported" carries a report.
+    if (o.engineStatus !== undefined && !(ENGINE_STATUSES.includes(o.engineStatus) && (o.engineStatus === "reported") === (o.engine != null))) return false;
     return typeof o.fetchedAt === "string" && !Number.isNaN(Date.parse(o.fetchedAt));
   }
   // The engine report is optional, but when present every field the engine panel reads must be there,
   // with amounts and counts that can be real (never negative; counts are whole numbers).
+  const ENGINE_STATUSES = ["reported", "absent", "unavailable"];
   function isEngineReport(e) {
     const num = v => typeof v === "number" && Number.isFinite(v) && v >= 0, count = v => Number.isInteger(v) && v >= 0, obj = v => !!v && typeof v === "object" && !Array.isArray(v);
     if (!obj(e) || typeof e.at !== "string" || Number.isNaN(Date.parse(e.at)) || typeof e.active !== "boolean" || typeof e.dryRun !== "boolean") return false;
@@ -93,7 +96,13 @@
   }
   // Only plain http(s) links are rendered; javascript:, data: and the like are dropped.
   function safeUrl(u) { const s = String(u || "").trim(); return /^https?:\/\/[^\s]+$/i.test(s) ? s : null; }
-  const api = { engineRows, safeUrl, ownerLabel, TABS, laneCounts, laneIssues, rosterRow, connectionLabel, intakeBody, errorMessage, QUESTION_EXPLANATION, isIssueId: s => ID_RE.test(String(s)) };
+  // unavailable: this read failed, so engine (if any) is the last verified report, kept with its own time.
+  function engineView(engine, nowMs, unavailable) {
+    if (!unavailable) return engineRows(engine, nowMs);
+    const note = { label: "Engine status", value: "Unavailable: the engine report could not be read" + (engine ? ". Showing the last verified report, which may be out of date" : ""), tone: "warn" };
+    return engine ? [note, ...engineRows(engine, nowMs)] : [note];
+  }
+  const api = { engineRows, engineView, safeUrl, ownerLabel, TABS, laneCounts, laneIssues, rosterRow, connectionLabel, intakeBody, errorMessage, QUESTION_EXPLANATION, isIssueId: s => ID_RE.test(String(s)) };
   root.ACPConsoleCore = api;
   if (typeof document === "undefined") return;
 
@@ -132,7 +141,8 @@
       const next = await post("/api/console", { action: "overview" });
       if (seq !== overviewSeq) return;
       if (!isOverview(next)) throw new Error("The overview reply was incomplete, so it wasn't used.");
-      overview = next;
+      // A failed engine-report read keeps the last verified report (with its original time) instead of erasing it.
+      overview = next.engineStatus === "unavailable" && overview && overview.engine ? { ...next, engine: overview.engine } : next;
       setMsg($("cOverviewMsg"), overview.hasNextPage ? "Showing the latest 250 issues; older ones are not counted." : "", "warn");
       $("cUpdated").textContent = "Last updated " + fmtTime(overview.fetchedAt);
     } catch (e) {
@@ -148,7 +158,7 @@
     const dl = $("cEngine");
     dl.replaceChildren();
     if (!overview) return;
-    engineRows(overview.engine, Date.now()).forEach(r => {
+    engineView(overview.engine, Date.now(), overview.engineStatus === "unavailable").forEach(r => {
       dl.appendChild(el("dt", null, r.label));
       const dd = el("dd", r.tone === "warn" ? "warn" : null, r.value);
       dl.appendChild(dd);

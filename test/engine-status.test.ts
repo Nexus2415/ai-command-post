@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import { handle } from "../api/console.js";
 import { PROJECT_ID, TEAM_ID } from "../api/lib/console-state.js";
-import { STATUS_TITLE, engineStatusOf, parseStatus, statusContent } from "../api/lib/engine-status.js";
+import { STATUS_TITLE, engineStatusOf, engineStatusRead, parseStatus, statusContent } from "../api/lib/engine-status.js";
 import { Budget } from "../src/budget.ts";
 import { loadConfig } from "../src/config.ts";
 import { LinearStore, type TaskStore } from "../src/linear.ts";
@@ -119,6 +119,17 @@ test("console overview carries the engine status, and a status read failure neve
   const down: any = await handle(req, env, route(false));
   assert.equal(down.status, 200);
   assert.equal(down.body.engine, null);
+  assert.equal(ok.body.engineStatus, "reported");
+  assert.equal(down.body.engineStatus, "unavailable", "a failed status read is never reported as 'not reported yet'");
+});
+
+test("ARN-47: engine report read result tells absent from unavailable", () => {
+  const good = { title: STATUS_TITLE, content: statusContent(snap()), updatedAt: "2026-10-20T22:00:01Z" };
+  assert.deepEqual(engineStatusRead([good]), { engineStatus: "reported", engine: engineStatusOf([good]) });
+  assert.deepEqual(engineStatusRead([]), { engineStatus: "absent", engine: null });
+  assert.deepEqual(engineStatusRead([{ ...good, title: "Some other doc" }]), { engineStatus: "absent", engine: null });
+  for (const bad of [undefined, null, {}, "docs"]) assert.deepEqual(engineStatusRead(bad), { engineStatus: "unavailable", engine: null });
+  assert.deepEqual(engineStatusRead([{ ...good, content: "edited by hand" }]), { engineStatus: "unavailable", engine: null }, "a malformed report is unreadable, not absent");
 });
 
 test("dashboard engine rows: missing, stale, blocked and failing states are flagged", () => {
@@ -137,4 +148,16 @@ test("dashboard engine rows: missing, stale, blocked and failing states are flag
   assert.equal(blocked.find((r: any) => r.label === "Paid AI calls").tone, "warn");
   const failing = rows(parseStatus(statusContent(snap({ counts: { planned: 0, worked: 0, reconciled: 0, waiting: 0, errors: 2 } }))));
   assert.equal(failing.at(-1).tone, "warn");
+  // ARN-47: an unreadable report is flagged, never shown as "not reported yet"; a kept report keeps its own time.
+  const down = sandbox.ACPConsoleCore.engineView(null, Date.parse("2026-10-20T22:30:00Z"), true);
+  assert.equal(down.length, 1);
+  assert.equal(down[0].tone, "warn");
+  assert.match(down[0].value, /^Unavailable/);
+  assert.doesNotMatch(down[0].value, /Not reported/);
+  const report = parseStatus(statusContent(snap()));
+  const kept = sandbox.ACPConsoleCore.engineView(report, Date.parse("2026-10-20T22:30:00Z"), true);
+  assert.match(kept[0].value, /Unavailable.*last verified report/);
+  assert.equal(kept[0].tone, "warn");
+  assert.deepEqual(kept.slice(1).map((r: any) => r.value), rows(report).map((r: any) => r.value));
+  assert.deepEqual(sandbox.ACPConsoleCore.engineView(null, 0, false).map((r: any) => r.value), missing.map((r: any) => r.value), "absent stays 'not reported yet'");
 });
