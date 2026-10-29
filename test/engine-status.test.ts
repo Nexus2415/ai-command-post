@@ -114,14 +114,14 @@ test("console overview carries the engine status, and a status read failure neve
   assert.equal(ok.status, 200);
   assert.equal(ok.body.engine.at, "2026-10-20T22:00:00.000Z");
   const statusCall = calls.find(c => c.query.includes("ConsoleEngineStatus"));
-  assert.deepEqual(statusCall.variables, { project: PROJECT_ID }, "scope is fixed by the server");
+  assert.deepEqual(statusCall.variables, { project: PROJECT_ID, after: null }, "scope is fixed by the server");
   assert.ok(calls.some(c => c.variables?.team === TEAM_ID));
   const down: any = await handle(req, env, route(false));
   assert.equal(down.status, 200);
   assert.equal(down.body.engine, null);
   assert.equal(ok.body.engineStatus, "reported");
   assert.equal(down.body.engineStatus, "unavailable", "a failed status read is never reported as 'not reported yet'");
-  assert.match(statusCall.query, /pageInfo \{ hasNextPage \}/, "the status query asks whether the document list is complete");
+  assert.match(statusCall.query, /pageInfo \{ hasNextPage endCursor \}/, "the status query asks whether the document list is complete");
   // A first page of other documents with more to come is not proof the report is absent.
   const page = (more: boolean) => (async (_u: any, init: any) => JSON.parse(init.body).query.includes("ConsoleEngineStatus")
     ? Response.json({ data: { project: { documents: { nodes: [{ title: "Notes", content: "x", updatedAt: "2026-10-20T22:00:01Z" }], pageInfo: { hasNextPage: more } } } } })
@@ -130,10 +130,54 @@ test("console overview carries the engine status, and a status read failure neve
   assert.equal(((await handle(req, env, page(false))) as any).body.engineStatus, "absent");
 });
 
+test("ARN-47: the console follows status-document pages and never picks an older report from a partial list", async () => {
+  const env = { ACP_SITE_PASSWORD: "pw", LINEAR_API_KEY: "lin" };
+  const req = { method: "POST", headers: { "x-acp-password": "pw" }, body: { action: "overview" } };
+  const issues = { issues: { nodes: [], pageInfo: { hasNextPage: false } } };
+  const older = { title: STATUS_TITLE, content: statusContent({ ...snap(), at: "2026-10-20T21:00:00.000Z" }), updatedAt: "2026-10-20T21:00:01Z" };
+  const newer = { title: STATUS_TITLE, content: statusContent(snap()), updatedAt: "2026-10-20T22:00:01Z" };
+  const run = async (pages: any[]) => {
+    const asked: any[] = [];
+    const f = (async (_u: any, init: any) => {
+      const b = JSON.parse(init.body);
+      if (!b.query.includes("ConsoleEngineStatus")) return Response.json({ data: issues });
+      asked.push(b.variables.after);
+      const p = pages[asked.length - 1];
+      return p instanceof Response ? p : Response.json({ data: { project: { documents: p } } });
+    }) as typeof fetch;
+    return { body: ((await handle(req, env, f)) as any).body, asked };
+  };
+  // The older report on page 1 and the newer duplicate on page 2: the newer one wins.
+  const both = await run([
+    { nodes: [older], pageInfo: { hasNextPage: true, endCursor: "c1" } },
+    { nodes: [newer], pageInfo: { hasNextPage: false, endCursor: null } },
+  ]);
+  assert.deepEqual(both.asked, [null, "c1"]);
+  assert.equal(both.body.engineStatus, "reported");
+  assert.equal(both.body.engine.at, "2026-10-20T22:00:00.000Z");
+  // Missing or malformed pageInfo leaves the list unconfirmed: unavailable, never the older report.
+  for (const pageInfo of [undefined, null, {}, { hasNextPage: "false" }]) {
+    const r = await run([{ nodes: [older], pageInfo }]);
+    assert.equal(r.body.engineStatus, "unavailable");
+    assert.equal(r.body.engine, null);
+  }
+  // More pages promised but no cursor to follow them: unavailable.
+  assert.equal((await run([{ nodes: [older], pageInfo: { hasNextPage: true, endCursor: null } }])).body.engineStatus, "unavailable");
+  // A later page that fails or is malformed: unavailable, even though page 1 had a report.
+  assert.equal((await run([{ nodes: [older], pageInfo: { hasNextPage: true, endCursor: "c1" } }, new Response("{}", { status: 500 })])).body.engineStatus, "unavailable");
+  assert.equal((await run([{ nodes: [older], pageInfo: { hasNextPage: true, endCursor: "c1" } }, { nodes: "x", pageInfo: { hasNextPage: false } }])).body.engineStatus, "unavailable");
+  // Still incomplete after the page cap: unavailable, with a bounded number of reads.
+  const endless = Array.from({ length: 10 }, (_, i) => ({ nodes: [older], pageInfo: { hasNextPage: true, endCursor: "c" + (i + 1) } }));
+  const capped = await run(endless);
+  assert.equal(capped.body.engineStatus, "unavailable");
+  assert.deepEqual(capped.asked, [null, "c1", "c2", "c3"]);
+});
+
 test("ARN-47: engine report read result tells absent from unavailable", () => {
   const good = { title: STATUS_TITLE, content: statusContent(snap()), updatedAt: "2026-10-20T22:00:01Z" };
   assert.deepEqual(engineStatusRead([good], false), { engineStatus: "reported", engine: engineStatusOf([good]) });
-  assert.deepEqual(engineStatusRead([good], true), { engineStatus: "reported", engine: engineStatusOf([good]) }, "found on the first page");
+  // A match on a partial or unconfirmed list may be an older duplicate of a newer report on an unread page.
+  for (const more of [true, undefined, null, "false"]) assert.deepEqual(engineStatusRead([good], more), { engineStatus: "unavailable", engine: null });
   assert.deepEqual(engineStatusRead([], false), { engineStatus: "absent", engine: null });
   const others = Array.from({ length: 50 }, (_, i) => ({ ...good, title: "Doc " + i }));
   assert.deepEqual(engineStatusRead(others, false), { engineStatus: "absent", engine: null }, "a complete list without the report");
