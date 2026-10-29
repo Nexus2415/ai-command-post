@@ -102,7 +102,7 @@ test("console overview carries the engine status, and a status read failure neve
   const env = { ACP_SITE_PASSWORD: "pw", LINEAR_API_KEY: "lin" };
   const req = { method: "POST", headers: { "x-acp-password": "pw" }, body: { action: "overview" } };
   const issues = { issues: { nodes: [], pageInfo: { hasNextPage: false } } };
-  const docs = { project: { documents: { nodes: [{ title: STATUS_TITLE, content: statusContent(snap()), updatedAt: "2026-10-20T22:00:01Z" }] } } };
+  const docs = { project: { documents: { nodes: [{ title: STATUS_TITLE, content: statusContent(snap()), updatedAt: "2026-10-20T22:00:01Z" }], pageInfo: { hasNextPage: false } } } };
   const calls: any[] = [];
   const route = (statusOk: boolean) => (async (_u: any, init: any) => {
     const b = JSON.parse(init.body);
@@ -121,15 +121,26 @@ test("console overview carries the engine status, and a status read failure neve
   assert.equal(down.body.engine, null);
   assert.equal(ok.body.engineStatus, "reported");
   assert.equal(down.body.engineStatus, "unavailable", "a failed status read is never reported as 'not reported yet'");
+  assert.match(statusCall.query, /pageInfo \{ hasNextPage \}/, "the status query asks whether the document list is complete");
+  // A first page of other documents with more to come is not proof the report is absent.
+  const page = (more: boolean) => (async (_u: any, init: any) => JSON.parse(init.body).query.includes("ConsoleEngineStatus")
+    ? Response.json({ data: { project: { documents: { nodes: [{ title: "Notes", content: "x", updatedAt: "2026-10-20T22:00:01Z" }], pageInfo: { hasNextPage: more } } } } })
+    : Response.json({ data: issues })) as typeof fetch;
+  assert.equal(((await handle(req, env, page(true))) as any).body.engineStatus, "unavailable");
+  assert.equal(((await handle(req, env, page(false))) as any).body.engineStatus, "absent");
 });
 
 test("ARN-47: engine report read result tells absent from unavailable", () => {
   const good = { title: STATUS_TITLE, content: statusContent(snap()), updatedAt: "2026-10-20T22:00:01Z" };
-  assert.deepEqual(engineStatusRead([good]), { engineStatus: "reported", engine: engineStatusOf([good]) });
-  assert.deepEqual(engineStatusRead([]), { engineStatus: "absent", engine: null });
-  assert.deepEqual(engineStatusRead([{ ...good, title: "Some other doc" }]), { engineStatus: "absent", engine: null });
-  for (const bad of [undefined, null, {}, "docs"]) assert.deepEqual(engineStatusRead(bad), { engineStatus: "unavailable", engine: null });
-  assert.deepEqual(engineStatusRead([{ ...good, content: "edited by hand" }]), { engineStatus: "unavailable", engine: null }, "a malformed report is unreadable, not absent");
+  assert.deepEqual(engineStatusRead([good], false), { engineStatus: "reported", engine: engineStatusOf([good]) });
+  assert.deepEqual(engineStatusRead([good], true), { engineStatus: "reported", engine: engineStatusOf([good]) }, "found on the first page");
+  assert.deepEqual(engineStatusRead([], false), { engineStatus: "absent", engine: null });
+  const others = Array.from({ length: 50 }, (_, i) => ({ ...good, title: "Doc " + i }));
+  assert.deepEqual(engineStatusRead(others, false), { engineStatus: "absent", engine: null }, "a complete list without the report");
+  // A partial or unconfirmed list without the report proves nothing: it may be on a later page.
+  for (const more of [true, undefined, null, "false"]) assert.deepEqual(engineStatusRead(others, more), { engineStatus: "unavailable", engine: null });
+  for (const bad of [undefined, null, {}, "docs"]) assert.deepEqual(engineStatusRead(bad, false), { engineStatus: "unavailable", engine: null });
+  assert.deepEqual(engineStatusRead([{ ...good, content: "edited by hand" }], false), { engineStatus: "unavailable", engine: null }, "a malformed report is unreadable, not absent");
 });
 
 test("dashboard engine rows: missing, stale, blocked and failing states are flagged", () => {

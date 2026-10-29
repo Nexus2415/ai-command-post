@@ -15,7 +15,7 @@ const OVERVIEW = `query ConsoleOverview($team: ID!, $project: ID!) {
 // The engine's status document lives in the same fixed project; it is read separately so a failure here never
 // hides the task board.
 const STATUS = `query ConsoleEngineStatus($project: String!) {
-  project(id: $project) { documents(first: 50) { nodes { title content updatedAt } } }
+  project(id: $project) { documents(first: 50) { nodes { title content updatedAt } pageInfo { hasNextPage } } }
 }`;
 const THREAD = `query ConsoleThread($identifier: String!) {
   issue(id: $identifier) { ${FIELDS} description
@@ -67,7 +67,7 @@ export async function handle(req, env, f = fetch, now = () => new Date()) {
     if (body.action === "overview") {
       const [data, engine] = await Promise.all([
         gql(env, f, OVERVIEW, { team: TEAM_ID, project: PROJECT_ID }),
-        gql(env, f, STATUS, { project: PROJECT_ID }).then(s => engineStatusRead(s.project?.documents?.nodes), () => ({ engineStatus: "unavailable", engine: null })),
+        gql(env, f, STATUS, { project: PROJECT_ID }).then(s => engineStatusRead(s.project?.documents?.nodes, s.project?.documents?.pageInfo?.hasNextPage), () => ({ engineStatus: "unavailable", engine: null })),
       ]);
       if (!Array.isArray(data.issues?.nodes) || !data.issues?.pageInfo) throw new Error("Invalid response");
       // Defense in depth: don't trust upstream filtering to authorize an out-of-scope row.

@@ -58,11 +58,12 @@ export function engineStatusOf(documents) {
 /**
  * The console's view of the engine report: "reported" with a validated snapshot, "absent" when the engine has
  * never written one, or "unavailable" when the documents can't be read or the engine's document is malformed.
- * Absent and unavailable differ: an unreadable report must never be shown as "not reported yet".
+ * Absent and unavailable differ: an unreadable report must never be shown as "not reported yet". Absent needs a
+ * complete list (hasNextPage === false); no match on a partial or unconfirmed page proves nothing.
  */
-export function engineStatusRead(documents) {
+export function engineStatusRead(documents, hasNextPage) {
   if (!Array.isArray(documents)) return { engineStatus: "unavailable", engine: null };
-  if (!documents.some(d => d && d.title === STATUS_TITLE)) return { engineStatus: "absent", engine: null };
+  if (!documents.some(d => d && d.title === STATUS_TITLE)) return { engineStatus: hasNextPage === false ? "absent" : "unavailable", engine: null };
   const engine = engineStatusOf(documents);
   return engine ? { engineStatus: "reported", engine } : { engineStatus: "unavailable", engine: null };
 }
