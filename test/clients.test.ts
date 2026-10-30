@@ -127,3 +127,37 @@ test("LinearStore.getComments pages through every comment", async () => {
   assert.deepEqual(all.map((c) => c.body), ["late", "early"]);
   assert.deepEqual(afters, [null, "c1"]);
 });
+
+test("ARN-45: getComments refuses a comment list it can't read in full", async () => {
+  // An earlier foreign claim sits on page 2; page 1's page signal is missing or malformed.
+  const later = { body: "acp claim later", createdAt: "2026-10-08T10:00:02Z" };
+  const run = async (pages: unknown[]) => {
+    let n = 0;
+    const f = (async () => new Response(JSON.stringify({ data: { issue: { comments: pages[n++] } } }), { status: 200 })) as unknown as typeof fetch;
+    return { result: new LinearStore("k", f).getComments("i1"), reads: () => n };
+  };
+  const bad: [string, unknown[]][] = [
+    ["no pageInfo", [{ nodes: [later] }]],
+    ["null pageInfo", [{ nodes: [later], pageInfo: null }]],
+    ["missing hasNextPage", [{ nodes: [later], pageInfo: { endCursor: "c1" } }]],
+    ["string hasNextPage", [{ nodes: [later], pageInfo: { hasNextPage: "false", endCursor: null } }]],
+    ["null hasNextPage", [{ nodes: [later], pageInfo: { hasNextPage: null } }]],
+    ["no nodes", [{ pageInfo: { hasNextPage: false } }]],
+    ["no comments", [undefined]],
+    ["more without a cursor", [{ nodes: [later], pageInfo: { hasNextPage: true, endCursor: null } }]],
+    ["more with an empty cursor", [{ nodes: [later], pageInfo: { hasNextPage: true, endCursor: "" } }]],
+    ["a cursor that doesn't advance", [
+      { nodes: [later], pageInfo: { hasNextPage: true, endCursor: "c1" } },
+      { nodes: [], pageInfo: { hasNextPage: true, endCursor: "c1" } },
+    ]],
+    ["a malformed later page", [
+      { nodes: [later], pageInfo: { hasNextPage: true, endCursor: "c1" } },
+      { nodes: [{ body: "earlier foreign claim", createdAt: "2026-10-08T10:00:00Z" }] },
+    ]],
+  ];
+  for (const [name, pages] of bad) {
+    const r = await run(pages);
+    await assert.rejects(r.result, /refusing to guess the earliest claim/, name);
+    assert.ok(r.reads() <= pages.length, `${name}: no reads past the bad page`);
+  }
+});

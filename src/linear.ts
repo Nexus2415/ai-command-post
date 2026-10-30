@@ -137,10 +137,19 @@ export class LinearStore implements TaskStore {
         `query($id:String!,$after:String){ issue(id:$id){ comments(first:100, after:$after){ nodes { body createdAt } pageInfo { hasNextPage endCursor } } } }`,
         { id: issueId, after },
       );
-      const c = d.issue.comments;
+      const c = d.issue?.comments;
+      // Only an explicit hasNextPage === false ends the list; a missing or malformed page signal is not "complete",
+      // since an earlier claim could sit on a page that was never read.
+      if (!Array.isArray(c?.nodes) || typeof c.pageInfo?.hasNextPage !== "boolean") {
+        throw new Error(`issue ${issueId} returned an unreadable comment page; refusing to guess the earliest claim`);
+      }
       out.push(...c.nodes);
-      if (!c.pageInfo?.hasNextPage) return out;
-      after = c.pageInfo.endCursor;
+      if (!c.pageInfo.hasNextPage) return out;
+      const next = c.pageInfo.endCursor;
+      if (typeof next !== "string" || !next || next === after) {
+        throw new Error(`issue ${issueId} returned no usable cursor for its next comment page; refusing to guess the earliest claim`);
+      }
+      after = next;
     }
     throw new Error(`issue ${issueId} has more comments than ACP will page through; refusing to guess the earliest claim`);
   }
