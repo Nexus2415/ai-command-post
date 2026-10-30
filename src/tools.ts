@@ -207,6 +207,8 @@ const HANDLERS: Record<string, (input: Record<string, unknown>, env: ToolEnv) =>
   },
   async "firecrawl.search"(input, env) {
     const query = str(input, "query");
+    // Firecrawl calls spend account credits, so a dry run never makes one.
+    if (env.dryRun) return `DRY RUN: would search the web for "${query}"`;
     const j = await firecrawl(env, "/v2/search", { query, limit: Math.min(Number(input["limit"] ?? 5), 10) });
     const web = j.data?.web ?? j.data ?? [];
     return (Array.isArray(web) ? web : []).map((r: any) => `- ${r.title ?? ""} ${r.url}\n  ${r.description ?? ""}`).join("\n") || "No results";
@@ -214,6 +216,7 @@ const HANDLERS: Record<string, (input: Record<string, unknown>, env: ToolEnv) =>
   async "firecrawl.scrape"(input, env) {
     const url = str(input, "url");
     if (!/^https:\/\//.test(url)) throw new Error("Only https URLs may be scraped");
+    if (env.dryRun) return `DRY RUN: would fetch ${url}`;
     const j = await firecrawl(env, "/v2/scrape", { url, formats: ["markdown"], onlyMainContent: true });
     return j.data?.markdown ?? "";
   },
