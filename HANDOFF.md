@@ -5,9 +5,10 @@ Owner: Darius. Built 2026-10-07 in a Claude session that couldn't reach GitHub o
 ## Where it stands (2026-10-20)
 
 - **Built and merged:** the engine (plan, work, reconcile), the password-locked website console at https://ai-command-post.vercel.app (`/api/console` reads, `/api/intake` files commands and questions), the fail-closed Eve adapter and OIDC preflight (dispatch unsupported), the broker adapter and manager seam (synthetic only), authenticated intake bound to opsdesk's owner intake grants (ARN-122), and PR path validation (ARN-119).
-- **Switched off on purpose:** the scheduled engine (`ACP_ACTIVE` is not `true`, so every run is skipped), Gemini (suspended in code by the owner, ARN-115), Eve dispatch, engine pull requests, and paid AI (cap $0). With Gemini suspended and no paid key, the engine has no AI that may run.
+- **Switched off on purpose:** the scheduled engine, Gemini (suspended in code by the owner, ARN-115), Eve dispatch, engine pull requests, and paid AI (cap $0). With Gemini suspended and no paid key, the engine has no AI that may run.
 - **Other AIs paused:** on 2026-10-20 the owner paused ChatGPT, Perplexity and Codex as reviewers and workers until further notice.
-- **Owner-only steps left** are listed in `docs/OWNER-CHECKLIST.md`.
+- **Engine flags are not verified safe.** On 2026-10-30 the last 100 scheduled Engine runs, up to 07:44 UTC that day, were all *skipped*. The workflow skips the job unless `vars.ACP_ACTIVE == 'true'`, so `ACP_ACTIVE` was not `true` at those runs. That is evidence about past runs, not a live setting. The variables themselves can't be read from a Claude session, earlier records say `ACP_ACTIVE=true` and `ACP_DRY_RUN=false` were set, and the present value of `ACP_DRY_RUN` is **unknown**. Check the latest Engine run and Settings → Secrets and variables → Actions → Variables before relying on any flag. Changing a flag, resetting the ledger, applying a migration or activating anything needs the owner's specific written approval in Linear.
+- **Owner-only steps left** are listed in `docs/OWNER-CHECKLIST.md`, which is the current reference. The task list below is a historical record, not instructions.
 
 ## Owner decisions already made
 
@@ -28,9 +29,11 @@ Owner: Darius. Built 2026-10-07 in a Claude session that couldn't reach GitHub o
 | Provider clients | **Unverified** live. Model ids in `.env.example` must be checked against current provider docs |
 | Firecrawl `/v2/search` and `/v2/scrape` | Verified live 2026-10-07 |
 | GitHub tools | **Unverified** live. `open_pull_request` writes files through the contents API, which is fine for small changes |
-| Scheduler | `.github/workflows/engine.yml`, off until repo variable `ACP_ACTIVE=true` |
+| Scheduler | `.github/workflows/engine.yml`; the job runs only when repo variable `ACP_ACTIVE` is `true` (see the flag note above) |
 
-## First tasks, in order
+## First tasks, in order (historical, 2026-10-07)
+
+These steps record what was done during the first build. Gemini has since been suspended (ARN-115) and the other AIs paused, so don't repeat any of them; flag, key and activation changes now follow `docs/OWNER-CHECKLIST.md`.
 
 1. ~~**Create the repo**, push this tree, and confirm CI is green with real `@types/node`. Delete `types/` and `tsconfig.offline.json`.~~ Done.
 2. ~~**Verify live reads, no writes:** with only `LINEAR_API_KEY` set, run `npm run status` and fix any GraphQL shape errors in `src/linear.ts`.~~ Done. Queries were valid; fixed canceled/duplicate sub-tasks blocking reconciliation.
