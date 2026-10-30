@@ -143,6 +143,12 @@ export class LinearStore implements TaskStore {
       if (!Array.isArray(c?.nodes) || typeof c.pageInfo?.hasNextPage !== "boolean") {
         throw new Error(`issue ${issueId} returned an unreadable comment page; refusing to guess the earliest claim`);
       }
+      // A comment without a readable body or timestamp could hide a claim or reorder who claimed first.
+      for (const n of c.nodes) {
+        if (typeof n?.body !== "string" || typeof n.createdAt !== "string" || Number.isNaN(Date.parse(n.createdAt))) {
+          throw new Error(`issue ${issueId} returned an unreadable comment; refusing to guess the earliest claim`);
+        }
+      }
       out.push(...c.nodes);
       if (!c.pageInfo.hasNextPage) return out;
       const next = c.pageInfo.endCursor;

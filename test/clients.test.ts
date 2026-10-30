@@ -150,6 +150,21 @@ test("ARN-45: getComments refuses a comment list it can't read in full", async (
       { nodes: [later], pageInfo: { hasNextPage: true, endCursor: "c1" } },
       { nodes: [], pageInfo: { hasNextPage: true, endCursor: "c1" } },
     ]],
+    ...([
+      ["a missing body", { createdAt: "2026-10-08T10:00:00Z" }],
+      ["a null body", { body: null, createdAt: "2026-10-08T10:00:00Z" }],
+      ["a non-string body", { body: 7, createdAt: "2026-10-08T10:00:00Z" }],
+      ["a missing timestamp", { body: "ACP executor: manual" }],
+      ["a null timestamp", { body: "ACP executor: manual", createdAt: null }],
+      ["an unparseable timestamp", { body: "ACP executor: manual", createdAt: "not a date" }],
+      ["a null comment", null],
+    ] as [string, unknown][]).flatMap(([what, node]): [string, unknown[]][] => [
+      [`${what} on page 1`, [{ nodes: [later, node], pageInfo: { hasNextPage: false, endCursor: null } }]],
+      [`${what} on a later page`, [
+        { nodes: [later], pageInfo: { hasNextPage: true, endCursor: "c1" } },
+        { nodes: [node], pageInfo: { hasNextPage: false, endCursor: null } },
+      ]],
+    ]),
     ["a malformed later page", [
       { nodes: [later], pageInfo: { hasNextPage: true, endCursor: "c1" } },
       { nodes: [{ body: "earlier foreign claim", createdAt: "2026-10-08T10:00:00Z" }] },
