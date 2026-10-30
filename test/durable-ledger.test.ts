@@ -164,6 +164,24 @@ test("ARN-45: the store reads every document page and never treats an unread pag
   // A single match needs no ordering, and a whitespace id is no id.
   assert.deepEqual(await store([{ nodes: [{ ...hidden, createdAt: undefined }], pageInfo: { hasNextPage: false } }]).s.readLedger(), state);
   await assert.rejects(store([{ nodes: [{ ...hidden, id: "  " }], pageInfo: { hasNextPage: false } }]).s.readLedger(), /without an id/);
+  // Same store instance: a later lookup that fails drops the id an earlier one cached, so no write reuses it.
+  for (const title of [LEDGER_TITLE, STATUS_TITLE]) {
+    const doc = { ...hidden, title };
+    const seq = store([{ nodes: [doc], pageInfo: { hasNextPage: false } }, { nodes: [doc] }, { nodes: [doc] }]);
+    const write = () => (title === LEDGER_TITLE ? seq.s.saveLedger("new") : seq.s.publishStatus("status"));
+    if (title === LEDGER_TITLE) {
+      assert.deepEqual(await seq.s.readLedger(), state);
+      await assert.rejects(seq.s.readLedger(), /could not be read in full/);
+    } else {
+      await seq.s.publishStatus("first");
+      assert.ok(seq.calls.some(c => c.query.includes("documentUpdate")), "the first publish updates the found document");
+      // A ledger read sharing the store doesn't touch the status id, so fail the status lookup directly.
+      await assert.rejects((seq.s as any).findDoc(STATUS_TITLE), /could not be read in full/);
+    }
+    const before = seq.calls.length;
+    await assert.rejects(write(), /could not be read in full/);
+    assert.ok(!seq.calls.slice(before).some(c => c.query.includes("documentCreate") || c.query.includes("documentUpdate")), "no write after a failed lookup on the same instance");
+  }
   // Exactly DOC_PAGES reads before giving up.
   const capped = store(incomplete[6]!);
   await assert.rejects(capped.s.readLedger());

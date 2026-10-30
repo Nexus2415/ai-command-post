@@ -199,6 +199,8 @@ export class LinearStore implements TaskStore {
    * never mistaken for absent and duplicated by a create, and "oldest" is never chosen from part of the list.
    */
   private async findDoc(title: string): Promise<{ id: string; content?: string } | null> {
+    // Forget any id cached from an earlier lookup first: if this one fails, no later write may reuse it.
+    this.docIds.delete(title);
     const docs: { id: string; title?: string; content?: string; createdAt?: string }[] = [];
     let after: string | null = null;
     let more: unknown = true;
