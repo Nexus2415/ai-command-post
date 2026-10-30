@@ -50,7 +50,7 @@ test("LinearStore creates the status document once in the fixed project, then up
   const f = (async (_u: any, init: any) => {
     const b = JSON.parse(init.body);
     calls.push(b);
-    if (b.query.includes("documents(")) return Response.json({ data: { project: { documents: { nodes: existing } } } });
+    if (b.query.includes("documents(")) return Response.json({ data: { project: { documents: { nodes: existing, pageInfo: { hasNextPage: false, endCursor: null } } } } });
     if (b.query.includes("documentCreate")) return Response.json({ data: { documentCreate: { success: true, document: { id: "doc-1" } } } });
     return Response.json({ data: { documentUpdate: { success: true } } });
   }) as typeof fetch;
@@ -58,7 +58,7 @@ test("LinearStore creates the status document once in the fixed project, then up
   await store.publishStatus("one");
   await store.publishStatus("two");
   assert.deepEqual(calls.map(c => c.query.match(/documentCreate|documentUpdate|documents\(/)![0]), ["documents(", "documentCreate", "documentUpdate"]);
-  assert.deepEqual(calls[0].variables, { p: PROJECT_ID });
+  assert.deepEqual(calls[0].variables, { p: PROJECT_ID, after: null });
   assert.deepEqual(calls[1].variables.input, { projectId: PROJECT_ID, title: STATUS_TITLE, content: "one" });
   assert.deepEqual(calls[2].variables, { id: "doc-1", input: { content: "two" } });
 
@@ -67,7 +67,7 @@ test("LinearStore creates the status document once in the fixed project, then up
   await new LinearStore("k", f).publishStatus("three");
   assert.deepEqual(calls[1].variables, { id: "doc-9", input: { content: "three" } }, "an existing document is reused, never duplicated");
 
-  const failing = new LinearStore("k", (async () => Response.json({ data: { project: { documents: { nodes: [] } }, documentCreate: { success: false } } })) as typeof fetch);
+  const failing = new LinearStore("k", (async () => Response.json({ data: { project: { documents: { nodes: [], pageInfo: { hasNextPage: false } } }, documentCreate: { success: false } } })) as typeof fetch);
   await assert.rejects(failing.publishStatus("x"), /did not create "AI Command Post: engine status"/);
 });
 
