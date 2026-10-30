@@ -26,7 +26,7 @@ You ──command──▶ Linear issue "[Claude] …"  (created from the dashbo
 |---|---|
 | `ACP_ACTIVE` kill switch | `false`: reads and reports only |
 | `ACP_DRY_RUN` | `true`: Linear and GitHub writes are logged, not made, and no Firecrawl (paid credits) call is made |
-| `ACP_MONTHLY_BUDGET_USD` | `0`: no paid model call runs, and Gemini (the free-tier model) is suspended, so no model runs at all. Paid calls are checked against worst-case cost before they run. The budget covers model calls only, not Firecrawl credits |
+| `ACP_MONTHLY_BUDGET_USD` | `0`: any model call with a positive worst-case cost is refused before it runs. A $0 cap doesn't unsuspend Gemini, which is refused in code (ARN-115); any other zero-cost model would still need the engine active, its key configured, and policy approval. The budget covers model calls only, not Firecrawl credits |
 | Pull requests | off; when on, **draft** PRs only on allow-listed repos, never the default branch |
 | Owner-only actions | merge, delete, deploy, purchase, send email, change credentials or release gates are refused in code and posted to the issue as "Owner approval needed" |
 
