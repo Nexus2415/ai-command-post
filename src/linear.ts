@@ -46,6 +46,8 @@ interface TeamInfo {
   states: { id: string; type: StateType; position: number }[];
 }
 
+/** Document pages findDoc reads (50 each) before giving up on an incomplete list. */
+const DOC_PAGES = 4;
 const ISSUE_FIELDS = `
   id identifier title description url priority createdAt
   state { type name }
@@ -190,10 +192,29 @@ export class LinearStore implements TaskStore {
     return this.upsertDoc(LEDGER_TITLE, content);
   }
 
-  /** The engine's own document with this title in the fixed project (the oldest, if someone duplicated it). */
+  /**
+   * The engine's own document with this title in the fixed project (the oldest, if someone duplicated it). Follows
+   * document pages up to DOC_PAGES and answers only from the whole list: a malformed page, a missing cursor or a list
+   * still incomplete at the cap throws. So a ledger on an unread page reads as unreadable (paid calls blocked), is
+   * never mistaken for absent and duplicated by a create, and "oldest" is never chosen from part of the list.
+   */
   private async findDoc(title: string): Promise<{ id: string; content?: string } | null> {
-    const d = await this.gql(`query($p:String!){ project(id:$p){ documents(first:50){ nodes { id title content createdAt } } } }`, { p: PROJECT_ID });
-    const docs = (d.project?.documents?.nodes ?? []).filter((n: { title?: string }) => n.title === title);
+    const docs: { id: string; title?: string; content?: string; createdAt?: string }[] = [];
+    let after: string | null = null;
+    let more: unknown = true;
+    for (let page = 0; page < DOC_PAGES && more === true; page++) {
+      const d: { project?: { documents?: { nodes?: unknown; pageInfo?: { hasNextPage?: unknown; endCursor?: string | null } } } } = await this.gql(
+        `query($p:String!,$after:String){ project(id:$p){ documents(first:50, after:$after){ nodes { id title content createdAt } pageInfo { hasNextPage endCursor } } } }`,
+        { p: PROJECT_ID, after },
+      );
+      const list = d.project?.documents;
+      if (!list || !Array.isArray(list.nodes)) throw new Error("Linear returned an unreadable document list");
+      docs.push(...list.nodes.filter((n: { title?: string }) => n?.title === title));
+      more = list.pageInfo?.hasNextPage;
+      after = list.pageInfo?.endCursor ?? null;
+      if (more === true && (typeof after !== "string" || !after)) break;
+    }
+    if (more !== false) throw new Error(`the project's document list could not be read in full, so "${title}" may exist unseen`);
     docs.sort((a: { createdAt?: string }, b: { createdAt?: string }) => String(a.createdAt ?? "").localeCompare(String(b.createdAt ?? "")));
     if (docs[0]) this.docIds.set(title, docs[0].id);
     return docs[0] ?? null;

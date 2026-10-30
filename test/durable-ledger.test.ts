@@ -66,7 +66,7 @@ test("ledger documents round-trip, and the store reads none, a ledger, or an unr
   const f = (async (_u: any, init: any) => {
     const b = JSON.parse(init.body);
     calls.push(b);
-    if (b.query.includes("documents(")) return Response.json({ data: { project: { documents: { nodes } } } });
+    if (b.query.includes("documents(")) return Response.json({ data: { project: { documents: { nodes, pageInfo: { hasNextPage: false, endCursor: null } } } } });
     if (b.query.includes("documentCreate")) return Response.json({ data: { documentCreate: { success: true, document: { id: "led-1" } } } });
     return Response.json({ data: { documentUpdate: { success: true } } });
   }) as typeof fetch;
@@ -78,10 +78,66 @@ test("ledger documents round-trip, and the store reads none, a ledger, or an unr
   calls.length = 0;
   await new LinearStore("k", f).saveLedger("new");
   assert.deepEqual(calls.at(-1).variables, { id: "led-1", input: { content: "new" } });
-  assert.deepEqual(calls[0].variables, { p: PROJECT_ID });
+  assert.deepEqual(calls[0].variables, { p: PROJECT_ID, after: null });
   const dry = new DryRunStore(new LinearStore("k", f));
   await dry.saveLedger("x");
   assert.deepEqual(dry.log, ["would update the spend ledger document"]);
+});
+
+test("ARN-45: the store reads every document page and never treats an unread page as absent", async () => {
+  const state = ledger("2026-10", entry("2026-10-02T00:00:00Z"));
+  const hidden = { id: "led-1", title: LEDGER_TITLE, content: ledgerContent(state), createdAt: "2026-10-01T00:00:00Z" };
+  const filler = Array.from({ length: 50 }, (_, i) => ({ id: "d" + i, title: "Doc " + i, createdAt: "2026-09-01T00:00:00Z" }));
+  const store = (pages: any[]) => {
+    const calls: any[] = [];
+    const f = (async (_u: any, init: any) => {
+      const b = JSON.parse(init.body);
+      calls.push(b);
+      if (b.query.includes("documentCreate")) return Response.json({ data: { documentCreate: { success: true, document: { id: "new" } } } });
+      if (b.query.includes("documentUpdate")) return Response.json({ data: { documentUpdate: { success: true } } });
+      const p = pages[calls.filter(c => c.query.includes("documents(")).length - 1];
+      return p instanceof Response ? p : Response.json({ data: { project: { documents: p } } });
+    }) as typeof fetch;
+    return { s: new LinearStore("k", f), calls };
+  };
+  const twoPages = () => [
+    { nodes: filler, pageInfo: { hasNextPage: true, endCursor: "c1" } },
+    { nodes: [hidden], pageInfo: { hasNextPage: false, endCursor: null } },
+  ];
+  // The ledger on page 2 is found, and saving updates it instead of creating a duplicate.
+  const read = store(twoPages());
+  assert.deepEqual(await read.s.readLedger(), state);
+  assert.deepEqual(read.calls.map(c => c.variables.after), [null, "c1"]);
+  const save = store(twoPages());
+  await save.s.saveLedger("new");
+  assert.ok(!save.calls.some(c => c.query.includes("documentCreate")), "an existing page-2 ledger is never duplicated");
+  assert.deepEqual(save.calls.at(-1).variables, { id: "led-1", input: { content: "new" } });
+  // A list that can't be read in full is never "absent": the read throws (the CLI records it as unreadable and
+  // blocks paid calls) and no document is created.
+  const incomplete: any[][] = [
+    [{ nodes: filler }],
+    [{ nodes: filler, pageInfo: null }],
+    [{ nodes: filler, pageInfo: { hasNextPage: "false" } }],
+    [{ nodes: filler, pageInfo: { hasNextPage: true, endCursor: null } }],
+    [{ nodes: filler, pageInfo: { hasNextPage: true, endCursor: "c1" } }, new Response("{}", { status: 500 })],
+    [{ nodes: filler, pageInfo: { hasNextPage: true, endCursor: "c1" } }, { nodes: "x", pageInfo: { hasNextPage: false } }],
+    Array.from({ length: 10 }, (_, i) => ({ nodes: filler, pageInfo: { hasNextPage: true, endCursor: "c" + (i + 1) } })),
+  ];
+  for (const pages of incomplete) {
+    const r = store(pages);
+    await assert.rejects(r.s.readLedger());
+    const w = store(pages);
+    await assert.rejects(w.s.saveLedger("new"));
+    await assert.rejects(w.s.publishStatus("status"));
+    assert.ok(!w.calls.some(c => c.query.includes("documentCreate") || c.query.includes("documentUpdate")), "no write on an incomplete list");
+    assert.ok(w.calls.filter(c => c.query.includes("documents(")).length <= 8, "page reads are bounded");
+  }
+  // Even a match on page 1 is not used when the rest of the list is unread: an older duplicate could be unseen.
+  await assert.rejects(store([{ nodes: [hidden], pageInfo: { hasNextPage: true, endCursor: null } }]).s.readLedger());
+  // Exactly DOC_PAGES reads before giving up.
+  const capped = store(incomplete[6]!);
+  await assert.rejects(capped.s.readLedger());
+  assert.deepEqual(capped.calls.map(c => c.variables.after), [null, "c1", "c2", "c3"]);
 });
 
 test("an active run saves the trusted ledger to Linear; an untrusted one is never written", async () => {
