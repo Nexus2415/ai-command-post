@@ -147,6 +147,23 @@ test("ARN-45: the store reads every document page and never treats an unread pag
       assert.ok(![...w.calls, ...st.calls].some(c => c.query.includes("documentCreate") || c.query.includes("documentUpdate")), "no write for an id-less match");
     }
   }
+  // Duplicates are ordered by creation time: the oldest wins across pages, and a duplicate without a valid date fails
+  // closed (it would otherwise sort first) with no create or update.
+  const newer = { ...hidden, id: "led-2", content: "newer copy", createdAt: "2026-10-05T00:00:00Z" };
+  const dup = store([{ nodes: [newer], pageInfo: { hasNextPage: true, endCursor: "c1" } }, { nodes: [hidden], pageInfo: { hasNextPage: false } }]);
+  assert.deepEqual(await dup.s.readLedger(), state);
+  for (const createdAt of [undefined, null, "", "not a date", 5]) {
+    const pages = [{ nodes: [hidden], pageInfo: { hasNextPage: true, endCursor: "c1" } }, { nodes: [{ ...newer, createdAt }], pageInfo: { hasNextPage: false } }];
+    await assert.rejects(store(pages).s.readLedger(), /without valid creation dates/);
+    const w = store(pages);
+    await assert.rejects(w.s.saveLedger("new"), /without valid creation dates/);
+    const st = store(pages.map((p: any) => ({ ...p, nodes: p.nodes.map((n: any) => ({ ...n, title: STATUS_TITLE })) })));
+    await assert.rejects(st.s.publishStatus("status"), /without valid creation dates/);
+    assert.ok(![...w.calls, ...st.calls].some(c => c.query.includes("documentCreate") || c.query.includes("documentUpdate")), "no write when duplicates can't be ordered");
+  }
+  // A single match needs no ordering, and a whitespace id is no id.
+  assert.deepEqual(await store([{ nodes: [{ ...hidden, createdAt: undefined }], pageInfo: { hasNextPage: false } }]).s.readLedger(), state);
+  await assert.rejects(store([{ nodes: [{ ...hidden, id: "  " }], pageInfo: { hasNextPage: false } }]).s.readLedger(), /without an id/);
   // Exactly DOC_PAGES reads before giving up.
   const capped = store(incomplete[6]!);
   await assert.rejects(capped.s.readLedger());

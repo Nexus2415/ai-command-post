@@ -211,14 +211,18 @@ export class LinearStore implements TaskStore {
       if (!list || !Array.isArray(list.nodes)) throw new Error("Linear returned an unreadable document list");
       const matches = list.nodes.filter((n: { title?: string }) => n?.title === title);
       // A match without an id can't be updated, and must never make upsertDoc create a duplicate.
-      if (matches.some((n: { id?: unknown }) => typeof n.id !== "string" || !n.id)) throw new Error(`Linear returned "${title}" without an id`);
+      if (matches.some((n: { id?: unknown }) => typeof n.id !== "string" || !n.id.trim())) throw new Error(`Linear returned "${title}" without an id`);
       docs.push(...matches);
       more = list.pageInfo?.hasNextPage;
       after = list.pageInfo?.endCursor ?? null;
       if (more === true && (typeof after !== "string" || !after)) break;
     }
     if (more !== false) throw new Error(`the project's document list could not be read in full, so "${title}" may exist unseen`);
-    docs.sort((a: { createdAt?: string }, b: { createdAt?: string }) => String(a.createdAt ?? "").localeCompare(String(b.createdAt ?? "")));
+    // Duplicates are ordered by creation time, so each must carry a real one: a missing or invalid date would
+    // otherwise sort first and pick the wrong copy to read or update.
+    const created = (d: { createdAt?: unknown }) => (typeof d.createdAt === "string" ? Date.parse(d.createdAt) : NaN);
+    if (docs.length > 1 && docs.some((d) => !Number.isFinite(created(d)))) throw new Error(`Linear returned duplicate "${title}" documents without valid creation dates`);
+    docs.sort((a, b) => created(a) - created(b));
     if (docs[0]) this.docIds.set(title, docs[0].id);
     return docs[0] ?? null;
   }
