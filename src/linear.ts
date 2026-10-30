@@ -209,7 +209,10 @@ export class LinearStore implements TaskStore {
       );
       const list = d.project?.documents;
       if (!list || !Array.isArray(list.nodes)) throw new Error("Linear returned an unreadable document list");
-      docs.push(...list.nodes.filter((n: { title?: string }) => n?.title === title));
+      const matches = list.nodes.filter((n: { title?: string }) => n?.title === title);
+      // A match without an id can't be updated, and must never make upsertDoc create a duplicate.
+      if (matches.some((n: { id?: unknown }) => typeof n.id !== "string" || !n.id)) throw new Error(`Linear returned "${title}" without an id`);
+      docs.push(...matches);
       more = list.pageInfo?.hasNextPage;
       after = list.pageInfo?.endCursor ?? null;
       if (more === true && (typeof after !== "string" || !after)) break;

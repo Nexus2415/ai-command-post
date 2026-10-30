@@ -7,6 +7,7 @@ import { PROJECT_ID } from "../api/lib/console-state.js";
 import { Budget, LEDGER_TITLE, ledgerContent, ledgerFromContent, type LedgerState } from "../src/budget.ts";
 import { loadConfig } from "../src/config.ts";
 import { DryRunStore, LinearStore, type TaskStore } from "../src/linear.ts";
+import { STATUS_TITLE } from "../api/lib/engine-status.js";
 import { tick, type Deps } from "../src/orchestrator.ts";
 
 // HANDOFF gap 2: the spend ledger also lives in a Linear project document, merged with the Actions cache copy.
@@ -134,6 +135,18 @@ test("ARN-45: the store reads every document page and never treats an unread pag
   }
   // Even a match on page 1 is not used when the rest of the list is unread: an older duplicate could be unseen.
   await assert.rejects(store([{ nodes: [hidden], pageInfo: { hasNextPage: true, endCursor: null } }]).s.readLedger());
+  // A matching document without a usable id is malformed: no read result, and no create or update.
+  for (const id of [undefined, null, "", 7]) {
+    const bad = { ...hidden, id };
+    for (const pages of [[{ nodes: [bad], pageInfo: { hasNextPage: false } }], [{ nodes: filler, pageInfo: { hasNextPage: true, endCursor: "c1" } }, { nodes: [bad], pageInfo: { hasNextPage: false } }]]) {
+      await assert.rejects(store(pages).s.readLedger(), /without an id/);
+      const w = store(pages);
+      await assert.rejects(w.s.saveLedger("new"), /without an id/);
+      const st = store(pages.map((p: any) => ({ ...p, nodes: p.nodes.map((n: any) => n.title === LEDGER_TITLE ? { ...n, title: STATUS_TITLE } : n) })));
+      await assert.rejects(st.s.publishStatus("status"), /without an id/);
+      assert.ok(![...w.calls, ...st.calls].some(c => c.query.includes("documentCreate") || c.query.includes("documentUpdate")), "no write for an id-less match");
+    }
+  }
   // Exactly DOC_PAGES reads before giving up.
   const capped = store(incomplete[6]!);
   await assert.rejects(capped.s.readLedger());
