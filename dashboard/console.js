@@ -29,12 +29,18 @@
     if (o.engineStatus !== undefined && !(ENGINE_STATUSES.includes(o.engineStatus) && (o.engineStatus === "reported") === (o.engine != null))) return false;
     return typeof o.fetchedAt === "string" && !Number.isNaN(Date.parse(o.fetchedAt));
   }
+  // Each comment must carry what the server contract promises: an id (lifecycle evidence binds by it), a body,
+  // and a real time. A comment missing any of these is not shown as if it were verified.
+  function isComment(c) {
+    return !!c && typeof c === "object" && !Array.isArray(c) && typeof c.id === "string" && c.id !== "" &&
+      typeof c.body === "string" && typeof c.createdAt === "string" && !Number.isNaN(Date.parse(c.createdAt));
+  }
   // A thread reply must prove what the panel shows: the requested issue, a comment list, and whether older
   // comments were left out. Anything less is an incomplete read, never "No comments yet".
   function isThread(t, id) {
     if (!t || typeof t !== "object" || Array.isArray(t)) return false;
     if (!t.issue || typeof t.issue !== "object" || Array.isArray(t.issue) || t.issue.id !== id) return false;
-    if (!Array.isArray(t.comments) || !t.comments.every(c => c && typeof c === "object" && !Array.isArray(c))) return false;
+    if (!Array.isArray(t.comments) || !t.comments.every(isComment)) return false;
     if (typeof t.hasPreviousPage !== "boolean") return false;
     if (t.lifecycle != null && (typeof t.lifecycle !== "object" || Array.isArray(t.lifecycle))) return false;
     return typeof t.fetchedAt === "string" && !Number.isNaN(Date.parse(t.fetchedAt));

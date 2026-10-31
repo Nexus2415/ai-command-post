@@ -184,7 +184,7 @@ test("hostile comments, titles and URLs render as inert text; only http(s) links
   const xss = '<img src=x onerror="alert(1)">';
   for (const [url, expect] of [["javascript:alert(1)", null], ["data:text/html,hi", null], ["https://linear.app/x/ARN-9", "https://linear.app/x/ARN-9"]] as const) {
     const t = setup((_p, init) => JSON.parse(init.body).action === "thread"
-      ? ok({ issue: { id: "ARN-9", title: xss, url, description: xss }, comments: [{ author: xss, body: xss, createdAt: "x" }], hasPreviousPage: false, fetchedAt: "2026-10-01T00:00:00Z" })
+      ? ok({ issue: { id: "ARN-9", title: xss, url, description: xss }, comments: [{ id: "c1", author: xss, body: xss, createdAt: "2026-10-01T00:00:00Z" }], hasPreviousPage: false, fetchedAt: "2026-10-01T00:00:00Z" })
       : ok({ ...overviewJson, issues: [{ id: "ARN-9", lane: "active", title: xss }] }));
     await flush();
     t.$("cList").all().find((e: any) => e.className === "linkbtn")!.click(); await flush();
@@ -214,7 +214,13 @@ test("a malformed 200 thread reply is shown as incomplete, never as a thread wit
   for (const bad of [{}, [], "thread", { issue: { id: "ARN-9", title: "t" }, comments: [] }, { ...good, comments: "bad" },
     { ...good, comments: [null] }, { ...good, issue: null }, { ...good, issue: { id: "ARN-10", title: "other" } }, noCompleteness,
     { ...good, hasPreviousPage: "false" }, { ...good, hasPreviousPage: 0 }, noTime, { ...good, fetchedAt: "not a date" },
-    { ...good, lifecycle: "completed" }]) {
+    { ...good, lifecycle: "completed" },
+    // Every comment object must carry a non-empty string id, a string body and a parseable string createdAt.
+    { ...good, comments: [{}] }, { ...good, comments: [{ ...good.comments[0], id: undefined }] }, { ...good, comments: [{ ...good.comments[0], id: "" }] },
+    { ...good, comments: [{ ...good.comments[0], id: 7 }] }, { ...good, comments: [{ ...good.comments[0], body: undefined }] },
+    { ...good, comments: [{ ...good.comments[0], body: 5 }] }, { ...good, comments: [{ ...good.comments[0], createdAt: undefined }] },
+    { ...good, comments: [{ ...good.comments[0], createdAt: "not a date" }] }, { ...good, comments: [{ ...good.comments[0], createdAt: 1700000000000 }] },
+    { ...good, comments: [good.comments[0], { ...good.comments[0], id: "c2", body: null }] }]) {
     const t = await open(bad);
     const text = t.$("cDetailBody").textContent;
     assert.match(text, /The thread reply was incomplete, so it wasn't shown/, JSON.stringify(bad));
