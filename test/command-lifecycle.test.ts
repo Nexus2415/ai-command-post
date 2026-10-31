@@ -58,6 +58,21 @@ test("completed needs both a terminal state and a recorded result", () => {
     c("b", `${RESULT_MARKER} (Gemini, blocked)\n\ny`, "2026-10-09T11:00:00Z")]).stage, "unknown");
 });
 
+test("a done and a blocked result stamped at the same instant are a contradiction, whatever their ids or input order", () => {
+  const done = { name: "Done", type: "completed" };
+  const summary = (id: string, t: string) => c(id, `${RECONCILED_MARKER}\n\nok`, t);
+  const blocked = (id: string, t: string) => c(id, `${RESULT_MARKER} (Gemini, blocked)\n\nno key`, t);
+  for (const [d, b] of [[summary("a", "2026-10-09T10:00:00Z"), blocked("b", "2026-10-09T10:00:00Z")],
+    [summary("b", "2026-10-09T10:00:00Z"), blocked("a", "2026-10-09T10:00:00Z")],
+    [summary("a", "2026-10-09T10:00:00Z"), blocked("b", "2026-10-09T12:00:00+02:00")],
+    [c("a", `${RESULT_MARKER} (Gemini, done)\n\nx`, "2026-10-09T10:00:00Z"), blocked("b", "2026-10-09T10:00:00.000Z")]]) {
+    assert.equal(life(cmd(done), [d, b]).stage, "unknown");
+    assert.equal(life(cmd(done), [b, d]).stage, "unknown");
+  }
+  // Strictly earlier blocked, then done: completed.
+  assert.equal(life(cmd(done), [blocked("b", "2026-10-09T09:59:59Z"), summary("a", "2026-10-09T10:00:00Z")]).stage, "completed");
+});
+
 test("blocked shows the recorded reason; canceled is never done; contradictions are unknown", () => {
   const b = life(cmd(backlog), [c("r", `${RESULT_MARKER} (Gemini, blocked)\n\nGemini has no API key configured`)]);
   assert.equal(b.stage, "blocked");
@@ -142,6 +157,7 @@ test("thread endpoint refuses comments without an id, text or real time, so a ba
   // Valid times: a done summary followed by a later blocked result is unknown; alone it is completed.
   assert.equal((await run([summary("2026-10-09T10:00:00Z"), blocked])).body.lifecycle.stage, "unknown");
   assert.equal((await run([summary("2026-10-09T12:00:00Z"), blocked])).body.lifecycle.stage, "completed");
+  assert.equal((await run([summary("2026-10-09T11:00:00Z"), blocked])).body.lifecycle.stage, "unknown");
 });
 
 test("thread endpoint passes pagination through: a 51st child page makes a Done command unknown", async () => {
