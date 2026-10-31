@@ -111,6 +111,29 @@ test("provider HTTP errors become ProviderError", async () => {
   await assert.rejects(() => c.chat([{ role: "user", content: "q" }], { maxOutputTokens: 10 }), ProviderError);
 });
 
+test("ARN-45: getLabels refuses a label list it can't read in full; only an explicit empty list means no labels", async () => {
+  const read = (data: unknown) => new LinearStore("k", (async () => new Response(JSON.stringify({ data }), { status: 200 })) as unknown as typeof fetch).getLabels("i1");
+  const done = { hasNextPage: false };
+  assert.deepEqual(await read({ issue: { labels: { nodes: [], pageInfo: done } } }), []);
+  assert.deepEqual(await read({ issue: { labels: { nodes: [{ name: "executor:manual" }], pageInfo: done } } }), ["executor:manual"]);
+  const bad: [string, unknown][] = [
+    ["no issue", {}],
+    ["null issue", { issue: null }],
+    ["no labels", { issue: {} }],
+    ["null labels", { issue: { labels: null } }],
+    ["no nodes", { issue: { labels: { pageInfo: done } } }],
+    ["null nodes", { issue: { labels: { nodes: null, pageInfo: done } } }],
+    ["object nodes", { issue: { labels: { nodes: {}, pageInfo: done } } }],
+    ["no pageInfo", { issue: { labels: { nodes: [] } } }],
+    ["string hasNextPage", { issue: { labels: { nodes: [], pageInfo: { hasNextPage: "false" } } } }],
+    ["more labels than one page", { issue: { labels: { nodes: [{ name: "a" }], pageInfo: { hasNextPage: true } } } }],
+    ["a null label", { issue: { labels: { nodes: [null], pageInfo: done } } }],
+    ["a label without a name", { issue: { labels: { nodes: [{}], pageInfo: done } } }],
+    ["a non-string name", { issue: { labels: { nodes: [{ name: 7 }], pageInfo: done } } }],
+  ];
+  for (const [name, data] of bad) await assert.rejects(read(data), /refusing to guess its executor/, name);
+});
+
 test("LinearStore.getComments pages through every comment", async () => {
   const pages = [
     { nodes: [{ body: "late", createdAt: "2026-10-08T10:00:02Z" }], pageInfo: { hasNextPage: true, endCursor: "c1" } },
@@ -126,4 +149,53 @@ test("LinearStore.getComments pages through every comment", async () => {
   const all = await new LinearStore("k", f).getComments("i1");
   assert.deepEqual(all.map((c) => c.body), ["late", "early"]);
   assert.deepEqual(afters, [null, "c1"]);
+});
+
+test("ARN-45: getComments refuses a comment list it can't read in full", async () => {
+  // An earlier foreign claim sits on page 2; page 1's page signal is missing or malformed.
+  const later = { body: "acp claim later", createdAt: "2026-10-08T10:00:02Z" };
+  const run = async (pages: unknown[]) => {
+    let n = 0;
+    const f = (async () => new Response(JSON.stringify({ data: { issue: { comments: pages[n++] } } }), { status: 200 })) as unknown as typeof fetch;
+    return { result: new LinearStore("k", f).getComments("i1"), reads: () => n };
+  };
+  const bad: [string, unknown[]][] = [
+    ["no pageInfo", [{ nodes: [later] }]],
+    ["null pageInfo", [{ nodes: [later], pageInfo: null }]],
+    ["missing hasNextPage", [{ nodes: [later], pageInfo: { endCursor: "c1" } }]],
+    ["string hasNextPage", [{ nodes: [later], pageInfo: { hasNextPage: "false", endCursor: null } }]],
+    ["null hasNextPage", [{ nodes: [later], pageInfo: { hasNextPage: null } }]],
+    ["no nodes", [{ pageInfo: { hasNextPage: false } }]],
+    ["no comments", [undefined]],
+    ["more without a cursor", [{ nodes: [later], pageInfo: { hasNextPage: true, endCursor: null } }]],
+    ["more with an empty cursor", [{ nodes: [later], pageInfo: { hasNextPage: true, endCursor: "" } }]],
+    ["a cursor that doesn't advance", [
+      { nodes: [later], pageInfo: { hasNextPage: true, endCursor: "c1" } },
+      { nodes: [], pageInfo: { hasNextPage: true, endCursor: "c1" } },
+    ]],
+    ...([
+      ["a missing body", { createdAt: "2026-10-08T10:00:00Z" }],
+      ["a null body", { body: null, createdAt: "2026-10-08T10:00:00Z" }],
+      ["a non-string body", { body: 7, createdAt: "2026-10-08T10:00:00Z" }],
+      ["a missing timestamp", { body: "ACP executor: manual" }],
+      ["a null timestamp", { body: "ACP executor: manual", createdAt: null }],
+      ["an unparseable timestamp", { body: "ACP executor: manual", createdAt: "not a date" }],
+      ["a null comment", null],
+    ] as [string, unknown][]).flatMap(([what, node]): [string, unknown[]][] => [
+      [`${what} on page 1`, [{ nodes: [later, node], pageInfo: { hasNextPage: false, endCursor: null } }]],
+      [`${what} on a later page`, [
+        { nodes: [later], pageInfo: { hasNextPage: true, endCursor: "c1" } },
+        { nodes: [node], pageInfo: { hasNextPage: false, endCursor: null } },
+      ]],
+    ]),
+    ["a malformed later page", [
+      { nodes: [later], pageInfo: { hasNextPage: true, endCursor: "c1" } },
+      { nodes: [{ body: "earlier foreign claim", createdAt: "2026-10-08T10:00:00Z" }] },
+    ]],
+  ];
+  for (const [name, pages] of bad) {
+    const r = await run(pages);
+    await assert.rejects(r.result, /refusing to guess the earliest claim/, name);
+    assert.ok(r.reads() <= pages.length, `${name}: no reads past the bad page`);
+  }
 });

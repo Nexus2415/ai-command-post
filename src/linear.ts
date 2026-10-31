@@ -124,8 +124,18 @@ export class LinearStore implements TaskStore {
   }
 
   async getLabels(issueId: string) {
-    const d = await this.gql(`query($id:String!){ issue(id:$id){ labels { nodes { name } } } }`, { id: issueId });
-    return (d.issue.labels?.nodes ?? []).map((l: any) => l.name as string);
+    const d = await this.gql(
+      `query($id:String!){ issue(id:$id){ labels(first:250) { nodes { name } pageInfo { hasNextPage } } } }`,
+      { id: issueId },
+    );
+    // Executor labels (executor:manual, executor:eve) are claims. Only an explicit, complete label list proves there
+    // are none: a missing issue or label list, non-array nodes, an unreadable name, or a list with more pages throws
+    // instead of reading as "no labels", which would turn a foreign claim into a free task.
+    const l = d?.issue?.labels;
+    if (!Array.isArray(l?.nodes) || l.pageInfo?.hasNextPage !== false || !l.nodes.every((n: any) => typeof n?.name === "string")) {
+      throw new Error(`issue ${issueId} returned an unreadable label list; refusing to guess its executor`);
+    }
+    return l.nodes.map((n: { name: string }) => n.name);
   }
 
   async getComments(issueId: string) {
@@ -137,10 +147,25 @@ export class LinearStore implements TaskStore {
         `query($id:String!,$after:String){ issue(id:$id){ comments(first:100, after:$after){ nodes { body createdAt } pageInfo { hasNextPage endCursor } } } }`,
         { id: issueId, after },
       );
-      const c = d.issue.comments;
+      const c = d.issue?.comments;
+      // Only an explicit hasNextPage === false ends the list; a missing or malformed page signal is not "complete",
+      // since an earlier claim could sit on a page that was never read.
+      if (!Array.isArray(c?.nodes) || typeof c.pageInfo?.hasNextPage !== "boolean") {
+        throw new Error(`issue ${issueId} returned an unreadable comment page; refusing to guess the earliest claim`);
+      }
+      // A comment without a readable body or timestamp could hide a claim or reorder who claimed first.
+      for (const n of c.nodes) {
+        if (typeof n?.body !== "string" || typeof n.createdAt !== "string" || Number.isNaN(Date.parse(n.createdAt))) {
+          throw new Error(`issue ${issueId} returned an unreadable comment; refusing to guess the earliest claim`);
+        }
+      }
       out.push(...c.nodes);
-      if (!c.pageInfo?.hasNextPage) return out;
-      after = c.pageInfo.endCursor;
+      if (!c.pageInfo.hasNextPage) return out;
+      const next = c.pageInfo.endCursor;
+      if (typeof next !== "string" || !next || next === after) {
+        throw new Error(`issue ${issueId} returned no usable cursor for its next comment page; refusing to guess the earliest claim`);
+      }
+      after = next;
     }
     throw new Error(`issue ${issueId} has more comments than ACP will page through; refusing to guess the earliest claim`);
   }
