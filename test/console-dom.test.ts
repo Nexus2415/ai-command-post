@@ -253,7 +253,7 @@ test("closing a thread returns focus to the control that opened it, even after m
   for (const nested of [false, true]) {
     const t = setup((_p, init) => {
       const b = JSON.parse(init.body);
-      if (b.action === "thread") return ok({ issue: { id: b.identifier, title: "T" + b.identifier }, comments: [],
+      if (b.action === "thread") return ok({ issue: { id: b.identifier, title: "T" + b.identifier }, comments: [], hasPreviousPage: false, fetchedAt: "2026-10-01T00:00:00Z",
         lifecycle: b.identifier === "ARN-1" ? { stage: "claimed", label: "Claimed", detail: "", evidence: [{ kind: "issue", issue: "ARN-2" }] } : null });
       return ok({ ...overviewJson, issues: [{ id: "ARN-1", lane: "active", title: "parent" }], lanes: { active: ["ARN-1"] } });
     });
@@ -275,7 +275,7 @@ test("closing a thread returns focus to the control that opened it, even after m
 test("closing a thread after its opener was redrawn away focuses the task list, even while Refresh is disabled", async () => {
   const t = setup((_p, init) => {
     const b = JSON.parse(init.body);
-    if (b.action === "thread") return ok({ issue: { id: b.identifier, title: "T" }, comments: [] });
+    if (b.action === "thread") return ok({ issue: { id: b.identifier, title: "T" }, comments: [], hasPreviousPage: false, fetchedAt: "2026-10-01T00:00:00Z" });
     return ok({ ...overviewJson, issues: [{ id: "ARN-1", lane: "active", title: "parent" }], lanes: { active: ["ARN-1"] } });
   });
   await flush();
