@@ -121,15 +121,33 @@ export class LinearStore implements TaskStore {
 
   async listOpenAndRecent(teamKey: string): Promise<Issue[]> {
     const since = new Date(Date.now() - 14 * 864e5).toISOString();
-    const d = await this.gql(
-      `query($key:String!,$since:DateTimeOrDuration!){
-        issues(first:250, orderBy:updatedAt, filter:{ team:{ key:{ eq:$key } }, or:[
-          { state:{ type:{ in:["triage","backlog","unstarted","started"] } } },
-          { completedAt:{ gte:$since } },
-          { canceledAt:{ gte:$since } } ] }){ nodes { ${ISSUE_FIELDS} } } }`,
-      { key: teamKey, since },
-    );
-    return d.issues.nodes.map(toIssue);
+    // Page through the whole queue: a task past the first page is still open work, and a command's sub-tasks must
+    // all be visible before it can be completed. Only an explicit hasNextPage === false ends the list; anything less
+    // throws, so the engine never acts on a queue it only partly read.
+    const out: Issue[] = [];
+    let after: string | null = null;
+    for (let page = 0; page < 8; page++) {
+      const d: any = await this.gql(
+        `query($key:String!,$since:DateTimeOrDuration!,$after:String){
+          issues(first:250, after:$after, orderBy:updatedAt, filter:{ team:{ key:{ eq:$key } }, or:[
+            { state:{ type:{ in:["triage","backlog","unstarted","started"] } } },
+            { completedAt:{ gte:$since } },
+            { canceledAt:{ gte:$since } } ] }){ nodes { ${ISSUE_FIELDS} } pageInfo { hasNextPage endCursor } } }`,
+        { key: teamKey, since, after },
+      );
+      const c = d?.issues;
+      if (!Array.isArray(c?.nodes) || typeof c.pageInfo?.hasNextPage !== "boolean" || !c.nodes.every((n: any) => n && typeof n === "object")) {
+        throw new Error(`team ${teamKey} returned an unreadable issue page; refusing to act on a partial queue`);
+      }
+      out.push(...c.nodes.map(toIssue));
+      if (!c.pageInfo.hasNextPage) return out;
+      const next = c.pageInfo.endCursor;
+      if (typeof next !== "string" || !next || next === after) {
+        throw new Error(`team ${teamKey} returned no usable cursor for its next issue page; refusing to act on a partial queue`);
+      }
+      after = next;
+    }
+    throw new Error(`team ${teamKey} has more open and recent issues than ACP will page through; refusing to act on a partial queue`);
   }
 
   async getLabels(issueId: string) {

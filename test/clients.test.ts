@@ -36,6 +36,7 @@ test("LinearStore maps GraphQL issue nodes", async () => {
                 children: { nodes: [{ id: "u2" }], pageInfo: { hasNextPage: false } },
               },
             ],
+            pageInfo: { hasNextPage: false, endCursor: null },
           },
         },
       },
@@ -55,7 +56,7 @@ test("LinearStore maps GraphQL issue nodes", async () => {
 test("ARN-45: a sub-task list without proof of completeness is flagged, never read as complete", async () => {
   const read = async (children: unknown) => {
     const node = { id: "u1", identifier: "ARN-20", title: "t", url: "u", createdAt: "2026-10-07T00:00:00Z", state: { type: "started", name: "In Progress" }, labels: { nodes: [] }, children };
-    const [i] = await new LinearStore("k", fakeFetch({ data: { issues: { nodes: [node] } } })).listOpenAndRecent("ARN");
+    const [i] = await new LinearStore("k", fakeFetch({ data: { issues: { nodes: [node], pageInfo: { hasNextPage: false, endCursor: null } } } })).listOpenAndRecent("ARN");
     return i!;
   };
   const done = { hasNextPage: false };
@@ -78,6 +79,45 @@ test("ARN-45: a sub-task list without proof of completeness is flagged, never re
     ["a null child", { nodes: [null], pageInfo: done }],
   ] as [string, unknown][]) {
     assert.equal((await read(children)).childrenIncomplete, true, name);
+  }
+});
+
+test("ARN-45: listOpenAndRecent pages through the whole queue and refuses a partial one", async () => {
+  const issue = (id: string) => ({ id, identifier: id, title: "t", url: "u", createdAt: "2026-10-07T00:00:00Z", state: { type: "unstarted", name: "Todo" }, labels: { nodes: [] }, children: { nodes: [], pageInfo: { hasNextPage: false } } });
+  const run = (pages: unknown[]) => {
+    const afters: unknown[] = [];
+    const f = (async (_u: string, init: { body: string }) => {
+      afters.push(JSON.parse(init.body).variables.after);
+      return new Response(JSON.stringify({ data: { issues: pages[afters.length - 1] } }), { status: 200 });
+    }) as unknown as typeof fetch;
+    return { result: new LinearStore("k", f).listOpenAndRecent("ARN"), afters };
+  };
+  // Issue 251 sits on page 2 and is still read.
+  const page1 = { nodes: Array.from({ length: 250 }, (_, n) => issue(`i${n + 1}`)), pageInfo: { hasNextPage: true, endCursor: "c250" } };
+  const ok = run([page1, { nodes: [issue("i251")], pageInfo: { hasNextPage: false, endCursor: null } }]);
+  const all = await ok.result;
+  assert.equal(all.length, 251);
+  assert.equal(all[250]!.id, "i251");
+  assert.deepEqual(ok.afters, [null, "c250"]);
+  const one = [issue("a")];
+  const bad: [string, unknown[]][] = [
+    ["no pageInfo", [{ nodes: one }]],
+    ["null pageInfo", [{ nodes: one, pageInfo: null }]],
+    ["string hasNextPage", [{ nodes: one, pageInfo: { hasNextPage: "false" } }]],
+    ["no nodes", [{ pageInfo: { hasNextPage: false } }]],
+    ["null nodes", [{ nodes: null, pageInfo: { hasNextPage: false } }]],
+    ["a null issue", [{ nodes: [null], pageInfo: { hasNextPage: false } }]],
+    ["no issues connection", [undefined]],
+    ["more without a cursor", [{ nodes: one, pageInfo: { hasNextPage: true, endCursor: null } }]],
+    ["more with an empty cursor", [{ nodes: one, pageInfo: { hasNextPage: true, endCursor: "" } }]],
+    ["a cursor that doesn't advance", [{ nodes: one, pageInfo: { hasNextPage: true, endCursor: "c1" } }, { nodes: one, pageInfo: { hasNextPage: true, endCursor: "c1" } }]],
+    ["a malformed later page", [page1, { nodes: [issue("i251")] }]],
+    ["more pages than ACP reads", Array.from({ length: 9 }, (_, n) => ({ nodes: one, pageInfo: { hasNextPage: true, endCursor: `c${n + 1}` } }))],
+  ];
+  for (const [name, pages] of bad) {
+    const r = run(pages);
+    await assert.rejects(r.result, /refusing to act on a partial queue/, name);
+    assert.ok(r.afters.length <= pages.length, `${name}: no reads past the bad page`);
   }
 });
 
