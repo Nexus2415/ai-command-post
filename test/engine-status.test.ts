@@ -199,6 +199,19 @@ test("dashboard engine rows: missing, stale, blocked and failing states are flag
   assert.match(fresh[0].value, /30 min ago/);
   assert.match(fresh.find((r: any) => r.label === "Paid AI calls").value, /cap is zero/);
   assert.equal(rows(parseStatus(statusContent(snap())), Date.parse("2026-10-21T06:00:00Z"))[0].tone, "warn", "no run for 8 hours");
+  // A report time ahead of the device clock is flagged, never "0 min ago"; a few minutes of skew is tolerated.
+  const reportAt = Date.parse(parseStatus(statusContent(snap()))!.at);
+  for (const aheadMs of [6 * 60e3, 3600e3, 24 * 3600e3]) {
+    const r = rows(parseStatus(statusContent(snap())), reportAt - aheadMs)[0];
+    assert.equal(r.tone, "warn", String(aheadMs));
+    assert.match(r.value, /ahead of this device's clock, so freshness is unverified/);
+    assert.doesNotMatch(r.value, /min ago|h ago/);
+  }
+  for (const skewMs of [0, 2 * 60e3, 5 * 60e3]) {
+    const r = rows(parseStatus(statusContent(snap())), reportAt - skewMs)[0];
+    assert.equal(r.tone, null, String(skewMs));
+    assert.match(r.value, /\(0 min ago\)/);
+  }
   const blocked = rows(parseStatus(statusContent(snap({ budget: { month: "2026-10", spentUsd: 0, capUsd: 5, calls: 0, ledgerProblem: "the spend ledger is missing" } }))));
   assert.equal(blocked.find((r: any) => r.label === "Paid AI calls").tone, "warn");
   const failing = rows(parseStatus(statusContent(snap({ counts: { planned: 0, worked: 0, reconciled: 0, waiting: 0, errors: 2 } }))));

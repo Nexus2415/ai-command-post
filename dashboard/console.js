@@ -84,9 +84,12 @@
   const usd = (n, dp) => "$" + Number(n).toFixed(dp);
   function engineRows(engine, nowMs) {
     if (!engine) return [{ label: "Engine status", value: "Not reported yet. It appears after the engine's next run.", tone: "warn" }];
-    const age = nowMs - Date.parse(engine.at);
+    // The report is an editable document: a time ahead of this device's clock (past 5 minutes of skew) proves nothing
+    // about freshness, so it is flagged instead of shown as "0 min ago".
+    const ahead = Date.parse(engine.at) - nowMs > 5 * 60e3;
+    const age = ahead ? Infinity : nowMs - Date.parse(engine.at);
     const b = engine.budget, c = engine.counts;
-    const ago = age < 3600e3 ? Math.max(0, Math.round(age / 60e3)) + " min ago" : Math.round(age / 3600e3) + " h ago";
+    const ago = ahead ? "ahead of this device's clock, so freshness is unverified" : age < 3600e3 ? Math.max(0, Math.round(age / 60e3)) + " min ago" : Math.round(age / 3600e3) + " h ago";
     return [
       { label: "Last engine run", value: fmtTime(engine.at) + " (" + ago + ")", tone: age > STALE_MS ? "warn" : null },
       { label: "Mode", value: engine.dryRun ? "Dry run, no writes" : "Live writes", tone: null },
