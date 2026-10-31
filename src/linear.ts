@@ -20,6 +20,11 @@ export interface Issue {
   assignee: string | null;
   parentId: string | null;
   childIds: string[];
+  /**
+   * Set when Linear's sub-task list for this issue wasn't provably complete (no page signal, more pages, or an
+   * unreadable child). The engine then neither plans the command again nor marks it completed from the children it saw.
+   */
+  childrenIncomplete?: true;
   createdAt: string;
 }
 
@@ -52,10 +57,13 @@ const ISSUE_FIELDS = `
   labels { nodes { name } }
   assignee { name }
   parent { id }
-  children { nodes { id } }
+  children(first:250) { nodes { id } pageInfo { hasNextPage } }
 `;
 
 function toIssue(n: any): Issue {
+  const kids = n.children;
+  const readable = Array.isArray(kids?.nodes) ? kids.nodes.filter((c: any) => typeof c?.id === "string" && c.id !== "") : [];
+  const complete = Array.isArray(kids?.nodes) && readable.length === kids.nodes.length && kids.pageInfo?.hasNextPage === false;
   return {
     id: n.id,
     identifier: n.identifier,
@@ -68,7 +76,8 @@ function toIssue(n: any): Issue {
     labels: (n.labels?.nodes ?? []).map((l: any) => l.name),
     assignee: n.assignee?.name ?? null,
     parentId: n.parent?.id ?? null,
-    childIds: (n.children?.nodes ?? []).map((c: any) => c.id),
+    childIds: readable.map((c: any) => c.id),
+    ...(complete ? {} : { childrenIncomplete: true as const }),
     createdAt: n.createdAt,
   };
 }

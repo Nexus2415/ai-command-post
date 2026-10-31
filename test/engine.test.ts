@@ -289,6 +289,27 @@ test("a command reconciles when its sub-tasks are completed, canceled or marked 
   assert.deepEqual(r.reconciled, ["T-1"]);
 });
 
+test("ARN-45: a command whose sub-task list wasn't read in full is neither completed nor planned again", async () => {
+  const store = new MemoryStore();
+  // Visible: one completed sub-task. Not visible: a started sub-task on a page that was never read.
+  const cmd = store.add({ title: "[Claude] Tidy backlog", description: `**${COMMAND_MARKER}**`, stateType: "started", childrenIncomplete: true });
+  store.add({ title: "[ChatGPT] A", parentId: cmd.id, stateType: "completed" });
+  // A new command whose sub-task list came back unreadable may already have sub-tasks: it must not be planned.
+  const fresh = store.add({ title: "[Claude] New work", description: `**${COMMAND_MARKER}**`, childrenIncomplete: true });
+  const seen: ChatMessage[][] = [];
+  const d = deps(store, { claude: scripted(["## Final\nDone.", JSON.stringify({ summary: "Plan.", tasks: [] })], seen) });
+  d.budget.rates.claude = freeRates.claude;
+  const r = await tick(d);
+  assert.deepEqual(r.reconciled, []);
+  assert.deepEqual(r.planned, []);
+  assert.equal(store.issues.find((i) => i.id === cmd.id)!.stateType, "started", "not marked completed");
+  assert.equal(store.issues.filter((i) => i.parentId === fresh.id).length, 0, "no new sub-tasks");
+  assert.deepEqual(store.comments.get(cmd.id) ?? [], [], "no summary written");
+  assert.equal(seen.length, 0, "no model call");
+  assert.ok(r.errors.some((e) => e.startsWith("T-1:") && e.includes("couldn't be read in full")));
+  assert.ok(r.errors.some((e) => e.startsWith(`${fresh.identifier}:`) && e.includes("couldn't be read in full")));
+});
+
 test("an offline lead falls back to the default lead, and its tasks go to agents that are online", async () => {
   const store = new MemoryStore();
   const cmd = store.add({ title: "[Claude] Research tools", description: `**${COMMAND_MARKER}**` });

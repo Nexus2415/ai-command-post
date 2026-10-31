@@ -33,7 +33,7 @@ test("LinearStore maps GraphQL issue nodes", async () => {
                 labels: { nodes: [{ name: "Feature" }] },
                 assignee: null,
                 parent: null,
-                children: { nodes: [{ id: "u2" }] },
+                children: { nodes: [{ id: "u2" }], pageInfo: { hasNextPage: false } },
               },
             ],
           },
@@ -48,7 +48,37 @@ test("LinearStore maps GraphQL issue nodes", async () => {
   assert.equal(i!.description, "");
   assert.deepEqual(i!.labels, ["Feature"]);
   assert.deepEqual(i!.childIds, ["u2"]);
+  assert.equal(i!.childrenIncomplete, undefined, "an explicit last page proves the sub-task list complete");
   assert.equal((seen[0]!.init.headers as Record<string, string>)["authorization"], "lin_key");
+});
+
+test("ARN-45: a sub-task list without proof of completeness is flagged, never read as complete", async () => {
+  const read = async (children: unknown) => {
+    const node = { id: "u1", identifier: "ARN-20", title: "t", url: "u", createdAt: "2026-10-07T00:00:00Z", state: { type: "started", name: "In Progress" }, labels: { nodes: [] }, children };
+    const [i] = await new LinearStore("k", fakeFetch({ data: { issues: { nodes: [node] } } })).listOpenAndRecent("ARN");
+    return i!;
+  };
+  const done = { hasNextPage: false };
+  for (const [name, children, ids] of [
+    ["empty, complete", { nodes: [], pageInfo: done }, []],
+    ["two children, complete", { nodes: [{ id: "c1" }, { id: "c2" }], pageInfo: done }, ["c1", "c2"]],
+  ] as [string, unknown, string[]][]) {
+    const i = await read(children);
+    assert.deepEqual(i.childIds, ids, name);
+    assert.equal(i.childrenIncomplete, undefined, name);
+  }
+  for (const [name, children] of [
+    ["no children", undefined],
+    ["null children", null],
+    ["no nodes", { pageInfo: done }],
+    ["no pageInfo", { nodes: [{ id: "c1" }] }],
+    ["string hasNextPage", { nodes: [{ id: "c1" }], pageInfo: { hasNextPage: "false" } }],
+    ["more children on another page", { nodes: [{ id: "c1" }], pageInfo: { hasNextPage: true } }],
+    ["a child without an id", { nodes: [{ id: "c1" }, {}], pageInfo: done }],
+    ["a null child", { nodes: [null], pageInfo: done }],
+  ] as [string, unknown][]) {
+    assert.equal((await read(children)).childrenIncomplete, true, name);
+  }
 });
 
 test("LinearStore surfaces GraphQL errors", async () => {

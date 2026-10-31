@@ -379,15 +379,22 @@ export async function tick(deps: Deps): Promise<TickReport> {
   const issues = await d.store.listOpenAndRecent(d.cfg.linearTeamKey);
   const byId = new Map(issues.map((i) => [i.id, i]));
 
-  const newCommands = issues.filter((i) => !isQuestion(i) && isCommand(i) && OPEN.includes(i.stateType) && i.childIds.length === 0);
+  // A command whose sub-task list wasn't read in full is neither planned again (it may already have sub-tasks)
+  // nor completed from the sub-tasks that happened to be visible.
+  const unreadCommands = issues.filter((i) => !isQuestion(i) && isCommand(i) && i.childrenIncomplete && (OPEN.includes(i.stateType) || i.stateType === "started"));
+  const newCommands = issues.filter((i) => !isQuestion(i) && isCommand(i) && OPEN.includes(i.stateType) && i.childIds.length === 0 && !i.childrenIncomplete);
   const tasks = issues.filter((i) => !isQuestion(i) && !isCommand(i) && OPEN.includes(i.stateType));
-  const runningCommands = issues.filter((i) => !isQuestion(i) && isCommand(i) && i.stateType === "started" && i.childIds.length > 0);
+  const runningCommands = issues.filter((i) => !isQuestion(i) && isCommand(i) && i.stateType === "started" && i.childIds.length > 0 && !i.childrenIncomplete);
 
   if (!d.cfg.active) {
     report.waiting.push(`Engine is off (ACP_ACTIVE=false). ${newCommands.length} command(s) and ${tasks.length} task(s) waiting.`);
     // Non-mutating stopped-state record: the run halted before any step, and says so in the run log.
     d.log?.(JSON.stringify({ at: new Date().toISOString(), ...report, budget: d.budget.summary() }));
     return report;
+  }
+
+  for (const cmd of unreadCommands) {
+    report.errors.push(`${cmd.identifier}: its sub-task list couldn't be read in full, so it was neither planned nor completed`);
   }
 
   for (const cmd of newCommands) {
