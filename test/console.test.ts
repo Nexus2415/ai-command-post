@@ -65,6 +65,22 @@ test("overview fixes scope, filters upstream leakage, labels workload honestly a
   assert.equal(JSON.stringify(body).includes("lin\""), false);
 });
 
+test("overview completeness must be a stated boolean: anything else is a failed read, never a complete board", async () => {
+  for (const pageInfo of [{}, { hasNextPage: null }, { hasNextPage: 0 }, { hasNextPage: "" }, { hasNextPage: "false" },
+    { hasNextPage: "true" }, { hasNextPage: [] }, null, undefined]) {
+    const { f } = mock({ data: { issues: { nodes: [item()], pageInfo } } });
+    const out: any = await handle(req(), env, f);
+    assert.equal(out.status, 502, JSON.stringify(pageInfo));
+    assert.equal(out.body.issues, undefined);
+  }
+  for (const hasNextPage of [true, false]) {
+    const { f } = mock({ data: { issues: { nodes: [item()], pageInfo: { hasNextPage } } } });
+    const out: any = await handle(req(), env, f);
+    assert.equal(out.status, 200);
+    assert.equal(out.body.hasNextPage, hasNextPage);
+  }
+});
+
 test("terminal canceled and duplicate work never enters the completed lane", () => {
   assert.equal(laneOf(item("ARN-1", "completed")), "done");
   assert.equal(laneOf(item("ARN-1", "canceled")), "canceled");

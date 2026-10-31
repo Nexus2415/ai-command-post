@@ -21,6 +21,8 @@
   function isOverview(o) {
     if (!o || typeof o !== "object" || Array.isArray(o)) return false;
     if (!Array.isArray(o.issues) || !Array.isArray(o.agents)) return false;
+    // Whether older issues were left out must be stated, or the counts could pass for complete.
+    if (typeof o.hasNextPage !== "boolean") return false;
     if (!o.lanes || typeof o.lanes !== "object" || Array.isArray(o.lanes) || !Object.values(o.lanes).every(Array.isArray)) return false;
     if (o.engine != null && !isEngineReport(o.engine)) return false;
     // engineStatus (when sent) must agree with engine: only "reported" carries a report.

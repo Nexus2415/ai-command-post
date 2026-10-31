@@ -21,7 +21,7 @@ test('ARN-77 real console DOM: outage, stale refresh, thread recovery and malfor
     const $ = (id: string) => document.getElementById(id) as any;
     const check = (ok: any, message: string) => { if (!ok) throw new Error(message); };
     const flush = async () => { for (let i = 0; i < 5; i++) await new Promise(resolve => setTimeout(resolve, 0)); };
-    const fixture = { issues: [{ id: 'ARN-77', title: 'Synthetic command', lane: 'active' }], lanes: { active: ['ARN-77'] }, agents: [], fetchedAt: '2026-10-09T00:00:00Z' };
+    const fixture = { issues: [{ id: 'ARN-77', title: 'Synthetic command', lane: 'active' }], lanes: { active: ['ARN-77'] }, agents: [], fetchedAt: '2026-10-09T00:00:00Z', hasNextPage: false };
     let outage = true, threadFail = true, intake: any = {}, authenticate = true;
     const keys: string[] = [], writes: string[] = [];
     const originalSet = Storage.prototype.setItem;

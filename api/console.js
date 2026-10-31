@@ -84,10 +84,11 @@ export async function handle(req, env, f = fetch, now = () => new Date()) {
         gql(env, f, OVERVIEW, { team: TEAM_ID, project: PROJECT_ID }),
         readEngineStatus(env, f).catch(() => ({ engineStatus: "unavailable", engine: null })),
       ]);
-      if (!Array.isArray(data.issues?.nodes) || !data.issues?.pageInfo) throw new Error("Invalid response");
+      // Completeness must be stated: a missing or non-boolean hasNextPage is a failed read, never "all issues".
+      if (!Array.isArray(data.issues?.nodes) || typeof data.issues?.pageInfo?.hasNextPage !== "boolean") throw new Error("Invalid response");
       // Defense in depth: don't trust upstream filtering to authorize an out-of-scope row.
       const scoped = data.issues.nodes.filter(inScope);
-      return { status: 200, body: { ...overviewOf(scoped, now().toISOString(), Boolean(data.issues.pageInfo.hasNextPage)), ...engine } };
+      return { status: 200, body: { ...overviewOf(scoped, now().toISOString(), data.issues.pageInfo.hasNextPage), ...engine } };
     }
     const data = await gql(env, f, THREAD, { identifier: body.identifier });
     if (!data.issue || !inScope(data.issue)) return error(404, "Issue not found in this operation.");
