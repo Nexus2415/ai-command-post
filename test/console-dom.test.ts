@@ -160,7 +160,7 @@ test("empty text is refused locally without any request", async () => {
 test("fixed scope: only relative /api/console (overview|thread) and /api/intake (command|question) are called", async () => {
   const t = setup((path, init) => {
     const b = JSON.parse(init.body);
-    if (b.action === "thread") return ok({ issue: { id: "ARN-9", title: "t" }, comments: [] });
+    if (b.action === "thread") return ok({ issue: { id: "ARN-9", title: "t" }, comments: [], hasPreviousPage: false, fetchedAt: "2026-10-01T00:00:00Z" });
     return ok({ ...overviewJson, issues: [{ id: "ARN-9", lane: "active", title: "t" }], lanes: { active: ["ARN-9"] } });
   });
   await flush();
@@ -184,7 +184,7 @@ test("hostile comments, titles and URLs render as inert text; only http(s) links
   const xss = '<img src=x onerror="alert(1)">';
   for (const [url, expect] of [["javascript:alert(1)", null], ["data:text/html,hi", null], ["https://linear.app/x/ARN-9", "https://linear.app/x/ARN-9"]] as const) {
     const t = setup((_p, init) => JSON.parse(init.body).action === "thread"
-      ? ok({ issue: { id: "ARN-9", title: xss, url, description: xss }, comments: [{ author: xss, body: xss, createdAt: "x" }] })
+      ? ok({ issue: { id: "ARN-9", title: xss, url, description: xss }, comments: [{ author: xss, body: xss, createdAt: "x" }], hasPreviousPage: false, fetchedAt: "2026-10-01T00:00:00Z" })
       : ok({ ...overviewJson, issues: [{ id: "ARN-9", lane: "active", title: xss }] }));
     await flush();
     t.$("cList").all().find((e: any) => e.className === "linkbtn")!.click(); await flush();
@@ -198,6 +198,33 @@ test("hostile comments, titles and URLs render as inert text; only http(s) links
   const t = setup(() => ok(overviewJson));
   assert.equal(t.ctx.ACPConsoleCore.safeUrl(" HTTP://a.b/c "), "HTTP://a.b/c");
   assert.equal(t.ctx.ACPConsoleCore.safeUrl("//evil.com"), null);
+});
+
+test("a malformed 200 thread reply is shown as incomplete, never as a thread with no comments", async () => {
+  const good = { issue: { id: "ARN-9", title: "t" }, comments: [{ id: "c1", author: "A", body: "hello", createdAt: "2026-10-01T00:00:00Z" }],
+    hasPreviousPage: false, fetchedAt: "2026-10-01T00:00:00Z", lifecycle: null };
+  const open = async (reply: any) => {
+    const t = setup((_p, init) => JSON.parse(init.body).action === "thread" ? ok(reply) : ok({ ...overviewJson, issues: [{ id: "ARN-9", lane: "active", title: "t" }] }));
+    await flush();
+    t.$("cList").all().find((e: any) => e.className === "linkbtn")!.click(); await flush();
+    return t;
+  };
+  const { hasPreviousPage: _h, ...noCompleteness } = good;
+  const { fetchedAt: _f, ...noTime } = good;
+  for (const bad of [{}, [], "thread", { issue: { id: "ARN-9", title: "t" }, comments: [] }, { ...good, comments: "bad" },
+    { ...good, comments: [null] }, { ...good, issue: null }, { ...good, issue: { id: "ARN-10", title: "other" } }, noCompleteness,
+    { ...good, hasPreviousPage: "false" }, { ...good, hasPreviousPage: 0 }, noTime, { ...good, fetchedAt: "not a date" },
+    { ...good, lifecycle: "completed" }]) {
+    const t = await open(bad);
+    const text = t.$("cDetailBody").textContent;
+    assert.match(text, /The thread reply was incomplete, so it wasn't shown/, JSON.stringify(bad));
+    assert.doesNotMatch(text, /No comments yet|Comments \(/, JSON.stringify(bad));
+  }
+  const t = await open(good);
+  assert.match(t.$("cDetailBody").textContent, /Comments \(1\)/);
+  assert.match(t.$("cDetailBody").textContent, /hello/);
+  const older = await open({ ...good, hasPreviousPage: true });
+  assert.match(older.$("cDetailBody").textContent, /Comments \(1, older not shown\)/);
 });
 
 test("no fake engine-live or online claims once the console starts", async () => {
@@ -214,7 +241,7 @@ test("stale thread responses don't overwrite a closed or newer thread", async ()
   const pending: Record<string, Function> = {};
   const t = setup((_p, init) => {
     const b = JSON.parse(init.body);
-    if (b.action === "thread") return new Promise(r => { pending[b.identifier] = () => r(ok({ issue: { id: b.identifier, title: "T" + b.identifier }, comments: [] })); });
+    if (b.action === "thread") return new Promise(r => { pending[b.identifier] = () => r(ok({ issue: { id: b.identifier, title: "T" + b.identifier }, comments: [], hasPreviousPage: false, fetchedAt: "2026-10-01T00:00:00Z" })); });
     return ok({ ...overviewJson, issues: [{ id: "ARN-1", lane: "active", title: "a" }, { id: "ARN-2", lane: "active", title: "b" }] });
   });
   await flush();

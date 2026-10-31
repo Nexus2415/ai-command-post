@@ -29,6 +29,16 @@
     if (o.engineStatus !== undefined && !(ENGINE_STATUSES.includes(o.engineStatus) && (o.engineStatus === "reported") === (o.engine != null))) return false;
     return typeof o.fetchedAt === "string" && !Number.isNaN(Date.parse(o.fetchedAt));
   }
+  // A thread reply must prove what the panel shows: the requested issue, a comment list, and whether older
+  // comments were left out. Anything less is an incomplete read, never "No comments yet".
+  function isThread(t, id) {
+    if (!t || typeof t !== "object" || Array.isArray(t)) return false;
+    if (!t.issue || typeof t.issue !== "object" || Array.isArray(t.issue) || t.issue.id !== id) return false;
+    if (!Array.isArray(t.comments) || !t.comments.every(c => c && typeof c === "object" && !Array.isArray(c))) return false;
+    if (typeof t.hasPreviousPage !== "boolean") return false;
+    if (t.lifecycle != null && (typeof t.lifecycle !== "object" || Array.isArray(t.lifecycle))) return false;
+    return typeof t.fetchedAt === "string" && !Number.isNaN(Date.parse(t.fetchedAt));
+  }
   // The engine report is optional, but when present every field the engine panel reads must be there,
   // with amounts and counts that can be real (never negative; counts are whole numbers).
   const ENGINE_STATUSES = ["reported", "absent", "unavailable"];
@@ -254,6 +264,7 @@
     try {
       const t = await post("/api/console", { action: "thread", identifier: id });
       if (seq !== threadSeq) return;
+      if (!isThread(t, id)) throw new Error("The thread reply was incomplete, so it wasn't shown.");
       const is = t.issue || {};
       $("cDetailTitle").textContent = (is.id || id) + " · " + (is.title || "");
       $("cDetailMeta").textContent = (is.status || "Unknown") + " · " + ownerLabel(is) + " · last updated " + fmtTime(t.fetchedAt);

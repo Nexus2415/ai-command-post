@@ -36,7 +36,7 @@ test('ARN-77 real console DOM: outage, stale refresh, thread recovery and malfor
         keys.push(body.idempotencyKey);
         return new Response(typeof intake === 'string' ? intake : JSON.stringify(intake), { status: 200 });
       }
-      if (body.action === 'thread') return threadFail ? new Response('{"error":"thread unavailable"}', { status: 502 }) : new Response(JSON.stringify({ issue: { id: 'ARN-77', title: 'Recovered thread' }, comments: [] }));
+      if (body.action === 'thread') return threadFail ? new Response('{"error":"thread unavailable"}', { status: 502 }) : new Response(JSON.stringify({ issue: { id: 'ARN-77', title: 'Recovered thread' }, comments: [], hasPreviousPage: false, fetchedAt: '2026-10-09T00:00:00Z' }));
       return outage ? new Response('{"error":"synthetic outage"}', { status: 502 }) : new Response(JSON.stringify(fixture));
     };
     (0, eval)(consoleSource);
