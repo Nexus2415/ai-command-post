@@ -121,6 +121,29 @@ test("completed needs complete evidence: more than 50 sub-tasks or truncated com
   assert.equal(life(cmd(done), res, fifty, {}).stage, "unknown");
 });
 
+test("thread endpoint refuses comments without an id, text or real time, so a bad time can't sort done after blocked", async () => {
+  const blocked = c("b", `${RESULT_MARKER} (Gemini, blocked)\n\nno key`, "2026-10-09T11:00:00Z");
+  const run = async (nodes: any[]) => {
+    const f = (async () => new Response(JSON.stringify({ data: { issue: {
+      ...cmd({ name: "Done", type: "completed" }),
+      children: { nodes: [], pageInfo: { hasNextPage: false } },
+      comments: { nodes, pageInfo: { hasPreviousPage: false } },
+    } } }), { status: 200 })) as typeof fetch;
+    return handle({ method: "POST", headers: { "x-acp-password": "pw" }, body: { action: "thread", identifier: "ARN-900" } }, env, f) as any;
+  };
+  const summary = (createdAt: any) => ({ id: "s", body: `${RECONCILED_MARKER}\n\nok`, createdAt });
+  for (const bad of [summary(undefined), summary(null), summary("not a date"), summary(""), summary(1760000000000),
+    { ...summary("2026-10-09T10:00:00Z"), id: "" }, { ...summary("2026-10-09T10:00:00Z"), id: undefined },
+    { ...summary("2026-10-09T10:00:00Z"), body: null }, null]) {
+    const r = await run([bad, blocked]);
+    assert.equal(r.status, 502, JSON.stringify(bad));
+    assert.equal(r.body.lifecycle, undefined);
+  }
+  // Valid times: a done summary followed by a later blocked result is unknown; alone it is completed.
+  assert.equal((await run([summary("2026-10-09T10:00:00Z"), blocked])).body.lifecycle.stage, "unknown");
+  assert.equal((await run([summary("2026-10-09T12:00:00Z"), blocked])).body.lifecycle.stage, "completed");
+});
+
 test("thread endpoint passes pagination through: a 51st child page makes a Done command unknown", async () => {
   const run = async (hasNextPage: boolean, hasPreviousPage: boolean) => {
     const f = (async () => new Response(JSON.stringify({ data: { issue: {

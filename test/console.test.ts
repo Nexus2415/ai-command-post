@@ -127,7 +127,7 @@ test("thread preserves comment text without claiming agent identity or unsafe UR
   const { f } = mock({ data: { issue: {
     ...item(), description: "Test only", comments: {
       nodes: [{ id: "c", body: "<script>do not render as HTML</script>", user: { name: "Darius Williams" },
-        url: "javascript:alert(1)", createdAt: "t", updatedAt: "t" }], pageInfo: { hasPreviousPage: true },
+        url: "javascript:alert(1)", createdAt: "2026-10-08T14:00:00Z", updatedAt: "2026-10-08T14:00:00Z" }], pageInfo: { hasPreviousPage: true },
     },
   } } });
   const result: any = await handle(req({ action: "thread", identifier: "ARN-54" }), env, f);

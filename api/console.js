@@ -43,6 +43,9 @@ async function gql(env, f, query, variables) {
   return payload.data;
 }
 
+const isCommentNode = c => !!c && typeof c.id === "string" && c.id !== "" && typeof c.body === "string" &&
+  typeof c.createdAt === "string" && Number.isFinite(Date.parse(c.createdAt));
+
 async function readEngineStatus(env, f) {
   const docs = [];
   let after = null, more = true;
@@ -96,6 +99,9 @@ export async function handle(req, env, f = fetch, now = () => new Date()) {
     if (!Array.isArray(data.issue.comments?.nodes) || typeof data.issue.comments.pageInfo?.hasPreviousPage !== "boolean") {
       throw new Error("Invalid comments response");
     }
+    // The lifecycle orders results by time: a comment without an id, text or real timestamp could sort a
+    // "done" after a later "blocked", so the whole read fails instead.
+    if (!data.issue.comments.nodes.every(isCommentNode)) throw new Error("Invalid comment");
     const issue = { ...projectIssue(data.issue), description: data.issue.description || "" };
     const children = Array.isArray(data.issue.children?.nodes) ? data.issue.children.nodes : null;
     return { status: 200, body: {
