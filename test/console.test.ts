@@ -65,6 +65,22 @@ test("overview fixes scope, filters upstream leakage, labels workload honestly a
   assert.equal(JSON.stringify(body).includes("lin\""), false);
 });
 
+test("overview completeness must be a stated boolean: anything else is a failed read, never a complete board", async () => {
+  for (const pageInfo of [{}, { hasNextPage: null }, { hasNextPage: 0 }, { hasNextPage: "" }, { hasNextPage: "false" },
+    { hasNextPage: "true" }, { hasNextPage: [] }, null, undefined]) {
+    const { f } = mock({ data: { issues: { nodes: [item()], pageInfo } } });
+    const out: any = await handle(req(), env, f);
+    assert.equal(out.status, 502, JSON.stringify(pageInfo));
+    assert.equal(out.body.issues, undefined);
+  }
+  for (const hasNextPage of [true, false]) {
+    const { f } = mock({ data: { issues: { nodes: [item()], pageInfo: { hasNextPage } } } });
+    const out: any = await handle(req(), env, f);
+    assert.equal(out.status, 200);
+    assert.equal(out.body.hasNextPage, hasNextPage);
+  }
+});
+
 test("terminal canceled and duplicate work never enters the completed lane", () => {
   assert.equal(laneOf(item("ARN-1", "completed")), "done");
   assert.equal(laneOf(item("ARN-1", "canceled")), "canceled");
@@ -111,7 +127,7 @@ test("thread preserves comment text without claiming agent identity or unsafe UR
   const { f } = mock({ data: { issue: {
     ...item(), description: "Test only", comments: {
       nodes: [{ id: "c", body: "<script>do not render as HTML</script>", user: { name: "Darius Williams" },
-        url: "javascript:alert(1)", createdAt: "t", updatedAt: "t" }], pageInfo: { hasPreviousPage: true },
+        url: "javascript:alert(1)", createdAt: "2026-10-08T14:00:00Z", updatedAt: "2026-10-08T14:00:00Z" }], pageInfo: { hasPreviousPage: true },
     },
   } } });
   const result: any = await handle(req({ action: "thread", identifier: "ARN-54" }), env, f);
@@ -120,6 +136,22 @@ test("thread preserves comment text without claiming agent identity or unsafe UR
   assert.equal(result.body.comments[0].url, null);
   assert.equal(result.body.hasPreviousPage, true);
   assert.equal(result.body.comments[0].body, "<script>do not render as HTML</script>");
+});
+
+test("thread comment completeness must be a stated boolean: anything else is a failed read", async () => {
+  for (const pageInfo of [{}, { hasPreviousPage: null }, { hasPreviousPage: 0 }, { hasPreviousPage: "" },
+    { hasPreviousPage: "false" }, { hasPreviousPage: "true" }, { hasPreviousPage: [] }, null, undefined]) {
+    const { f } = mock({ data: { issue: { ...item(), comments: { nodes: [], pageInfo } } } });
+    const out: any = await handle(req({ action: "thread", identifier: "ARN-54" }), env, f);
+    assert.equal(out.status, 502, JSON.stringify(pageInfo));
+    assert.equal(out.body.comments, undefined);
+  }
+  for (const hasPreviousPage of [true, false]) {
+    const { f } = mock({ data: { issue: { ...item(), comments: { nodes: [], pageInfo: { hasPreviousPage } } } } });
+    const out: any = await handle(req({ action: "thread", identifier: "ARN-54" }), env, f);
+    assert.equal(out.status, 200);
+    assert.equal(out.body.hasPreviousPage, hasPreviousPage);
+  }
 });
 
 test("URL sanitizer rejects lookalikes, credentials, and non-HTTPS links", () => {

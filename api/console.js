@@ -1,6 +1,6 @@
 import { TEAM_ID, PROJECT_ID, overviewOf, projectIssue, safeLinearUrl } from "./lib/console-state.js";
 import { lifecycleOf } from "./lib/command-lifecycle.js";
-import { engineStatusOf } from "./lib/engine-status.js";
+import { engineStatusRead } from "./lib/engine-status.js";
 import { hasSitePassword, isCrossSite } from "./lib/site-auth.js";
 
 const LINEAR = "https://api.linear.app/graphql";
@@ -13,10 +13,11 @@ const OVERVIEW = `query ConsoleOverview($team: ID!, $project: ID!) {
   }) { nodes { ${FIELDS} } pageInfo { hasNextPage } }
 }`;
 // The engine's status document lives in the same fixed project; it is read separately so a failure here never
-// hides the task board.
-const STATUS = `query ConsoleEngineStatus($project: String!) {
-  project(id: $project) { documents(first: 50) { nodes { title content updatedAt } } }
+// hides the task board. Pages are followed up to STATUS_PAGES; a list still incomplete after that is unavailable.
+const STATUS = `query ConsoleEngineStatus($project: String!, $after: String) {
+  project(id: $project) { documents(first: 50, after: $after) { nodes { title content updatedAt } pageInfo { hasNextPage endCursor } } }
 }`;
+const STATUS_PAGES = 4;
 const THREAD = `query ConsoleThread($identifier: String!) {
   issue(id: $identifier) { ${FIELDS} description
     children(first: 50) { nodes { identifier state { type } } pageInfo { hasNextPage } }
@@ -40,6 +41,23 @@ async function gql(env, f, query, variables) {
   const payload = await r.json();
   if (!r.ok || payload.errors || !payload.data) throw new Error("Linear request failed");
   return payload.data;
+}
+
+const isCommentNode = c => !!c && typeof c.id === "string" && c.id !== "" && typeof c.body === "string" &&
+  typeof c.createdAt === "string" && Number.isFinite(Date.parse(c.createdAt));
+
+async function readEngineStatus(env, f) {
+  const docs = [];
+  let after = null, more = true;
+  for (let page = 0; page < STATUS_PAGES && more; page++) {
+    const d = (await gql(env, f, STATUS, { project: PROJECT_ID, after })).project?.documents;
+    if (!Array.isArray(d?.nodes)) return engineStatusRead(null, false);
+    docs.push(...d.nodes);
+    more = d.pageInfo?.hasNextPage;
+    after = d.pageInfo?.endCursor;
+    if (more === true && (typeof after !== "string" || !after)) break;
+  }
+  return engineStatusRead(docs, more);
 }
 
 // No issue mutation, comment mutation, model call or Eve execution exists in this endpoint.
@@ -67,16 +85,23 @@ export async function handle(req, env, f = fetch, now = () => new Date()) {
     if (body.action === "overview") {
       const [data, engine] = await Promise.all([
         gql(env, f, OVERVIEW, { team: TEAM_ID, project: PROJECT_ID }),
-        gql(env, f, STATUS, { project: PROJECT_ID }).then(s => engineStatusOf(s.project?.documents?.nodes), () => null),
+        readEngineStatus(env, f).catch(() => ({ engineStatus: "unavailable", engine: null })),
       ]);
-      if (!Array.isArray(data.issues?.nodes) || !data.issues?.pageInfo) throw new Error("Invalid response");
+      // Completeness must be stated: a missing or non-boolean hasNextPage is a failed read, never "all issues".
+      if (!Array.isArray(data.issues?.nodes) || typeof data.issues?.pageInfo?.hasNextPage !== "boolean") throw new Error("Invalid response");
       // Defense in depth: don't trust upstream filtering to authorize an out-of-scope row.
       const scoped = data.issues.nodes.filter(inScope);
-      return { status: 200, body: { ...overviewOf(scoped, now().toISOString(), Boolean(data.issues.pageInfo.hasNextPage)), engine } };
+      return { status: 200, body: { ...overviewOf(scoped, now().toISOString(), data.issues.pageInfo.hasNextPage), ...engine } };
     }
     const data = await gql(env, f, THREAD, { identifier: body.identifier });
     if (!data.issue || !inScope(data.issue)) return error(404, "Issue not found in this operation.");
-    if (!Array.isArray(data.issue.comments?.nodes)) throw new Error("Invalid comments response");
+    // Whether older comments were left out must be stated, or "No comments yet" could hide a partial list.
+    if (!Array.isArray(data.issue.comments?.nodes) || typeof data.issue.comments.pageInfo?.hasPreviousPage !== "boolean") {
+      throw new Error("Invalid comments response");
+    }
+    // The lifecycle orders results by time: a comment without an id, text or real timestamp could sort a
+    // "done" after a later "blocked", so the whole read fails instead.
+    if (!data.issue.comments.nodes.every(isCommentNode)) throw new Error("Invalid comment");
     const issue = { ...projectIssue(data.issue), description: data.issue.description || "" };
     const children = Array.isArray(data.issue.children?.nodes) ? data.issue.children.nodes : null;
     return { status: 200, body: {
@@ -93,7 +118,7 @@ export async function handle(req, env, f = fetch, now = () => new Date()) {
         authorVerifiedAsAgent: false,
         createdAt: c.createdAt, updatedAt: c.updatedAt, url: safeLinearUrl(c.url),
       })),
-      hasPreviousPage: Boolean(data.issue.comments.pageInfo?.hasPreviousPage),
+      hasPreviousPage: data.issue.comments.pageInfo.hasPreviousPage,
       fetchedAt: now().toISOString(),
     } };
   } catch {

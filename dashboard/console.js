@@ -11,11 +11,51 @@
   const QUESTION_EXPLANATION = "Submitting a question creates a Linear issue for an answer. It does not authorize agents to execute tools or change existing work.";
 
   // ---- pure helpers (unit-tested in test/console-ui.test.ts) ----
+  // Counts come from the same issue list the tabs show, so a count can never disagree with its list.
   function laneCounts(overview) {
-    const lanes = (overview && overview.lanes) || {};
     const out = {};
-    TABS.forEach(k => { out[k] = Array.isArray(lanes[k]) ? lanes[k].length : 0; });
+    TABS.forEach(k => { out[k] = laneIssues(overview, k).length; });
     return out;
+  }
+  // Minimum overview contract. A 200 whose body isn't this (e.g. a proxy page parsed as {}) is a failed read.
+  function isOverview(o) {
+    if (!o || typeof o !== "object" || Array.isArray(o)) return false;
+    if (!Array.isArray(o.issues) || !Array.isArray(o.agents)) return false;
+    // Whether older issues were left out must be stated, or the counts could pass for complete.
+    if (typeof o.hasNextPage !== "boolean") return false;
+    if (!o.lanes || typeof o.lanes !== "object" || Array.isArray(o.lanes) || !Object.values(o.lanes).every(Array.isArray)) return false;
+    if (o.engine != null && !isEngineReport(o.engine)) return false;
+    // engineStatus (when sent) must agree with engine: only "reported" carries a report.
+    if (o.engineStatus !== undefined && !(ENGINE_STATUSES.includes(o.engineStatus) && (o.engineStatus === "reported") === (o.engine != null))) return false;
+    return typeof o.fetchedAt === "string" && !Number.isNaN(Date.parse(o.fetchedAt));
+  }
+  // Each comment must carry what the server contract promises: an id (lifecycle evidence binds by it), a body,
+  // and a real time. A comment missing any of these is not shown as if it were verified.
+  function isComment(c) {
+    return !!c && typeof c === "object" && !Array.isArray(c) && typeof c.id === "string" && c.id !== "" &&
+      typeof c.body === "string" && typeof c.createdAt === "string" && !Number.isNaN(Date.parse(c.createdAt));
+  }
+  // A thread reply must prove what the panel shows: the requested issue, a comment list, and whether older
+  // comments were left out. Anything less is an incomplete read, never "No comments yet".
+  function isThread(t, id) {
+    if (!t || typeof t !== "object" || Array.isArray(t)) return false;
+    if (!t.issue || typeof t.issue !== "object" || Array.isArray(t.issue) || t.issue.id !== id) return false;
+    if (!Array.isArray(t.comments) || !t.comments.every(isComment)) return false;
+    if (typeof t.hasPreviousPage !== "boolean") return false;
+    if (t.lifecycle != null && (typeof t.lifecycle !== "object" || Array.isArray(t.lifecycle))) return false;
+    return typeof t.fetchedAt === "string" && !Number.isNaN(Date.parse(t.fetchedAt));
+  }
+  // The engine report is optional, but when present every field the engine panel reads must be there,
+  // with amounts and counts that can be real (never negative; counts are whole numbers).
+  const ENGINE_STATUSES = ["reported", "absent", "unavailable"];
+  function isEngineReport(e) {
+    const num = v => typeof v === "number" && Number.isFinite(v) && v >= 0, count = v => Number.isInteger(v) && v >= 0, obj = v => !!v && typeof v === "object" && !Array.isArray(v);
+    if (!obj(e) || typeof e.at !== "string" || Number.isNaN(Date.parse(e.at)) || typeof e.active !== "boolean" || typeof e.dryRun !== "boolean") return false;
+    const b = e.budget, c = e.counts;
+    if (!obj(b) || typeof b.month !== "string" || !num(b.spentUsd) || !num(b.capUsd)) return false;
+    if (b.ledgerProblem != null && typeof b.ledgerProblem !== "string") return false;
+    if (!Array.isArray(e.agentsOnline) || !e.agentsOnline.every(k => typeof k === "string")) return false;
+    return obj(c) && ["planned", "worked", "reconciled", "waiting", "errors"].every(k => count(c[k]));
   }
   function laneIssues(overview, lane) {
     const issues = (overview && Array.isArray(overview.issues)) ? overview.issues : [];
@@ -60,9 +100,12 @@
   const usd = (n, dp) => "$" + Number(n).toFixed(dp);
   function engineRows(engine, nowMs) {
     if (!engine) return [{ label: "Engine status", value: "Not reported yet. It appears after the engine's next run.", tone: "warn" }];
-    const age = nowMs - Date.parse(engine.at);
+    // The report is an editable document: a time ahead of this device's clock (past 5 minutes of skew) proves nothing
+    // about freshness, so it is flagged instead of shown as "0 min ago".
+    const ahead = Date.parse(engine.at) - nowMs > 5 * 60e3;
+    const age = ahead ? Infinity : nowMs - Date.parse(engine.at);
     const b = engine.budget, c = engine.counts;
-    const ago = age < 3600e3 ? Math.max(0, Math.round(age / 60e3)) + " min ago" : Math.round(age / 3600e3) + " h ago";
+    const ago = ahead ? "ahead of this device's clock, so freshness is unverified" : age < 3600e3 ? Math.max(0, Math.round(age / 60e3)) + " min ago" : Math.round(age / 3600e3) + " h ago";
     return [
       { label: "Last engine run", value: fmtTime(engine.at) + " (" + ago + ")", tone: age > STALE_MS ? "warn" : null },
       { label: "Mode", value: engine.dryRun ? "Dry run, no writes" : "Live writes", tone: null },
@@ -74,14 +117,20 @@
   }
   // Only plain http(s) links are rendered; javascript:, data: and the like are dropped.
   function safeUrl(u) { const s = String(u || "").trim(); return /^https?:\/\/[^\s]+$/i.test(s) ? s : null; }
-  const api = { engineRows, safeUrl, ownerLabel, TABS, laneCounts, laneIssues, rosterRow, connectionLabel, intakeBody, errorMessage, QUESTION_EXPLANATION, isIssueId: s => ID_RE.test(String(s)) };
+  // unavailable: this read failed, so engine (if any) is the last verified report, kept with its own time.
+  function engineView(engine, nowMs, unavailable) {
+    if (!unavailable) return engineRows(engine, nowMs);
+    const note = { label: "Engine status", value: "Unavailable: the engine report could not be read" + (engine ? ". Showing the last verified report, which may be out of date" : ""), tone: "warn" };
+    return engine ? [note, ...engineRows(engine, nowMs)] : [note];
+  }
+  const api = { engineRows, engineView, safeUrl, ownerLabel, TABS, laneCounts, laneIssues, rosterRow, connectionLabel, intakeBody, errorMessage, QUESTION_EXPLANATION, isIssueId: s => ID_RE.test(String(s)) };
   root.ACPConsoleCore = api;
   if (typeof document === "undefined") return;
 
   // ---- DOM ----
   const $ = id => document.getElementById(id);
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = String(text); return e; };
-  let pendingKey = null, overview = null, tab = "active", intent = "command", busy = false, lastFocus = null, threadSeq = 0;
+  let pendingKey = null, overview = null, tab = "active", intent = "command", busy = false, lastFocus = null, threadSeq = 0, overviewSeq = 0;
 
   // The password lives in memory for this tab only; it is never written to browser storage (ARN-53).
   let password = "";
@@ -105,16 +154,24 @@
 
   // Overview
   async function loadOverview() {
+    // Timer, Refresh and post-send reloads can overlap; only the newest request may update the page.
+    const seq = ++overviewSeq;
     $("cRefresh").disabled = true;
     $("cUpdated").textContent = overview ? "Refreshing…" : "Loading…";
     try {
-      overview = await post("/api/console", { action: "overview" });
+      const next = await post("/api/console", { action: "overview" });
+      if (seq !== overviewSeq) return;
+      if (!isOverview(next)) throw new Error("The overview reply was incomplete, so it wasn't used.");
+      // A failed engine-report read keeps the last verified report (with its original time) instead of erasing it.
+      overview = next.engineStatus === "unavailable" && overview && overview.engine ? { ...next, engine: overview.engine } : next;
       setMsg($("cOverviewMsg"), overview.hasNextPage ? "Showing the latest 250 issues; older ones are not counted." : "", "warn");
       $("cUpdated").textContent = "Last updated " + fmtTime(overview.fetchedAt);
     } catch (e) {
+      if (seq !== overviewSeq) return;
       setMsg($("cOverviewMsg"), e.message + (overview ? " Showing the last data received." : ""), "err");
       $("cUpdated").textContent = overview ? "Last updated " + fmtTime(overview.fetchedAt) + " (stale)" : "Not loaded";
-    } finally { $("cRefresh").disabled = false; }
+    }
+    $("cRefresh").disabled = false;
     renderTabs(); renderList(); renderRoster(); renderEngine();
   }
 
@@ -122,7 +179,7 @@
     const dl = $("cEngine");
     dl.replaceChildren();
     if (!overview) return;
-    engineRows(overview.engine, Date.now()).forEach(r => {
+    engineView(overview.engine, Date.now(), overview.engineStatus === "unavailable").forEach(r => {
       dl.appendChild(el("dt", null, r.label));
       const dd = el("dd", r.tone === "warn" ? "warn" : null, r.value);
       dl.appendChild(dd);
@@ -213,6 +270,7 @@
     try {
       const t = await post("/api/console", { action: "thread", identifier: id });
       if (seq !== threadSeq) return;
+      if (!isThread(t, id)) throw new Error("The thread reply was incomplete, so it wasn't shown.");
       const is = t.issue || {};
       $("cDetailTitle").textContent = (is.id || id) + " · " + (is.title || "");
       $("cDetailMeta").textContent = (is.status || "Unknown") + " · " + ownerLabel(is) + " · last updated " + fmtTime(t.fetchedAt);

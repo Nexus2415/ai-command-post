@@ -74,7 +74,7 @@ function setup(responses: (path: string, init: any) => any) {
 }
 const flush = async () => { for (let i = 0; i < 20; i++) await new Promise(r => setImmediate(r)); };
 const ok = (json: any = {}) => ({ status: 200, json });
-const overviewJson = { issues: [], lanes: {}, agents: [{ key: "claude", connection: "online" }], fetchedAt: "2026-10-01T00:00:00Z" };
+const overviewJson = { issues: [], lanes: {}, agents: [{ key: "claude", connection: "online" }], fetchedAt: "2026-10-01T00:00:00Z", hasNextPage: false };
 
 test("password is held in memory only: never written to localStorage or sessionStorage", async () => {
   let first = true;
@@ -160,7 +160,7 @@ test("empty text is refused locally without any request", async () => {
 test("fixed scope: only relative /api/console (overview|thread) and /api/intake (command|question) are called", async () => {
   const t = setup((path, init) => {
     const b = JSON.parse(init.body);
-    if (b.action === "thread") return ok({ issue: { id: "ARN-9", title: "t" }, comments: [] });
+    if (b.action === "thread") return ok({ issue: { id: "ARN-9", title: "t" }, comments: [], hasPreviousPage: false, fetchedAt: "2026-10-01T00:00:00Z" });
     return ok({ ...overviewJson, issues: [{ id: "ARN-9", lane: "active", title: "t" }], lanes: { active: ["ARN-9"] } });
   });
   await flush();
@@ -184,7 +184,7 @@ test("hostile comments, titles and URLs render as inert text; only http(s) links
   const xss = '<img src=x onerror="alert(1)">';
   for (const [url, expect] of [["javascript:alert(1)", null], ["data:text/html,hi", null], ["https://linear.app/x/ARN-9", "https://linear.app/x/ARN-9"]] as const) {
     const t = setup((_p, init) => JSON.parse(init.body).action === "thread"
-      ? ok({ issue: { id: "ARN-9", title: xss, url, description: xss }, comments: [{ author: xss, body: xss, createdAt: "x" }] })
+      ? ok({ issue: { id: "ARN-9", title: xss, url, description: xss }, comments: [{ id: "c1", author: xss, body: xss, createdAt: "2026-10-01T00:00:00Z" }], hasPreviousPage: false, fetchedAt: "2026-10-01T00:00:00Z" })
       : ok({ ...overviewJson, issues: [{ id: "ARN-9", lane: "active", title: xss }] }));
     await flush();
     t.$("cList").all().find((e: any) => e.className === "linkbtn")!.click(); await flush();
@@ -198,6 +198,39 @@ test("hostile comments, titles and URLs render as inert text; only http(s) links
   const t = setup(() => ok(overviewJson));
   assert.equal(t.ctx.ACPConsoleCore.safeUrl(" HTTP://a.b/c "), "HTTP://a.b/c");
   assert.equal(t.ctx.ACPConsoleCore.safeUrl("//evil.com"), null);
+});
+
+test("a malformed 200 thread reply is shown as incomplete, never as a thread with no comments", async () => {
+  const good = { issue: { id: "ARN-9", title: "t" }, comments: [{ id: "c1", author: "A", body: "hello", createdAt: "2026-10-01T00:00:00Z" }],
+    hasPreviousPage: false, fetchedAt: "2026-10-01T00:00:00Z", lifecycle: null };
+  const open = async (reply: any) => {
+    const t = setup((_p, init) => JSON.parse(init.body).action === "thread" ? ok(reply) : ok({ ...overviewJson, issues: [{ id: "ARN-9", lane: "active", title: "t" }] }));
+    await flush();
+    t.$("cList").all().find((e: any) => e.className === "linkbtn")!.click(); await flush();
+    return t;
+  };
+  const { hasPreviousPage: _h, ...noCompleteness } = good;
+  const { fetchedAt: _f, ...noTime } = good;
+  for (const bad of [{}, [], "thread", { issue: { id: "ARN-9", title: "t" }, comments: [] }, { ...good, comments: "bad" },
+    { ...good, comments: [null] }, { ...good, issue: null }, { ...good, issue: { id: "ARN-10", title: "other" } }, noCompleteness,
+    { ...good, hasPreviousPage: "false" }, { ...good, hasPreviousPage: 0 }, noTime, { ...good, fetchedAt: "not a date" },
+    { ...good, lifecycle: "completed" },
+    // Every comment object must carry a non-empty string id, a string body and a parseable string createdAt.
+    { ...good, comments: [{}] }, { ...good, comments: [{ ...good.comments[0], id: undefined }] }, { ...good, comments: [{ ...good.comments[0], id: "" }] },
+    { ...good, comments: [{ ...good.comments[0], id: 7 }] }, { ...good, comments: [{ ...good.comments[0], body: undefined }] },
+    { ...good, comments: [{ ...good.comments[0], body: 5 }] }, { ...good, comments: [{ ...good.comments[0], createdAt: undefined }] },
+    { ...good, comments: [{ ...good.comments[0], createdAt: "not a date" }] }, { ...good, comments: [{ ...good.comments[0], createdAt: 1700000000000 }] },
+    { ...good, comments: [good.comments[0], { ...good.comments[0], id: "c2", body: null }] }]) {
+    const t = await open(bad);
+    const text = t.$("cDetailBody").textContent;
+    assert.match(text, /The thread reply was incomplete, so it wasn't shown/, JSON.stringify(bad));
+    assert.doesNotMatch(text, /No comments yet|Comments \(/, JSON.stringify(bad));
+  }
+  const t = await open(good);
+  assert.match(t.$("cDetailBody").textContent, /Comments \(1\)/);
+  assert.match(t.$("cDetailBody").textContent, /hello/);
+  const older = await open({ ...good, hasPreviousPage: true });
+  assert.match(older.$("cDetailBody").textContent, /Comments \(1, older not shown\)/);
 });
 
 test("no fake engine-live or online claims once the console starts", async () => {
@@ -214,7 +247,7 @@ test("stale thread responses don't overwrite a closed or newer thread", async ()
   const pending: Record<string, Function> = {};
   const t = setup((_p, init) => {
     const b = JSON.parse(init.body);
-    if (b.action === "thread") return new Promise(r => { pending[b.identifier] = () => r(ok({ issue: { id: b.identifier, title: "T" + b.identifier }, comments: [] })); });
+    if (b.action === "thread") return new Promise(r => { pending[b.identifier] = () => r(ok({ issue: { id: b.identifier, title: "T" + b.identifier }, comments: [], hasPreviousPage: false, fetchedAt: "2026-10-01T00:00:00Z" })); });
     return ok({ ...overviewJson, issues: [{ id: "ARN-1", lane: "active", title: "a" }, { id: "ARN-2", lane: "active", title: "b" }] });
   });
   await flush();
@@ -223,6 +256,173 @@ test("stale thread responses don't overwrite a closed or newer thread", async ()
   pending["ARN-2"]!(); await flush();
   pending["ARN-1"]!(); await flush();
   assert.match(t.$("cDetailTitle").textContent, /ARN-2/);
+});
+
+test("overlapping overview reads: only the newest request updates the snapshot, freshness and Refresh button", async () => {
+  const at = (n: number) => `2026-10-0${n}T12:00:00Z`;
+  for (const [older, newer] of [["ok", "ok"], ["err", "ok"], ["ok", "err"], ["err", "err"]] as const) {
+    const pending: ((r: any) => void)[] = [];
+    let n = 0;
+    const t = setup(() => {
+      if (n++ === 0) return ok({ ...overviewJson, fetchedAt: at(1), issues: [{ id: "ARN-1", lane: "active", title: "base" }], lanes: { active: ["ARN-1"] } });
+      return new Promise(r => pending.push(r));
+    });
+    await flush();
+    // Older read (e.g. the 60-second timer) and a newer one (e.g. Refresh after a send) overlap.
+    t.$("cRefresh").onclick(); t.$("cRefresh").onclick(); await flush();
+    assert.equal(t.$("cRefresh").disabled, true);
+    const reply = (kind: string, day: number) => kind === "ok"
+      ? ok({ ...overviewJson, fetchedAt: at(day), issues: [{ id: "ARN-" + day, lane: "active", title: "day" + day }], lanes: { active: ["ARN-" + day] } })
+      : { status: 500, json: { error: "boom" } };
+    pending[1]!(reply(newer, 3)); await flush();
+    const afterNewer = { updated: t.$("cUpdated").textContent, msg: t.$("cOverviewMsg").textContent, list: t.$("cList").textContent };
+    assert.equal(t.$("cRefresh").disabled, false, "the newest request settled");
+    if (newer === "ok") assert.doesNotMatch(afterNewer.updated, /stale/);
+    else assert.match(afterNewer.updated, /stale/);
+    pending[0]!(reply(older, 2)); await flush();
+    assert.equal(t.$("cUpdated").textContent, afterNewer.updated, `${older}->${newer}: late older reply must not change freshness`);
+    assert.equal(t.$("cOverviewMsg").textContent, afterNewer.msg, `${older}->${newer}: late older reply must not change the message`);
+    assert.equal(t.$("cList").textContent, afterNewer.list, `${older}->${newer}: late older reply must not replace the list`);
+    assert.doesNotMatch(t.$("cList").textContent, /day2/);
+  }
+});
+
+test("a malformed 200 overview is a failed read: never shown as a fresh empty board, never replaces good data", async () => {
+  for (const bad of [{}, [], { ...overviewJson, issues: null }, { ...overviewJson, agents: undefined }, { ...overviewJson, lanes: [] },
+    { ...overviewJson, lanes: { active: "ARN-1" } }, { ...overviewJson, fetchedAt: "not a date" }, { ...overviewJson, fetchedAt: undefined },
+    { ...overviewJson, hasNextPage: undefined }, { ...overviewJson, hasNextPage: null }, { ...overviewJson, hasNextPage: 0 },
+    { ...overviewJson, hasNextPage: "" }, { ...overviewJson, hasNextPage: "false" }]) {
+    // Initial malformed reply: nothing is presented as loaded.
+    let t = setup(() => ok(bad));
+    await flush();
+    assert.equal(t.$("cUpdated").textContent, "Not loaded");
+    assert.match(t.$("cOverviewMsg").textContent, /incomplete/);
+    assert.equal(t.$("cOverviewMsg").hidden, false);
+    assert.equal(t.$("cRefresh").disabled, false);
+    // Healthy snapshot, then a malformed refresh: the good snapshot stays, labelled stale.
+    let n = 0;
+    t = setup(() => n++ === 0
+      ? ok({ ...overviewJson, issues: [{ id: "ARN-1", lane: "active", title: "kept" }], lanes: { active: ["ARN-1"] } })
+      : ok(bad));
+    await flush();
+    const good = t.$("cList").textContent;
+    assert.match(good, /kept/);
+    t.$("cRefresh").onclick(); await flush();
+    assert.match(t.$("cUpdated").textContent, /stale/);
+    assert.match(t.$("cOverviewMsg").textContent, /incomplete.*Showing the last data received/);
+    assert.equal(t.$("cList").textContent, good);
+  }
+});
+
+test("the older-issues warning follows a stated hasNextPage: true warns, false does not", async () => {
+  let t = setup(() => ok({ ...overviewJson, hasNextPage: true }));
+  await flush();
+  assert.match(t.$("cOverviewMsg").textContent, /older ones are not counted/);
+  t = setup(() => ok({ ...overviewJson, hasNextPage: false }));
+  await flush();
+  assert.doesNotMatch(t.$("cOverviewMsg").textContent, /older ones are not counted|incomplete/);
+  assert.doesNotMatch(t.$("cUpdated").textContent, /Not loaded|stale/);
+});
+
+test("a malformed engine report is a failed read: it never throws or replaces the last good engine panel", async () => {
+  const engine = { at: "2026-10-01T00:00:00Z", active: true, dryRun: true, agentsOnline: ["claude"],
+    budget: { month: "2026-10", spentUsd: 0, capUsd: 0, calls: 0, ledgerProblem: null },
+    counts: { planned: 1, worked: 0, reconciled: 0, waiting: 0, errors: 0 } };
+  const { counts: _c, ...noCounts } = engine;
+  const { agentsOnline: _a, ...noAgents } = engine;
+  const { active: _act, ...noActive } = engine;
+  for (const badEngine of [{}, [], "engine", noCounts, noAgents, { ...engine, budget: null }, { ...engine, budget: { ...engine.budget, month: undefined } },
+    { ...engine, counts: { ...engine.counts, errors: "0" } }, { ...engine, agentsOnline: [1] }, { ...engine, at: "not a date" }, { ...engine, dryRun: "yes" },
+    { ...engine, budget: { ...engine.budget, ledgerProblem: {} } }, { ...engine, budget: { ...engine.budget, spentUsd: -1 } },
+    { ...engine, budget: { ...engine.budget, capUsd: -5 } }, { ...engine, counts: { ...engine.counts, errors: -1 } },
+    { ...engine, counts: { ...engine.counts, planned: 1.5 } }, { ...engine, budget: { ...engine.budget, spentUsd: Infinity } },
+    noActive, { ...engine, active: null }, { ...engine, active: "false" }, { ...engine, active: 0 }]) {
+    const bad = { ...overviewJson, engine: badEngine };
+    // Initial reply with a malformed engine report: nothing is presented as loaded, and nothing throws.
+    let t = setup(() => ok(bad));
+    await flush();
+    assert.equal(t.$("cUpdated").textContent, "Not loaded");
+    assert.match(t.$("cOverviewMsg").textContent, /incomplete/);
+    assert.equal(t.$("cEngine").textContent, "");
+    assert.equal(t.$("cRefresh").disabled, false);
+    // Healthy engine report, then a malformed one: the good panel and list stay, labelled stale.
+    let n = 0;
+    t = setup(() => n++ === 0
+      ? ok({ ...overviewJson, engine, issues: [{ id: "ARN-1", lane: "active", title: "kept" }], lanes: { active: ["ARN-1"] } })
+      : ok(bad));
+    await flush();
+    const good = { engine: t.$("cEngine").textContent, list: t.$("cList").textContent };
+    assert.match(good.engine, /1 planned/);
+    t.$("cRefresh").onclick(); await flush();
+    assert.match(t.$("cUpdated").textContent, /stale/);
+    assert.match(t.$("cOverviewMsg").textContent, /incomplete.*Showing the last data received/);
+    assert.equal(t.$("cEngine").textContent, good.engine);
+    assert.equal(t.$("cList").textContent, good.list);
+    assert.equal(t.$("cRefresh").disabled, false);
+  }
+  // Zero amounts and counts, fractional dollars and a reported ledger problem are real values and are shown.
+  const t0 = setup(() => ok({ ...overviewJson, engine: { ...engine, budget: { ...engine.budget, spentUsd: 0.0125, capUsd: 0, ledgerProblem: "ledger unreadable" }, counts: { planned: 0, worked: 0, reconciled: 0, waiting: 0, errors: 0 } } }));
+  await flush();
+  assert.doesNotMatch(t0.$("cUpdated").textContent, /Not loaded|stale/);
+  assert.match(t0.$("cEngine").textContent, /0 planned.*0 errors/);
+  assert.match(t0.$("cEngine").textContent, /Blocked: ledger unreadable/);
+  // A boolean active, either way, is a valid report.
+  for (const active of [true, false]) {
+    const t = setup(() => ok({ ...overviewJson, engine: { ...engine, active } }));
+    await flush();
+    assert.doesNotMatch(t.$("cUpdated").textContent, /Not loaded|stale/);
+    assert.match(t.$("cEngine").textContent, /1 planned/);
+  }
+  // No engine report yet (absent or null) is still a valid overview.
+  for (const e of [undefined, null]) {
+    const t = setup(() => ok({ ...overviewJson, engine: e }));
+    await flush();
+    assert.doesNotMatch(t.$("cUpdated").textContent, /Not loaded|stale/);
+    assert.match(t.$("cEngine").textContent, /Not reported yet/);
+  }
+});
+
+test("ARN-47: a failed engine report read keeps the last verified report, flagged, and recovers", async () => {
+  const engine = { at: "2026-10-01T00:00:00Z", active: true, dryRun: true, agentsOnline: ["claude"],
+    budget: { month: "2026-10", spentUsd: 0, capUsd: 0, calls: 0, ledgerProblem: null },
+    counts: { planned: 1, worked: 0, reconciled: 0, waiting: 0, errors: 0 } };
+  const reported = { ...overviewJson, engine, engineStatus: "reported" };
+  const unavailable = { ...overviewJson, engine: null, engineStatus: "unavailable" };
+  // Healthy, then the report read fails, then it recovers.
+  const replies = [reported, unavailable, unavailable, { ...reported, engine: { ...engine, counts: { ...engine.counts, planned: 2 } } }];
+  let n = 0;
+  const t = setup(() => ok(replies[Math.min(n++, replies.length - 1)]));
+  await flush();
+  const good = t.$("cEngine").textContent;
+  assert.match(good, /1 planned/);
+  for (let i = 0; i < 2; i++) {
+    t.$("cRefresh").onclick(); await flush();
+    const shown = t.$("cEngine").textContent;
+    assert.match(shown, /Unavailable: the engine report could not be read.*last verified report/);
+    assert.match(shown, /1 planned/, "the last verified report is kept");
+    assert.ok(shown.endsWith(good), "kept with its original run time");
+    assert.doesNotMatch(shown, /Not reported yet/);
+    assert.doesNotMatch(t.$("cUpdated").textContent, /stale|Not loaded/, "the board itself is current");
+  }
+  t.$("cRefresh").onclick(); await flush();
+  assert.match(t.$("cEngine").textContent, /2 planned/);
+  assert.doesNotMatch(t.$("cEngine").textContent, /Unavailable/);
+  // Unavailable with nothing kept says so; absent is still "not reported yet".
+  const t1 = setup(() => ok(unavailable));
+  await flush();
+  assert.match(t1.$("cEngine").textContent, /^Engine statusUnavailable/);
+  assert.doesNotMatch(t1.$("cEngine").textContent, /Not reported yet/);
+  const t2 = setup(() => ok({ ...overviewJson, engine: null, engineStatus: "absent" }));
+  await flush();
+  assert.match(t2.$("cEngine").textContent, /Not reported yet/);
+  // engineStatus must agree with engine; a mismatch is an incomplete reply.
+  for (const bad of [{ ...overviewJson, engine: null, engineStatus: "reported" }, { ...overviewJson, engine, engineStatus: "unavailable" },
+    { ...overviewJson, engine, engineStatus: "absent" }, { ...overviewJson, engine: null, engineStatus: "down" }]) {
+    const t3 = setup(() => ok(bad));
+    await flush();
+    assert.match(t3.$("cOverviewMsg").textContent, /incomplete/);
+    assert.equal(t3.$("cEngine").textContent, "");
+  }
 });
 
 test("ARN-77 malformed successful intake preserves the draft and retry key", async () => {
