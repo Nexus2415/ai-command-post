@@ -124,8 +124,18 @@ export class LinearStore implements TaskStore {
   }
 
   async getLabels(issueId: string) {
-    const d = await this.gql(`query($id:String!){ issue(id:$id){ labels { nodes { name } } } }`, { id: issueId });
-    return (d.issue.labels?.nodes ?? []).map((l: any) => l.name as string);
+    const d = await this.gql(
+      `query($id:String!){ issue(id:$id){ labels(first:250) { nodes { name } pageInfo { hasNextPage } } } }`,
+      { id: issueId },
+    );
+    // Executor labels (executor:manual, executor:eve) are claims. Only an explicit, complete label list proves there
+    // are none: a missing issue or label list, non-array nodes, an unreadable name, or a list with more pages throws
+    // instead of reading as "no labels", which would turn a foreign claim into a free task.
+    const l = d?.issue?.labels;
+    if (!Array.isArray(l?.nodes) || l.pageInfo?.hasNextPage !== false || !l.nodes.every((n: any) => typeof n?.name === "string")) {
+      throw new Error(`issue ${issueId} returned an unreadable label list; refusing to guess its executor`);
+    }
+    return l.nodes.map((n: { name: string }) => n.name);
   }
 
   async getComments(issueId: string) {

@@ -111,6 +111,29 @@ test("provider HTTP errors become ProviderError", async () => {
   await assert.rejects(() => c.chat([{ role: "user", content: "q" }], { maxOutputTokens: 10 }), ProviderError);
 });
 
+test("ARN-45: getLabels refuses a label list it can't read in full; only an explicit empty list means no labels", async () => {
+  const read = (data: unknown) => new LinearStore("k", (async () => new Response(JSON.stringify({ data }), { status: 200 })) as unknown as typeof fetch).getLabels("i1");
+  const done = { hasNextPage: false };
+  assert.deepEqual(await read({ issue: { labels: { nodes: [], pageInfo: done } } }), []);
+  assert.deepEqual(await read({ issue: { labels: { nodes: [{ name: "executor:manual" }], pageInfo: done } } }), ["executor:manual"]);
+  const bad: [string, unknown][] = [
+    ["no issue", {}],
+    ["null issue", { issue: null }],
+    ["no labels", { issue: {} }],
+    ["null labels", { issue: { labels: null } }],
+    ["no nodes", { issue: { labels: { pageInfo: done } } }],
+    ["null nodes", { issue: { labels: { nodes: null, pageInfo: done } } }],
+    ["object nodes", { issue: { labels: { nodes: {}, pageInfo: done } } }],
+    ["no pageInfo", { issue: { labels: { nodes: [] } } }],
+    ["string hasNextPage", { issue: { labels: { nodes: [], pageInfo: { hasNextPage: "false" } } } }],
+    ["more labels than one page", { issue: { labels: { nodes: [{ name: "a" }], pageInfo: { hasNextPage: true } } } }],
+    ["a null label", { issue: { labels: { nodes: [null], pageInfo: done } } }],
+    ["a label without a name", { issue: { labels: { nodes: [{}], pageInfo: done } } }],
+    ["a non-string name", { issue: { labels: { nodes: [{ name: 7 }], pageInfo: done } } }],
+  ];
+  for (const [name, data] of bad) await assert.rejects(read(data), /refusing to guess its executor/, name);
+});
+
 test("LinearStore.getComments pages through every comment", async () => {
   const pages = [
     { nodes: [{ body: "late", createdAt: "2026-10-08T10:00:02Z" }], pageInfo: { hasNextPage: true, endCursor: "c1" } },

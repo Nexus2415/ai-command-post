@@ -236,6 +236,19 @@ test("ARN-45: an unreadable claim read leaves the task untouched: no claim, no s
   assert.equal(seen.length, 0, "no model call");
 });
 
+test("ARN-45: a label-only foreign claim with an unreadable fresh label read is left untouched", async () => {
+  const store = new MemoryStore();
+  // The board snapshot predates the executor:manual label, so only the fresh label read can see the claim.
+  const task = store.add({ title: "[ChatGPT] task Darius runs by hand", priority: 1 });
+  store.getLabels = async () => { throw new Error(`issue ${task.id} returned an unreadable label list; refusing to guess its executor`); };
+  const seen: ChatMessage[][] = [];
+  const r = await tick(deps(store, { chatgpt: scripted(["should never be asked"], seen) }));
+  assert.ok(r.errors.some((e) => e.includes("refusing to guess its executor")));
+  assert.deepEqual(store.comments.get(task.id) ?? [], [], "no claim or result comment");
+  assert.equal(store.issues.find((i) => i.id === task.id)!.stateType, "unstarted", "state unchanged");
+  assert.equal(seen.length, 0, "no model call");
+});
+
 test("claim order uses parsed time, not array order or string format", () => {
   const claims = claimsOn([], [
     { body: `${EXECUTOR_MARKER} acp:chatgpt` },
