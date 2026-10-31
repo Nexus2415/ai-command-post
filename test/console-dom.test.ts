@@ -20,6 +20,7 @@ class FakeEl {
   set innerHTML(_v: string) { throw new Error("innerHTML must not be used by the console"); }
   insertAdjacentHTML() { throw new Error("insertAdjacentHTML must not be used by the console"); }
   append(...n: any[]) { this.children.push(...n); }
+  prepend(...n: any[]) { this.children.unshift(...n); }
   appendChild(n: any) { this.children.push(n); return n; }
   replaceChildren(...n: any[]) { this._text = ""; this.children = n; }
   setAttribute(k: string, v: string) { this.attrs[k] = String(v); }
@@ -246,4 +247,42 @@ test("ARN-77 malformed successful intake preserves the draft and retry key", asy
     assert.match(t.$("cSendMsg").textContent, /received as ARN-77.*already filed earlier/);
     assert.equal(t.$("cText").value, "");
   }
+});
+
+test("closing a thread returns focus to the control that opened it, even after moving to a sub-task", async () => {
+  for (const nested of [false, true]) {
+    const t = setup((_p, init) => {
+      const b = JSON.parse(init.body);
+      if (b.action === "thread") return ok({ issue: { id: b.identifier, title: "T" + b.identifier }, comments: [], hasPreviousPage: false, fetchedAt: "2026-10-01T00:00:00Z",
+        lifecycle: b.identifier === "ARN-1" ? { stage: "claimed", label: "Claimed", detail: "", evidence: [{ kind: "issue", issue: "ARN-2" }] } : null });
+      return ok({ ...overviewJson, issues: [{ id: "ARN-1", lane: "active", title: "parent" }], lanes: { active: ["ARN-1"] } });
+    });
+    await flush();
+    const origin = t.$("cList").all().find((e: any) => e.className === "linkbtn");
+    origin.focus(); origin.click(); await flush();
+    assert.match(t.$("cDetailTitle").textContent, /ARN-1/);
+    if (nested) {
+      const sub = t.$("cDetailBody").all().find((e: any) => e.tagName === "BUTTON" && /Open sub-task ARN-2/.test(e.textContent));
+      sub.focus(); sub.click(); await flush();
+      assert.match(t.$("cDetailTitle").textContent, /ARN-2/);
+    }
+    t.$("cDetailClose").onclick({});
+    assert.equal(t.$("cDetail").hidden, true);
+    assert.equal(doc.activeElement, origin, nested ? "parent -> sub-task -> Close" : "parent -> Close");
+  }
+});
+
+test("closing a thread after its opener was redrawn away focuses the task list, even while Refresh is disabled", async () => {
+  const t = setup((_p, init) => {
+    const b = JSON.parse(init.body);
+    if (b.action === "thread") return ok({ issue: { id: b.identifier, title: "T" }, comments: [], hasPreviousPage: false, fetchedAt: "2026-10-01T00:00:00Z" });
+    return ok({ ...overviewJson, issues: [{ id: "ARN-1", lane: "active", title: "parent" }], lanes: { active: ["ARN-1"] } });
+  });
+  await flush();
+  const origin = t.$("cList").all().find((e: any) => e.className === "linkbtn");
+  origin.focus(); origin.click(); await flush();
+  doc.contains = (n: any) => n !== origin; // a list redraw detached the opener
+  t.$("cRefresh").disabled = true; // a reload is in flight
+  t.$("cDetailClose").onclick({});
+  assert.equal(doc.activeElement, t.$("cList"));
 });
