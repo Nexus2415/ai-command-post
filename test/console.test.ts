@@ -138,6 +138,22 @@ test("thread preserves comment text without claiming agent identity or unsafe UR
   assert.equal(result.body.comments[0].body, "<script>do not render as HTML</script>");
 });
 
+test("thread comment completeness must be a stated boolean: anything else is a failed read", async () => {
+  for (const pageInfo of [{}, { hasPreviousPage: null }, { hasPreviousPage: 0 }, { hasPreviousPage: "" },
+    { hasPreviousPage: "false" }, { hasPreviousPage: "true" }, { hasPreviousPage: [] }, null, undefined]) {
+    const { f } = mock({ data: { issue: { ...item(), comments: { nodes: [], pageInfo } } } });
+    const out: any = await handle(req({ action: "thread", identifier: "ARN-54" }), env, f);
+    assert.equal(out.status, 502, JSON.stringify(pageInfo));
+    assert.equal(out.body.comments, undefined);
+  }
+  for (const hasPreviousPage of [true, false]) {
+    const { f } = mock({ data: { issue: { ...item(), comments: { nodes: [], pageInfo: { hasPreviousPage } } } } });
+    const out: any = await handle(req({ action: "thread", identifier: "ARN-54" }), env, f);
+    assert.equal(out.status, 200);
+    assert.equal(out.body.hasPreviousPage, hasPreviousPage);
+  }
+});
+
 test("URL sanitizer rejects lookalikes, credentials, and non-HTTPS links", () => {
   for (const url of ["javascript:alert(1)", "https://linear.app.evil/x", "https://pw@linear.app/x", "http://linear.app/x"]) {
     assert.equal(safeLinearUrl(url), null);

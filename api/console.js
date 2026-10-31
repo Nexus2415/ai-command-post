@@ -92,7 +92,10 @@ export async function handle(req, env, f = fetch, now = () => new Date()) {
     }
     const data = await gql(env, f, THREAD, { identifier: body.identifier });
     if (!data.issue || !inScope(data.issue)) return error(404, "Issue not found in this operation.");
-    if (!Array.isArray(data.issue.comments?.nodes)) throw new Error("Invalid comments response");
+    // Whether older comments were left out must be stated, or "No comments yet" could hide a partial list.
+    if (!Array.isArray(data.issue.comments?.nodes) || typeof data.issue.comments.pageInfo?.hasPreviousPage !== "boolean") {
+      throw new Error("Invalid comments response");
+    }
     const issue = { ...projectIssue(data.issue), description: data.issue.description || "" };
     const children = Array.isArray(data.issue.children?.nodes) ? data.issue.children.nodes : null;
     return { status: 200, body: {
@@ -109,7 +112,7 @@ export async function handle(req, env, f = fetch, now = () => new Date()) {
         authorVerifiedAsAgent: false,
         createdAt: c.createdAt, updatedAt: c.updatedAt, url: safeLinearUrl(c.url),
       })),
-      hasPreviousPage: Boolean(data.issue.comments.pageInfo?.hasPreviousPage),
+      hasPreviousPage: data.issue.comments.pageInfo.hasPreviousPage,
       fetchedAt: now().toISOString(),
     } };
   } catch {
