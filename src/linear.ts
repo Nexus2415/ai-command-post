@@ -62,8 +62,13 @@ const ISSUE_FIELDS = `
 
 function toIssue(n: any): Issue {
   const kids = n.children;
-  const readable = Array.isArray(kids?.nodes) ? kids.nodes.filter((c: any) => typeof c?.id === "string" && c.id !== "") : [];
-  const complete = Array.isArray(kids?.nodes) && readable.length === kids.nodes.length && kids.pageInfo?.hasNextPage === false;
+  const readable: string[] = Array.isArray(kids?.nodes)
+    ? kids.nodes.filter((c: any) => typeof c?.id === "string" && c.id !== "").map((c: any) => c.id)
+    : [];
+  const unique = [...new Set(readable)];
+  // Complete only when every child has an id, no id repeats, and the list says it has no more pages. A repeated
+  // child would let one finished sub-task count twice, so it marks the list incomplete rather than being deduped.
+  const complete = Array.isArray(kids?.nodes) && unique.length === kids.nodes.length && kids.pageInfo?.hasNextPage === false;
   return {
     id: n.id,
     identifier: n.identifier,
@@ -76,7 +81,7 @@ function toIssue(n: any): Issue {
     labels: (n.labels?.nodes ?? []).map((l: any) => l.name),
     assignee: n.assignee?.name ?? null,
     parentId: n.parent?.id ?? null,
-    childIds: readable.map((c: any) => c.id),
+    childIds: unique,
     ...(complete ? {} : { childrenIncomplete: true as const }),
     createdAt: n.createdAt,
   };

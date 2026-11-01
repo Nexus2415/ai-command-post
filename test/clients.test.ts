@@ -77,9 +77,17 @@ test("ARN-45: a sub-task list without proof of completeness is flagged, never re
     ["more children on another page", { nodes: [{ id: "c1" }], pageInfo: { hasNextPage: true } }],
     ["a child without an id", { nodes: [{ id: "c1" }, {}], pageInfo: done }],
     ["a null child", { nodes: [null], pageInfo: done }],
+    ["the same child twice", { nodes: [{ id: "c1" }, { id: "c1" }], pageInfo: done }],
+    ["the same child three times", { nodes: [{ id: "c1" }, { id: "c1" }, { id: "c1" }], pageInfo: done }],
+    ["a repeat among distinct children", { nodes: [{ id: "c1" }, { id: "c2" }, { id: "c1" }], pageInfo: done }],
+    ["a repeat plus a child without an id", { nodes: [{ id: "c1" }, { id: "c1" }, {}], pageInfo: done }],
   ] as [string, unknown][]) {
     assert.equal((await read(children)).childrenIncomplete, true, name);
   }
+  // A repeated child is listed once, and the list stays flagged incomplete rather than deduped into "complete".
+  const dup = await read({ nodes: [{ id: "c1" }, { id: "c2" }, { id: "c1" }], pageInfo: done });
+  assert.deepEqual(dup.childIds, ["c1", "c2"]);
+  assert.equal(dup.childrenIncomplete, true);
 });
 
 test("ARN-45: listOpenAndRecent pages through the whole queue and refuses a partial one", async () => {
