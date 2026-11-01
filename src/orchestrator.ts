@@ -445,6 +445,12 @@ export async function tick(deps: Deps): Promise<TickReport> {
     const kids = cmd.childIds.map((id) => byId.get(id));
     if (kids.some((k) => !k)) continue; // a child fell outside the window; skip rather than guess
     const children = kids as Issue[];
+    // Each listed sub-task must point back at this command. A child that names another parent (or none) means
+    // the sub-task link can't be trusted, so the command is reported and never completed from it.
+    if (children.some((c) => c.parentId !== cmd.id)) {
+      report.errors.push(`${cmd.identifier}: a listed sub-task doesn't name this command as its parent, so it was not completed`);
+      continue;
+    }
     if (children.every((c) => DONE.includes(c.stateType))) {
       try {
         // Budget preflight must cover the full reconciliation prompt (command plus every child result).

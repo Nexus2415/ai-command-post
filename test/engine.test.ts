@@ -310,6 +310,38 @@ test("ARN-45: a command whose sub-task list wasn't read in full is neither compl
   assert.ok(r.errors.some((e) => e.startsWith(`${fresh.identifier}:`) && e.includes("couldn't be read in full")));
 });
 
+test("ARN-45: a command is completed only from sub-tasks that name it as their parent", async () => {
+  const run = async (setup: (store: MemoryStore, cmd: Issue) => void) => {
+    const store = new MemoryStore();
+    const cmd = store.add({ title: "[Claude] Tidy backlog", description: `**${COMMAND_MARKER}**`, stateType: "started" });
+    setup(store, cmd);
+    const seen: ChatMessage[][] = [];
+    const d = deps(store, { claude: scripted(["## Final\nDone."], seen) });
+    d.budget.rates.claude = freeRates.claude;
+    return { r: await tick(d), store, cmd, seen };
+  };
+  // Control: a real completed child is reconciled.
+  const ok = await run((store, cmd) => { store.add({ title: "[ChatGPT] A", parentId: cmd.id, stateType: "completed" }); });
+  assert.deepEqual(ok.r.reconciled, ["T-1"]);
+  const other = (store: MemoryStore) => store.add({ title: "[Claude] Other command", description: `**${COMMAND_MARKER}**`, stateType: "completed" });
+  const bad: [string, (store: MemoryStore, cmd: Issue) => void][] = [
+    ["a child with another parent", (store, cmd) => { const o = other(store); const k = store.add({ title: "[ChatGPT] X", parentId: o.id, stateType: "completed" }); cmd.childIds.push(k.id); }],
+    ["a child with no parent", (store, cmd) => { const k = store.add({ title: "[ChatGPT] X", stateType: "completed" }); cmd.childIds.push(k.id); }],
+    ["a real child plus a foreign one", (store, cmd) => {
+      store.add({ title: "[ChatGPT] A", parentId: cmd.id, stateType: "completed" });
+      const k = store.add({ title: "[ChatGPT] X", stateType: "completed" }); cmd.childIds.push(k.id);
+    }],
+  ];
+  for (const [name, setup] of bad) {
+    const { r, store, cmd, seen } = await run(setup);
+    assert.deepEqual(r.reconciled, [], name);
+    assert.equal(store.issues.find((i) => i.id === cmd.id)!.stateType, "started", `${name}: not marked completed`);
+    assert.deepEqual(store.comments.get(cmd.id) ?? [], [], `${name}: no summary written`);
+    assert.equal(seen.length, 0, `${name}: no model call`);
+    assert.ok(r.errors.some((e) => e.startsWith(`${cmd.identifier}:`) && e.includes("doesn't name this command as its parent")), name);
+  }
+});
+
 test("an offline lead falls back to the default lead, and its tasks go to agents that are online", async () => {
   const store = new MemoryStore();
   const cmd = store.add({ title: "[Claude] Research tools", description: `**${COMMAND_MARKER}**` });
