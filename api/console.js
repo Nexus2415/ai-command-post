@@ -47,15 +47,19 @@ const isCommentNode = c => !!c && typeof c.id === "string" && c.id !== "" && typ
   typeof c.createdAt === "string" && Number.isFinite(Date.parse(c.createdAt));
 
 async function readEngineStatus(env, f) {
-  const docs = [];
+  // Every page must say plainly whether another follows, and each promised page needs a fresh cursor;
+  // anything else means the list can't be trusted to be complete, so the report is unavailable.
+  const docs = [], seen = new Set();
   let after = null, more = true;
   for (let page = 0; page < STATUS_PAGES && more; page++) {
     const d = (await gql(env, f, STATUS, { project: PROJECT_ID, after })).project?.documents;
-    if (!Array.isArray(d?.nodes)) return engineStatusRead(null, false);
+    if (!Array.isArray(d?.nodes) || typeof d.pageInfo?.hasNextPage !== "boolean") return engineStatusRead(null, false);
     docs.push(...d.nodes);
-    more = d.pageInfo?.hasNextPage;
-    after = d.pageInfo?.endCursor;
-    if (more === true && (typeof after !== "string" || !after)) break;
+    more = d.pageInfo.hasNextPage;
+    if (!more) break;
+    after = d.pageInfo.endCursor;
+    if (typeof after !== "string" || !after || seen.has(after)) return engineStatusRead(null, false);
+    seen.add(after);
   }
   return engineStatusRead(docs, more);
 }

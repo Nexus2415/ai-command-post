@@ -166,6 +166,49 @@ test("ARN-47: the console follows status-document pages and never picks an older
   // A later page that fails or is malformed: unavailable, even though page 1 had a report.
   assert.equal((await run([{ nodes: [older], pageInfo: { hasNextPage: true, endCursor: "c1" } }, new Response("{}", { status: 500 })])).body.engineStatus, "unavailable");
   assert.equal((await run([{ nodes: [older], pageInfo: { hasNextPage: true, endCursor: "c1" } }, { nodes: "x", pageInfo: { hasNextPage: false } }])).body.engineStatus, "unavailable");
+  // An intermediate page that doesn't say "true" or "false" plainly: unavailable, even when the last page says false.
+  for (const flag of ["true", 1, null, undefined]) {
+    const r = await run([
+      { nodes: [older], pageInfo: { hasNextPage: true, endCursor: "c1" } },
+      { nodes: [], pageInfo: { hasNextPage: flag, endCursor: "c2" } },
+      { nodes: [newer], pageInfo: { hasNextPage: false, endCursor: null } },
+    ]);
+    assert.equal(r.body.engineStatus, "unavailable", String(flag));
+    assert.equal(r.body.engine, null);
+    assert.deepEqual(r.asked, [null, "c1"], "no read past the malformed page");
+  }
+  // The same check with no report anywhere: unavailable, never "absent".
+  assert.equal((await run([
+    { nodes: [], pageInfo: { hasNextPage: true, endCursor: "c1" } },
+    { nodes: [], pageInfo: { hasNextPage: "true", endCursor: "c2" } },
+    { nodes: [], pageInfo: { hasNextPage: false } },
+  ])).body.engineStatus, "unavailable");
+  // A repeated cursor would re-read a page and skip the rest: unavailable.
+  for (const cursors of [["c1", "c1"], ["c1", "c2", "c1"]]) {
+    const pages = cursors.map(c => ({ nodes: [older], pageInfo: { hasNextPage: true, endCursor: c } }));
+    pages.push({ nodes: [], pageInfo: { hasNextPage: false } } as any);
+    const r = await run(pages);
+    assert.equal(r.body.engineStatus, "unavailable", cursors.join(","));
+    assert.equal(r.body.engine, null);
+    assert.deepEqual(r.asked, [null, ...cursors.slice(0, -1)]);
+  }
+  for (const endCursor of ["", 7]) assert.equal((await run([{ nodes: [older], pageInfo: { hasNextPage: true, endCursor } }])).body.engineStatus, "unavailable");
+  // Controls: a valid three-page chain with distinct cursors reads as reported, or absent with no report.
+  const chain = await run([
+    { nodes: [], pageInfo: { hasNextPage: true, endCursor: "c1" } },
+    { nodes: [older], pageInfo: { hasNextPage: true, endCursor: "c2" } },
+    { nodes: [newer], pageInfo: { hasNextPage: false, endCursor: "c2" } },
+  ]);
+  assert.deepEqual(chain.asked, [null, "c1", "c2"]);
+  assert.equal(chain.body.engineStatus, "reported");
+  assert.equal(chain.body.engine.at, "2026-10-20T22:00:00.000Z");
+  const none = await run([
+    { nodes: [], pageInfo: { hasNextPage: true, endCursor: "c1" } },
+    { nodes: [], pageInfo: { hasNextPage: true, endCursor: "c2" } },
+    { nodes: [], pageInfo: { hasNextPage: false } },
+  ]);
+  assert.deepEqual(none.asked, [null, "c1", "c2"]);
+  assert.equal(none.body.engineStatus, "absent");
   // Still incomplete after the page cap: unavailable, with a bounded number of reads.
   const endless = Array.from({ length: 10 }, (_, i) => ({ nodes: [older], pageInfo: { hasNextPage: true, endCursor: "c" + (i + 1) } }));
   const capped = await run(endless);
