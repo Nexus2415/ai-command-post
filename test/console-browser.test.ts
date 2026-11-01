@@ -21,7 +21,7 @@ test('ARN-77 real console DOM: outage, stale refresh, thread recovery and malfor
     const $ = (id: string) => document.getElementById(id) as any;
     const check = (ok: any, message: string) => { if (!ok) throw new Error(message); };
     const flush = async () => { for (let i = 0; i < 5; i++) await new Promise(resolve => setTimeout(resolve, 0)); };
-    const fixture = { issues: [{ id: 'ARN-77', title: 'Synthetic command', lane: 'active' }], agents: [], fetchedAt: '2026-10-09T00:00:00Z' };
+    const fixture = { issues: [{ id: 'ARN-77', title: 'Synthetic command', lane: 'active' }], lanes: { active: ['ARN-77'] }, agents: [], fetchedAt: '2026-10-09T00:00:00Z', hasNextPage: false };
     let outage = true, threadFail = true, intake: any = {}, authenticate = true;
     const keys: string[] = [], writes: string[] = [];
     const originalSet = Storage.prototype.setItem;
@@ -36,7 +36,7 @@ test('ARN-77 real console DOM: outage, stale refresh, thread recovery and malfor
         keys.push(body.idempotencyKey);
         return new Response(typeof intake === 'string' ? intake : JSON.stringify(intake), { status: 200 });
       }
-      if (body.action === 'thread') return threadFail ? new Response('{"error":"thread unavailable"}', { status: 502 }) : new Response(JSON.stringify({ issue: { id: 'ARN-77', title: 'Recovered thread' }, comments: [] }));
+      if (body.action === 'thread') return threadFail ? new Response('{"error":"thread unavailable"}', { status: 502 }) : new Response(JSON.stringify({ issue: { id: 'ARN-77', title: 'Recovered thread' }, comments: [], hasPreviousPage: false, fetchedAt: '2026-10-09T00:00:00Z' }));
       return outage ? new Response('{"error":"synthetic outage"}', { status: 502 }) : new Response(JSON.stringify(fixture));
     };
     (0, eval)(consoleSource);

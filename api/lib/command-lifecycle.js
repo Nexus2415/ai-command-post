@@ -47,7 +47,8 @@ export function lifecycleOf(issue, comments, children, complete = {}) {
   }
   if (type === "completed") {
     if (!doneResult) return unknown("Marked done in Linear, but no recorded result was found.");
-    if (blockedResult && at(blockedResult) > at(doneResult)) return unknown("Marked done, but the latest recorded result says blocked.");
+    // Same instant counts as a contradiction: the order of two results stamped alike can't be known.
+    if (blockedResult && at(blockedResult) >= at(doneResult)) return unknown("Marked done, but the latest recorded result says blocked.");
     if (!Array.isArray(children) || complete.childrenComplete !== true) return unknown("Marked done, but its sub-tasks couldn't all be read.");
     if (complete.commentsComplete !== true) return unknown("Marked done, but older comments weren't loaded, so the result can't be confirmed.");
     const openKids = children.filter(c => !TERMINAL.includes(c?.state?.type));
