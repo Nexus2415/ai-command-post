@@ -43,10 +43,9 @@ test("console rejects malformed, large, wrong-method, write and scope-changing r
   assert.equal(calls.length, 0);
 });
 
-test("overview fixes scope, filters upstream leakage, labels workload honestly and is read-only", async () => {
+test("overview fixes scope, labels workload honestly and is read-only", async () => {
   const { f, calls } = mock({ data: { issues: {
-    nodes: [item(), item("ARN-49", "unstarted", { title: "[Claude] UI" }),
-      item("ARN-80", "started", { project: { id: "foreign" } })],
+    nodes: [item(), item("ARN-49", "unstarted", { title: "[Claude] UI" })],
     pageInfo: { hasNextPage: true },
   } } });
   const out = await handle(req(), env, f, () => new Date("2026-10-08T15:00:00Z"));
@@ -63,6 +62,37 @@ test("overview fixes scope, filters upstream leakage, labels workload honestly a
   assert.match(calls[0].query, /^query /);
   assert.equal(calls[0].url, "https://api.linear.app/graphql");
   assert.equal(JSON.stringify(body).includes("lin\""), false);
+});
+
+test("overview refuses the whole board when upstream returns any row outside the fixed team/project", async () => {
+  const foreignProject = item("ARN-80", "started", { project: { id: "foreign" } });
+  const foreignTeam = item("ARN-81", "started", { team: { id: "foreign" } });
+  const noProject = item("ARN-82", "started", { project: null });
+  const noTeam = item("ARN-83", "started", { team: undefined });
+  const emptyIds = item("ARN-84", "started", { team: {}, project: {} });
+  const cases = [
+    [foreignProject], [foreignTeam], [noProject], [noTeam], [emptyIds],
+    [item(), foreignProject], [item(), item("ARN-49", "unstarted"), noTeam], [noProject, item()],
+    [item(), null], [item(), "ARN-85"],
+  ];
+  for (const nodes of cases) {
+    const { f } = mock({ data: { issues: { nodes, pageInfo: { hasNextPage: false } } } });
+    const out = await handle(req(), env, f, () => new Date("2026-10-08T15:00:00Z"));
+    assert.equal(out.status, 502, JSON.stringify(nodes));
+    const body: any = out.body;
+    assert.equal(body.issues, undefined);
+    assert.equal(body.lanes, undefined);
+    assert.equal(typeof body.error, "string");
+    assert.equal(JSON.stringify(body).includes("foreign"), false);
+    assert.equal(JSON.stringify(body).includes("ARN-8"), false);
+  }
+  // Control: an all-in-scope board (including an empty one) is still served.
+  for (const nodes of [[item(), item("ARN-49", "unstarted")], []]) {
+    const { f } = mock({ data: { issues: { nodes, pageInfo: { hasNextPage: false } } } });
+    const out = await handle(req(), env, f, () => new Date("2026-10-08T15:00:00Z"));
+    assert.equal(out.status, 200);
+    assert.equal((out.body as any).issues.length, nodes.length);
+  }
 });
 
 test("overview completeness must be a stated boolean: anything else is a failed read, never a complete board", async () => {
