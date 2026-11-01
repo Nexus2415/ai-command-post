@@ -110,15 +110,47 @@ test("ARN-45: listOpenAndRecent pages through the whole queue and refuses a part
     ["no issues connection", [undefined]],
     ["more without a cursor", [{ nodes: one, pageInfo: { hasNextPage: true, endCursor: null } }]],
     ["more with an empty cursor", [{ nodes: one, pageInfo: { hasNextPage: true, endCursor: "" } }]],
-    ["a cursor that doesn't advance", [{ nodes: one, pageInfo: { hasNextPage: true, endCursor: "c1" } }, { nodes: one, pageInfo: { hasNextPage: true, endCursor: "c1" } }]],
+    ["a cursor that doesn't advance", [{ nodes: one, pageInfo: { hasNextPage: true, endCursor: "c1" } }, { nodes: [issue("b")], pageInfo: { hasNextPage: true, endCursor: "c1" } }]],
     ["a malformed later page", [page1, { nodes: [issue("i251")] }]],
-    ["more pages than ACP reads", Array.from({ length: 9 }, (_, n) => ({ nodes: one, pageInfo: { hasNextPage: true, endCursor: `c${n + 1}` } }))],
+    ["more pages than ACP reads", Array.from({ length: 9 }, (_, n) => ({ nodes: [issue(`p${n}`)], pageInfo: { hasNextPage: true, endCursor: `c${n + 1}` } }))],
   ];
   for (const [name, pages] of bad) {
     const r = run(pages);
     await assert.rejects(r.result, /refusing to act on a partial queue/, name);
     assert.ok(r.afters.length <= pages.length, `${name}: no reads past the bad page`);
   }
+});
+
+test("ARN-45: listOpenAndRecent refuses a queue with a repeated or unreadable issue id, never picks a copy", async () => {
+  const issue = (id: unknown, type = "unstarted", identifier: unknown = id) => ({ id, identifier, title: "t", url: "u", createdAt: "2026-10-07T00:00:00Z", state: { type, name: type }, labels: { nodes: [] }, children: { nodes: [], pageInfo: { hasNextPage: false } } });
+  const run = (pages: unknown[]) => {
+    let reads = 0;
+    const f = (async () => new Response(JSON.stringify({ data: { issues: pages[reads++] } }), { status: 200 })) as unknown as typeof fetch;
+    return { result: new LinearStore("k", f).listOpenAndRecent("ARN"), reads: () => reads };
+  };
+  const last = (nodes: unknown[]) => ({ nodes, pageInfo: { hasNextPage: false, endCursor: null } });
+  const more = (nodes: unknown[], c: string) => ({ nodes, pageInfo: { hasNextPage: true, endCursor: c } });
+  // Control: distinct ids on one page and across two pages are all read.
+  assert.deepEqual((await run([last([issue("a"), issue("b")])]).result).map(i => i.id), ["a", "b"]);
+  assert.deepEqual((await run([more([issue("a")], "c1"), last([issue("b")])]).result).map(i => i.id), ["a", "b"]);
+  const dupes: [string, unknown[]][] = [
+    ["same id twice on one page", [last([issue("a"), issue("a")])]],
+    ["same id on two pages", [more([issue("a")], "c1"), last([issue("a")])]],
+    ["conflicting snapshots of one id", [more([issue("a", "unstarted")], "c1"), last([issue("a", "started")])]],
+  ];
+  for (const [name, pages] of dupes) await assert.rejects(run(pages).result, /more than once; refusing to act on an inconsistent queue/, name);
+  const unreadable: [string, unknown][] = [
+    ["missing id", issue(undefined, "unstarted", "ARN-1")], ["empty id", issue("", "unstarted", "ARN-1")],
+    ["numeric id", issue(7, "unstarted", "ARN-1")], ["missing identifier", { ...issue("a"), identifier: undefined }],
+    ["empty identifier", issue("a", "unstarted", "")],
+  ];
+  for (const [name, node] of unreadable) {
+    await assert.rejects(run([last([issue("ok"), node])]).result, /without a readable id; refusing to act on an inconsistent queue/, name);
+  }
+  // A bad first page stops before any later page is read.
+  const r = run([more([issue("a"), issue("a")], "c1"), last([issue("b")])]);
+  await assert.rejects(r.result);
+  assert.equal(r.reads(), 1);
 });
 
 test("LinearStore surfaces GraphQL errors", async () => {

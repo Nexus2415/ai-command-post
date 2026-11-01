@@ -125,6 +125,7 @@ export class LinearStore implements TaskStore {
     // all be visible before it can be completed. Only an explicit hasNextPage === false ends the list; anything less
     // throws, so the engine never acts on a queue it only partly read.
     const out: Issue[] = [];
+    const seen = new Set<string>();
     let after: string | null = null;
     for (let page = 0; page < 8; page++) {
       const d: any = await this.gql(
@@ -139,7 +140,18 @@ export class LinearStore implements TaskStore {
       if (!Array.isArray(c?.nodes) || typeof c.pageInfo?.hasNextPage !== "boolean" || !c.nodes.every((n: any) => n && typeof n === "object")) {
         throw new Error(`team ${teamKey} returned an unreadable issue page; refusing to act on a partial queue`);
       }
-      out.push(...c.nodes.map(toIssue));
+      for (const n of c.nodes) {
+        // Each task must be identifiable and appear once. A repeated id (on one page or across pages) means the
+        // snapshot is inconsistent, and acting on it could plan one command twice; refuse rather than pick a copy.
+        if (typeof n.id !== "string" || !n.id || typeof n.identifier !== "string" || !n.identifier) {
+          throw new Error(`team ${teamKey} returned an issue without a readable id; refusing to act on an inconsistent queue`);
+        }
+        if (seen.has(n.id)) {
+          throw new Error(`team ${teamKey} returned issue ${n.identifier} more than once; refusing to act on an inconsistent queue`);
+        }
+        seen.add(n.id);
+        out.push(toIssue(n));
+      }
       if (!c.pageInfo.hasNextPage) return out;
       const next = c.pageInfo.endCursor;
       if (typeof next !== "string" || !next || next === after) {
