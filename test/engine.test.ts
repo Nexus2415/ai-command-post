@@ -8,7 +8,7 @@ import { Budget, DEFAULT_RATES } from "../src/budget.ts";
 import { loadConfig, type AgentKey } from "../src/config.ts";
 import { extractJson } from "../src/json.ts";
 import type { Issue, StateType, TaskStore } from "../src/linear.ts";
-import { COMMAND_MARKER, RECONCILED_MARKER, RESULT_MARKER, tick, type Deps } from "../src/orchestrator.ts";
+import { COMMAND_MARKER, latestResult, RECONCILED_MARKER, RESULT_MARKER, tick, type Deps } from "../src/orchestrator.ts";
 import { decide } from "../src/policy.ts";
 import { ProviderError, type ChatMessage, type ModelClient } from "../src/providers.ts";
 import { runTool } from "../src/tools.ts";
@@ -534,4 +534,63 @@ test("transient provider errors are retried a bounded number of times, then bloc
   for (let i = 0; i < 6; i++) await tick(d);
   assert.equal(calls, 4);
   assert.equal(store.issues.find((i) => i.id === task.id)!.stateType, "canceled");
+});
+
+test("ARN-45: a sub-task's result is the newest real result header by time, never array order or a quote", () => {
+  const done = { body: `${RESULT_MARKER} (ChatGPT, done)\n\nFirst pass.`, createdAt: "2026-11-02T10:00:00.000Z" };
+  const blocked = { body: `${RESULT_MARKER} (ChatGPT, blocked)\n\nSource went away.`, createdAt: "2026-11-02T10:05:00.000Z" };
+  const chat = { body: "Thanks, looking at this.", createdAt: "2026-11-02T10:10:00.000Z" };
+  const perms = [[done, blocked, chat], [done, chat, blocked], [blocked, done, chat], [blocked, chat, done], [chat, done, blocked], [chat, blocked, done]];
+  for (const p of perms) assert.equal(latestResult(p, "T-9"), blocked.body, "the later blocked result wins in every order");
+  // A later ordinary comment quoting or mentioning a result header is not a result.
+  const quotes = [
+    `> ${RESULT_MARKER} (Claude, done)\n> All good.`,
+    `Copying the earlier note:\n${RESULT_MARKER} (Claude, done)`,
+    `${RESULT_MARKER}s look fine to me`,
+    `${RESULT_MARKER} (Claude, done) and more on the same line`,
+  ].map((body) => ({ body, createdAt: "2026-11-02T11:00:00.000Z" }));
+  assert.equal(latestResult([blocked, ...quotes], "T-9"), blocked.body);
+  assert.equal(latestResult(quotes, "T-9"), undefined, "a quote-only thread has no result");
+  assert.equal(latestResult([], "T-9"), undefined);
+  // A result with no readable time can't be placed, and two different results at the same newest time conflict.
+  for (const createdAt of [undefined, "", "not a date"]) {
+    assert.throws(() => latestResult([done, { body: blocked.body, createdAt }], "T-9"), /T-9 has a result without a readable time/);
+  }
+  const sameTime = { body: `${RESULT_MARKER} (Claude, done)\n\nOther view.`, createdAt: blocked.createdAt };
+  assert.throws(() => latestResult([done, blocked, sameTime], "T-9"), /T-9 has two different results posted at the same time/);
+  assert.throws(() => latestResult([sameTime, blocked, done], "T-9"), /two different results/);
+  // An older tie doesn't matter once a newer result exists; an identical repeat isn't a conflict.
+  const later = { body: `${RESULT_MARKER} (Claude, done)\n\nFinal.`, createdAt: "2026-11-02T12:00:00.000Z" };
+  assert.equal(latestResult([blocked, sameTime, later], "T-9"), later.body);
+  assert.equal(latestResult([blocked, { ...blocked }], "T-9"), blocked.body);
+});
+
+test("ARN-45: the lead summarizes each sub-task from its newest result; an ambiguous result stops the summary", async () => {
+  const run = async (comments: { body: string; createdAt: string }[]) => {
+    const store = new MemoryStore();
+    const cmd = store.add({ title: "[Claude] Tidy backlog", description: `**${COMMAND_MARKER}**`, stateType: "started" });
+    const kid = store.add({ title: "[ChatGPT] A", parentId: cmd.id, stateType: "canceled" });
+    store.comments.set(kid.id, comments);
+    const seen: ChatMessage[][] = [];
+    const d = deps(store, { claude: scripted(["## Final\nDone."], seen) });
+    d.budget.rates.claude = freeRates.claude;
+    return { r: await tick(d), store, cmd, seen };
+  };
+  const done = { body: `${RESULT_MARKER} (ChatGPT, done)\n\nSTALE-DONE`, createdAt: "2026-11-02T10:00:00.000Z" };
+  const blocked = { body: `${RESULT_MARKER} (ChatGPT, blocked)\n\nLATEST-BLOCKED`, createdAt: "2026-11-02T10:05:00.000Z" };
+  const quote = { body: `> ${RESULT_MARKER} (ChatGPT, done)\n> QUOTED-DONE`, createdAt: "2026-11-02T10:10:00.000Z" };
+  // Newest-first page order: the stale done result and the quote come last in the array but must not be chosen.
+  const ok = await run([quote, blocked, done]);
+  assert.deepEqual(ok.r.reconciled, ["T-1"]);
+  const prompt = ok.seen[0]!.map((m) => m.content).join("\n");
+  assert.ok(prompt.includes("LATEST-BLOCKED"), "the newest real result is summarized");
+  assert.ok(!prompt.includes("STALE-DONE") && !prompt.includes("QUOTED-DONE"), "stale or quoted results are not");
+  // Two different results at the same time: no model call, no summary, command left open, error reported.
+  const clash = { body: `${RESULT_MARKER} (ChatGPT, done)\n\nCLASH`, createdAt: blocked.createdAt };
+  const bad = await run([done, blocked, clash]);
+  assert.deepEqual(bad.r.reconciled, []);
+  assert.equal(bad.seen.length, 0, "no model call");
+  assert.deepEqual(bad.store.comments.get(bad.cmd.id) ?? [], [], "no summary written");
+  assert.equal(bad.store.issues.find((i) => i.id === bad.cmd.id)!.stateType, "started");
+  assert.ok(bad.r.errors.some((e) => e.startsWith("T-1:") && e.includes("two different results")));
 });

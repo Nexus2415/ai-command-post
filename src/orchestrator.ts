@@ -335,13 +335,37 @@ export async function work(d: Deps, task: Issue, agent: AgentKey, report: TickRe
   report.worked.push(`${task.identifier} hit step limit`);
 }
 
+/** A result comment's first line, exactly as the engine writes it: "## Result (Name, done|blocked)". */
+const RESULT_LINE = new RegExp(`^${RESULT_MARKER} \\([^,()\\n]+, (?:done|blocked)\\)[ \\t\\r]*$`);
+
+/**
+ * The newest result posted on a sub-task. Only a comment whose first line is a result header counts, so a quoted
+ * or mentioned "## Result" never stands in for one. Linear doesn't guarantee comment order, so the newest is chosen
+ * by parsed creation time; a result without a readable time, or two different results at the same newest time,
+ * makes the outcome unknowable and throws rather than picking one.
+ */
+export function latestResult(comments: { body: string; createdAt?: string }[], where: string): string | undefined {
+  let best: { at: number; body: string } | undefined;
+  let conflict = false;
+  for (const c of comments) {
+    if (typeof c?.body !== "string" || !RESULT_LINE.test(c.body.split("\n", 1)[0]!)) continue;
+    const at = typeof c.createdAt === "string" ? Date.parse(c.createdAt) : NaN;
+    if (Number.isNaN(at)) throw new Error(`${where} has a result without a readable time, so its latest result can't be chosen`);
+    if (!best || at > best.at) {
+      best = { at, body: c.body };
+      conflict = false;
+    } else if (at === best.at && c.body !== best.body) conflict = true;
+  }
+  if (conflict) throw new Error(`${where} has two different results posted at the same time, so its outcome is unknown`);
+  return best?.body;
+}
+
 /** When every sub-task is done, the lead writes one summary on the command and closes it. */
 async function childResults(d: Deps, children: Issue[]): Promise<string[]> {
   const results: string[] = [];
   for (const c of children) {
-    const cs = await d.store.getComments(c.id);
-    const last = [...cs].reverse().find((x) => x.body.includes(RESULT_MARKER));
-    results.push(`### ${c.identifier} ${c.title}\n${last?.body ?? "(no result posted)"}`);
+    const last = latestResult(await d.store.getComments(c.id), c.identifier);
+    results.push(`### ${c.identifier} ${c.title}\n${last ?? "(no result posted)"}`);
   }
   return results;
 }

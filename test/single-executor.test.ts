@@ -349,7 +349,7 @@ test("reconciliation budget preflight counts child results, so a too-large promp
   const store = new MemoryStore();
   const running = store.add({ title: "[Claude] Running", description: COMMAND_MARKER, stateType: "started" });
   const child = store.add({ title: "[Claude] a", parentId: running.id, stateType: "completed" });
-  await store.comment(child.id, `${RESULT_MARKER}\n${"x".repeat(200_000)}`);
+  await store.comment(child.id, `${RESULT_MARKER} (Claude, done)\n${"x".repeat(200_000)}`);
   const seen: ChatMessage[][] = [];
   await tick(deps(store, { claude: scripted(["summary"], seen) }, { ACP_MONTHLY_BUDGET_USD: "0.05" }));
   assert.equal(seen.length, 0, "no model call");
