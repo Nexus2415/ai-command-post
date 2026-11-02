@@ -710,3 +710,40 @@ test("ARN-45: a plan cut short is never re-planned and its sub-tasks don't run u
   await tick(d);
   assert.equal(worker.length, 1);
 });
+
+test("ARN-45: a sub-task runs only when its parent is readable and, for a command, In Progress and names it", async () => {
+  const run = async (setup: (store: MemoryStore) => Issue) => {
+    const store = new MemoryStore();
+    const task = setup(store);
+    const worker: ChatMessage[][] = [];
+    const r = await tick(deps(store, { chatgpt: scripted([JSON.stringify({ final: "ok", status: "done" })], worker) }));
+    return { r, store, task, worker };
+  };
+  const command = (store: MemoryStore, p: Partial<Issue> = {}) =>
+    store.add({ title: "[Claude] Two steps", description: `**${COMMAND_MARKER}**`, stateType: "started", ...p });
+  const waits: [string, (store: MemoryStore) => Issue, string][] = [
+    ["a parent missing from the run's list", (store) => { const t = store.add({ title: "[ChatGPT] Step" }); t.parentId = "gone"; return t; }, "its parent isn't in this run's issue list"],
+    ["an In Progress command whose sub-task list wasn't read in full", (store) => {
+      const c = command(store, { childrenIncomplete: true });
+      return store.add({ title: "[ChatGPT] Step", parentId: c.id });
+    }, "sub-task list doesn't confirm it"],
+    ["an In Progress command that doesn't list the task", (store) => {
+      const c = command(store);
+      const t = store.add({ title: "[ChatGPT] Step", parentId: c.id });
+      c.childIds = c.childIds.filter((id) => id !== t.id);
+      return t;
+    }, "sub-task list doesn't confirm it"],
+  ];
+  for (const [name, setup, why] of waits) {
+    const { r, store, task, worker } = await run(setup);
+    assert.equal(worker.length, 0, `${name}: no model call`);
+    assert.equal(store.issues.find((i) => i.id === task.id)!.stateType, "unstarted", `${name}: task untouched`);
+    assert.deepEqual(store.comments.get(task.id) ?? [], [], `${name}: no claim written`);
+    assert.ok(r.waiting.some((w) => w.startsWith(`${task.identifier}:`) && w.includes(why)), name);
+  }
+  // Controls: a task under an In Progress command that lists it runs, and so does one under an ordinary parent.
+  const ok = await run((store) => store.add({ title: "[ChatGPT] Step", parentId: command(store).id }));
+  assert.equal(ok.worker.length, 1);
+  const plain = await run((store) => store.add({ title: "[ChatGPT] Step", parentId: store.add({ title: "Ordinary parent" }).id }));
+  assert.equal(plain.worker.length, 1);
+});

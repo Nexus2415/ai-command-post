@@ -455,11 +455,24 @@ export async function tick(deps: Deps): Promise<TickReport> {
   const busy = new Set<AgentKey>();
   const ordered = [...tasks].sort((a, b) => (a.priority || 9) - (b.priority || 9) || a.createdAt.localeCompare(b.createdAt));
   for (const t of ordered) {
-    // A sub-task runs only once its command finished planning (In Progress); see partialCommands above.
-    const parent = t.parentId ? byId.get(t.parentId) : undefined;
-    if (parent && isCommand(parent) && parent.stateType !== "started") {
-      report.waiting.push(`${t.identifier}: its command ${parent.identifier} isn't In Progress, so it waits`);
-      continue;
+    // A sub-task runs only when its lineage checks out: the parent is in this run's list (else it can't be told
+    // whether the parent is a command), and a command parent is In Progress (planning finished; see
+    // partialCommands above) with a fully read sub-task list that names this task.
+    if (t.parentId) {
+      const parent = byId.get(t.parentId);
+      const why = !parent
+        ? "its parent isn't in this run's issue list, so its lineage can't be checked"
+        : !isCommand(parent)
+          ? null
+          : parent.stateType !== "started"
+            ? `its command ${parent.identifier} isn't In Progress`
+            : parent.childrenIncomplete || !parent.childIds.includes(t.id)
+              ? `its command ${parent.identifier}'s sub-task list doesn't confirm it`
+              : null;
+      if (why) {
+        report.waiting.push(`${t.identifier}: ${why}, so it waits`);
+        continue;
+      }
     }
     const agent = agentFor({ title: t.title, labels: t.labels, assignee: t.assignee });
     // No owner, or an owner that isn't connected: leave it. An offline preferred agent never silently becomes
