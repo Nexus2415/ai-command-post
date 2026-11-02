@@ -55,7 +55,7 @@ test("LinearStore maps GraphQL issue nodes", async () => {
 
 test("ARN-45: a sub-task list without proof of completeness is flagged, never read as complete", async () => {
   const read = async (children: unknown) => {
-    const node = { id: "u1", identifier: "ARN-20", title: "t", url: "u", createdAt: "2026-10-07T00:00:00Z", state: { type: "started", name: "In Progress" }, labels: { nodes: [] }, children };
+    const node = { id: "u1", identifier: "ARN-20", title: "t", url: "u", createdAt: "2026-10-07T00:00:00Z", parent: null, state: { type: "started", name: "In Progress" }, labels: { nodes: [] }, children };
     const [i] = await new LinearStore("k", fakeFetch({ data: { issues: { nodes: [node], pageInfo: { hasNextPage: false, endCursor: null } } } })).listOpenAndRecent("ARN");
     return i!;
   };
@@ -91,7 +91,7 @@ test("ARN-45: a sub-task list without proof of completeness is flagged, never re
 });
 
 test("ARN-45: listOpenAndRecent pages through the whole queue and refuses a partial one", async () => {
-  const issue = (id: string) => ({ id, identifier: id, title: "t", url: "u", createdAt: "2026-10-07T00:00:00Z", state: { type: "unstarted", name: "Todo" }, labels: { nodes: [] }, children: { nodes: [], pageInfo: { hasNextPage: false } } });
+  const issue = (id: string) => ({ id, identifier: id, title: "t", url: "u", createdAt: "2026-10-07T00:00:00Z", parent: null, state: { type: "unstarted", name: "Todo" }, labels: { nodes: [] }, children: { nodes: [], pageInfo: { hasNextPage: false } } });
   const run = (pages: unknown[]) => {
     const afters: unknown[] = [];
     const f = (async (_u: string, init: { body: string }) => {
@@ -153,7 +153,7 @@ test("ARN-45: listOpenAndRecent pages through the whole queue and refuses a part
 });
 
 test("ARN-45: listOpenAndRecent refuses a queue with a repeated or unreadable issue id, never picks a copy", async () => {
-  const issue = (id: unknown, type = "unstarted", identifier: unknown = id) => ({ id, identifier, title: "t", url: "u", createdAt: "2026-10-07T00:00:00Z", state: { type, name: type }, labels: { nodes: [] }, children: { nodes: [], pageInfo: { hasNextPage: false } } });
+  const issue = (id: unknown, type = "unstarted", identifier: unknown = id) => ({ id, identifier, title: "t", url: "u", createdAt: "2026-10-07T00:00:00Z", parent: null, state: { type, name: type }, labels: { nodes: [] }, children: { nodes: [], pageInfo: { hasNextPage: false } } });
   const run = (pages: unknown[]) => {
     let reads = 0;
     const f = (async () => new Response(JSON.stringify({ data: { issues: pages[reads++] } }), { status: 200 })) as unknown as typeof fetch;
@@ -397,5 +397,23 @@ test("ARN-45: a comment, state change or new issue counts only when Linear confi
   // A confirmed create that returns no usable issue is unconfirmed too.
   for (const issue of [undefined, null, {}, { ...node, id: "" }]) {
     await assert.rejects(store(() => ({ issueCreate: { success: true, issue } })).createIssue({ teamKey: "ARN", title: "t", description: "d" }), /did not return the new issue/);
+  }
+});
+
+test("ARN-45: listOpenAndRecent refuses a queue with an unreadable parent link; only an explicit null is a root", async () => {
+  const issue = (id: string, extra: Record<string, unknown>) => ({ id, identifier: id, title: "t", url: "u", createdAt: "2026-10-07T00:00:00Z", state: { type: "unstarted", name: "Todo" }, labels: { nodes: [] }, children: { nodes: [], pageInfo: { hasNextPage: false } }, ...extra });
+  const read = (nodes: unknown[]) => {
+    const f = (async () => new Response(JSON.stringify({ data: { issues: { nodes, pageInfo: { hasNextPage: false, endCursor: null } } } }), { status: 200 })) as unknown as typeof fetch;
+    return new LinearStore("k", f).listOpenAndRecent("ARN");
+  };
+  // Controls: an explicit null parent is a root task; a parent with an id is a sub-task of it.
+  const ok = await read([issue("a", { parent: null }), issue("b", { parent: { id: "a" } })]);
+  assert.deepEqual(ok.map((i) => [i.id, i.parentId]), [["a", null], ["b", "a"]]);
+  const bad: [string, Record<string, unknown>][] = [
+    ["missing parent field", {}], ["parent without id", { parent: {} }], ["null parent id", { parent: { id: null } }],
+    ["empty parent id", { parent: { id: "" } }], ["numeric parent id", { parent: { id: 7 } }], ["string parent", { parent: "a" }],
+  ];
+  for (const [name, extra] of bad) {
+    await assert.rejects(read([issue("ok", { parent: null }), issue("x", extra)]), /issue x without a readable parent link; refusing to act on an inconsistent queue/, name);
   }
 });

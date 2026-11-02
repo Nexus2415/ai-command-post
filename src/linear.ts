@@ -168,6 +168,12 @@ export class LinearStore implements TaskStore {
         if (typeof n.state?.type !== "string" || !STATE_TYPES.includes(n.state.type)) {
           throw new Error(`team ${teamKey} returned issue ${n.identifier} without a readable state; refusing to act on an inconsistent queue`);
         }
+        // The parent link decides whether a task is a sub-task (and must wait for its command) or a root task. Only an
+        // explicit null is a root; a missing or id-less parent would silently turn a sub-task into a root task.
+        const p = n.parent;
+        if (p !== null && !(p && typeof p === "object" && typeof p.id === "string" && p.id)) {
+          throw new Error(`team ${teamKey} returned issue ${n.identifier} without a readable parent link; refusing to act on an inconsistent queue`);
+        }
         if (seen.has(n.id)) {
           throw new Error(`team ${teamKey} returned issue ${n.identifier} more than once; refusing to act on an inconsistent queue`);
         }
