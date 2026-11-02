@@ -8,7 +8,7 @@ import { Budget, DEFAULT_RATES } from "../src/budget.ts";
 import { loadConfig, type AgentKey } from "../src/config.ts";
 import { extractJson } from "../src/json.ts";
 import type { Issue, StateType, TaskStore } from "../src/linear.ts";
-import { COMMAND_MARKER, latestResult, RECONCILED_MARKER, RESULT_MARKER, tick, type Deps } from "../src/orchestrator.ts";
+import { COMMAND_MARKER, isSummary, latestResult, RECONCILED_MARKER, RESULT_MARKER, tick, type Deps } from "../src/orchestrator.ts";
 import { decide } from "../src/policy.ts";
 import { ProviderError, type ChatMessage, type ModelClient } from "../src/providers.ts";
 import { runTool } from "../src/tools.ts";
@@ -746,4 +746,61 @@ test("ARN-45: a sub-task runs only when its parent is readable and, for a comman
   assert.equal(ok.worker.length, 1);
   const plain = await run((store) => store.add({ title: "[ChatGPT] Step", parentId: store.add({ title: "Ordinary parent" }).id }));
   assert.equal(plain.worker.length, 1);
+});
+
+test("ARN-45: only a real summary header stops reconciliation, and a posted summary is never paid for twice", async () => {
+  const fakes = [
+    `> ${RECONCILED_MARKER} (Claude)\n> quoted`,
+    `The ${RECONCILED_MARKER} (Claude) will be posted later.`,
+    "```\n" + `${RECONCILED_MARKER} (Claude)\n` + "```",
+    `Thanks.\n${RECONCILED_MARKER} (Claude)`,
+    `${RECONCILED_MARKER}`,
+    `${RECONCILED_MARKER} (Claude) and more`,
+  ];
+  assert.ok(isSummary(`${RECONCILED_MARKER} (Claude)\n\nAll done.`));
+  for (const f of fakes) assert.equal(isSummary(f), false, f);
+  class Store extends MemoryStore {
+    failClose = false;
+    override async setState(id: string, team: string, type: StateType) {
+      if (this.failClose && type === "completed") { this.failClose = false; throw new Error("Linear did not confirm the completed state"); }
+      return super.setState(id, team, type);
+    }
+  }
+  const setup = (cmdComments: { body: string; createdAt: string }[]) => {
+    const store = new Store();
+    const cmd = store.add({ title: "[Claude] Tidy backlog", description: `**${COMMAND_MARKER}**`, stateType: "started" });
+    addDone(store, { title: "[ChatGPT] A", parentId: cmd.id });
+    store.comments.set(cmd.id, cmdComments);
+    const seen: ChatMessage[][] = [];
+    const d = deps(store, { claude: scripted(["## Final\nDone.", "## Final\nAgain."], seen) });
+    d.budget.rates.claude = freeRates.claude;
+    return { store, cmd, seen, d };
+  };
+  const summaries = (store: MemoryStore, id: string) => (store.comments.get(id) ?? []).filter((c) => isSummary(c.body)).length;
+  // A quote, mention, code sample or later line naming the marker doesn't count: the command is still summarized.
+  for (const body of fakes) {
+    const { store, cmd, seen, d } = setup([{ body, createdAt: "2026-11-02T10:00:00.000Z" }]);
+    const r = await tick(d);
+    assert.equal(seen.length, 1, `${body}: summarized`);
+    assert.deepEqual(r.reconciled, ["T-1"], body);
+    assert.equal(store.issues.find((i) => i.id === cmd.id)!.stateType, "completed", body);
+    assert.equal(summaries(store, cmd.id), 1, body);
+  }
+  // A summary already posted (an earlier run's state change failed) closes the command without another model call.
+  const done = setup([{ body: `${RECONCILED_MARKER} (Claude)\n\nEarlier.`, createdAt: "2026-11-02T10:00:00.000Z" }]);
+  const r = await tick(done.d);
+  assert.equal(done.seen.length, 0, "no second paid summary");
+  assert.deepEqual(r.reconciled, ["T-1"]);
+  assert.equal(done.store.issues.find((i) => i.id === done.cmd.id)!.stateType, "completed");
+  // Restart after a failed close: the first run posts the summary and fails to close; the next closes it, unpaid.
+  const flaky = setup([]);
+  flaky.store.failClose = true;
+  const r1 = await tick(flaky.d);
+  assert.ok(r1.errors.some((e) => e.startsWith("T-1:") && e.includes("completed state")));
+  assert.equal(flaky.store.issues.find((i) => i.id === flaky.cmd.id)!.stateType, "started");
+  const r2 = await tick(flaky.d);
+  assert.equal(flaky.seen.length, 1, "summarized once across both runs");
+  assert.equal(summaries(flaky.store, flaky.cmd.id), 1, "one summary comment");
+  assert.deepEqual(r2.reconciled, ["T-1"]);
+  assert.equal(flaky.store.issues.find((i) => i.id === flaky.cmd.id)!.stateType, "completed");
 });

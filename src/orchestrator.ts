@@ -382,9 +382,23 @@ async function childResults(d: Deps, children: Issue[]): Promise<string[]> {
   return results;
 }
 
+/** A summary comment's first line, exactly as the engine writes it: "## Command summary (Name)". */
+const SUMMARY_LINE = new RegExp(`^${RECONCILED_MARKER} \\([^()\\n]+\\)[ \\t\\r]*$`);
+export function isSummary(body: unknown): boolean {
+  return typeof body === "string" && SUMMARY_LINE.test(body.split("\n", 1)[0]!);
+}
+
 async function reconcile(d: Deps, cmd: Issue, lead: AgentKey, children: Issue[], results: string[], report: TickReport): Promise<void> {
+  // Never report a command as completed when none of its sub-tasks actually completed (all canceled/blocked).
+  const anyDone = children.some((c) => c.stateType === "completed");
+  const close = async () => {
+    await d.store.setState(cmd.id, d.cfg.linearTeamKey, anyDone ? "completed" : "canceled");
+    report.reconciled.push(cmd.identifier);
+  };
+  // Only a comment whose first line is a summary header counts; a quote or mention of the marker doesn't. A summary
+  // already posted (an earlier run's state change failed) is not paid for again: the command is just closed.
   const comments = await d.store.getComments(cmd.id);
-  if (comments.some((c) => c.body.includes(RECONCILED_MARKER))) return;
+  if (comments.some((c) => isSummary(c?.body))) return close();
   const out = await callModel(
     d,
     lead,
@@ -403,10 +417,7 @@ async function reconcile(d: Deps, cmd: Issue, lead: AgentKey, children: Issue[],
     return;
   }
   await d.store.comment(cmd.id, `${RECONCILED_MARKER} (${AGENTS[lead].name})\n\n${out}`);
-  // Never report a command as completed when none of its sub-tasks actually completed (all canceled/blocked).
-  const anyDone = children.some((c) => c.stateType === "completed");
-  await d.store.setState(cmd.id, d.cfg.linearTeamKey, anyDone ? "completed" : "canceled");
-  report.reconciled.push(cmd.identifier);
+  await close();
 }
 
 export async function tick(deps: Deps): Promise<TickReport> {
