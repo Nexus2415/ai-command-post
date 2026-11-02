@@ -6,6 +6,7 @@ import { LEDGER_TITLE, ledgerFromContent } from "./budget.ts";
 type Fetch = typeof fetch;
 
 export type StateType = "triage" | "backlog" | "unstarted" | "started" | "completed" | "canceled" | "duplicate";
+const STATE_TYPES: readonly string[] = ["triage", "backlog", "unstarted", "started", "completed", "canceled", "duplicate"];
 
 export interface Issue {
   id: string;
@@ -153,6 +154,11 @@ export class LinearStore implements TaskStore {
         // snapshot is inconsistent, and acting on it could plan one command twice; refuse rather than pick a copy.
         if (typeof n.id !== "string" || !n.id || typeof n.identifier !== "string" || !n.identifier) {
           throw new Error(`team ${teamKey} returned an issue without a readable id; refusing to act on an inconsistent queue`);
+        }
+        // A task whose state can't be read would silently fall out of every open/started/done filter while the rest
+        // of the queue is acted on; refuse the whole queue instead.
+        if (typeof n.state?.type !== "string" || !STATE_TYPES.includes(n.state.type)) {
+          throw new Error(`team ${teamKey} returned issue ${n.identifier} without a readable state; refusing to act on an inconsistent queue`);
         }
         if (seen.has(n.id)) {
           throw new Error(`team ${teamKey} returned issue ${n.identifier} more than once; refusing to act on an inconsistent queue`);

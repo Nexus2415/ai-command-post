@@ -182,6 +182,22 @@ test("ARN-45: listOpenAndRecent refuses a queue with a repeated or unreadable is
   const r = run([more([issue("a"), issue("a")], "c1"), last([issue("b")])]);
   await assert.rejects(r.result);
   assert.equal(r.reads(), 1);
+  // A task whose state can't be read would drop out of every open/started/done filter unseen: refuse the queue,
+  // whether the bad task is on page 1 or a later page, next to readable ones.
+  const badStates: [string, unknown][] = [
+    ["missing state", { ...issue("x"), state: undefined }], ["null state", { ...issue("x"), state: null }],
+    ["missing type", { ...issue("x"), state: { name: "Todo" } }], ["null type", issue("x", null as any)],
+    ["numeric type", issue("x", 3 as any)], ["unknown type", issue("x", "paused")], ["empty type", issue("x", "")],
+  ];
+  for (const [name, node] of badStates) {
+    await assert.rejects(run([last([issue("ok"), node])]).result, /without a readable state; refusing to act on an inconsistent queue/, `${name} on page 1`);
+    const later = run([more([issue("ok")], "c1"), last([node, issue("ok2")])]);
+    await assert.rejects(later.result, /without a readable state/, `${name} on a later page`);
+    assert.equal(later.reads(), 2);
+  }
+  // Controls: every Linear state type is readable.
+  const types = ["triage", "backlog", "unstarted", "started", "completed", "canceled", "duplicate"];
+  assert.deepEqual((await run([last(types.map((t, i) => issue(`s${i}`, t)))]).result).map(i => i.stateType), types);
 });
 
 test("LinearStore surfaces GraphQL errors", async () => {
