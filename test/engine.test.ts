@@ -221,6 +221,22 @@ test("extractJson handles fences, prose and braces inside strings", () => {
 
 // ---------- orchestrator ----------
 
+test("ARN-45: a claim comment Linear doesn't confirm stops the task before any state change or model call", async () => {
+  class UnconfirmedClaims extends MemoryStore {
+    override async comment(_id: string, _body: string): Promise<void> {
+      throw new Error("Linear did not confirm the comment; treating the write as unconfirmed");
+    }
+  }
+  const store = new UnconfirmedClaims();
+  const task = store.add({ title: "[ChatGPT] Look something up", description: "Find it." });
+  let calls = 0;
+  const client: ModelClient = { chat: async () => (calls++, { text: JSON.stringify({ final: "x", status: "done" }), inputTokens: 1, outputTokens: 1 }) };
+  const r = await tick(deps(store, { chatgpt: client }));
+  assert.equal(calls, 0, "no model call without a persisted claim");
+  assert.equal(store.issues.find((i) => i.id === task.id)!.stateType, "unstarted", "the task is not moved to started");
+  assert.ok(r.errors.some((e) => e.includes(task.identifier) && /did not confirm the comment/.test(e)), JSON.stringify(r.errors));
+});
+
 test("engine off: reports waiting work and calls no model", async () => {
   const store = new MemoryStore();
   store.add({ title: "[Claude] Do a thing", description: COMMAND_MARKER });

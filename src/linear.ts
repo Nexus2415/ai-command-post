@@ -61,6 +61,14 @@ const ISSUE_FIELDS = `
   children(first:250) { nodes { id } pageInfo { hasNextPage } }
 `;
 
+/**
+ * A Linear mutation counts as done only when its payload says success: true. false, a missing flag or a missing
+ * payload is an unconfirmed write: it throws (never retried here), so callers stop rather than act as if it landed.
+ */
+function confirmWrite(payload: any, what: string): void {
+  if (payload?.success !== true) throw new Error(`Linear did not confirm ${what}; treating the write as unconfirmed`);
+}
+
 function toIssue(n: any): Issue {
   const kids = n.children;
   const readable: string[] = Array.isArray(kids?.nodes)
@@ -241,21 +249,28 @@ export class LinearStore implements TaskStore {
         },
       },
     );
-    return toIssue(d.issueCreate.issue);
+    confirmWrite(d?.issueCreate, "the new issue");
+    const issue = d.issueCreate.issue;
+    if (!issue || typeof issue.id !== "string" || !issue.id) throw new Error("Linear did not return the new issue; treating the create as unconfirmed");
+    return toIssue(issue);
   }
 
   async comment(issueId: string, body: string) {
-    await this.gql(`mutation($input:CommentCreateInput!){ commentCreate(input:$input){ success } }`, { input: { issueId, body } });
+    const d = await this.gql(`mutation($input:CommentCreateInput!){ commentCreate(input:$input){ success } }`, { input: { issueId, body } });
+    // A claim, plan or result comment that Linear didn't confirm must not be treated as written: the engine would
+    // otherwise run a task with no persisted claim, or report work it never recorded.
+    confirmWrite(d?.commentCreate, `the comment on ${issueId}`);
   }
 
   async setState(issueId: string, teamKey: string, type: StateType) {
     const t = await this.team(teamKey);
     const state = t.states.filter((s) => s.type === type).sort((a, b) => a.position - b.position)[0];
     if (!state) throw new Error(`No ${type} state in team ${teamKey}`);
-    await this.gql(`mutation($id:String!,$input:IssueUpdateInput!){ issueUpdate(id:$id,input:$input){ success } }`, {
+    const d = await this.gql(`mutation($id:String!,$input:IssueUpdateInput!){ issueUpdate(id:$id,input:$input){ success } }`, {
       id: issueId,
       input: { stateId: state.id },
     });
+    confirmWrite(d?.issueUpdate, `the ${type} state on ${issueId}`);
   }
 
   publishStatus(content: string) {

@@ -371,3 +371,31 @@ test("ARN-45: getComments refuses a comment list it can't read in full", async (
   assert.deepEqual((await chain.result).map((c) => c.body), ["acp claim later", "early"]);
   assert.equal(chain.reads(), 3);
 });
+
+test("ARN-45: a comment, state change or new issue counts only when Linear confirms success: true", async () => {
+  const team = { teams: { nodes: [{ id: "t1", states: { nodes: [{ id: "s-start", type: "started", position: 1 }] } }] } };
+  const node = { id: "n1", identifier: "ARN-9", title: "t", url: "u", createdAt: "2026-10-07T00:00:00Z", state: { type: "unstarted", name: "Todo" }, labels: { nodes: [] }, children: { nodes: [], pageInfo: { hasNextPage: false } } };
+  const store = (payload: (q: string) => unknown) => {
+    const f = (async (_u: string, init: { body: string }) => {
+      const q = JSON.parse(init.body).query as string;
+      return new Response(JSON.stringify({ data: q.includes("teams(") ? team : payload(q) }), { status: 200 });
+    }) as unknown as typeof fetch;
+    return new LinearStore("k", f);
+  };
+  // Controls: an explicit success: true is accepted.
+  await store(() => ({ commentCreate: { success: true } })).comment("i1", "claim");
+  await store(() => ({ issueUpdate: { success: true } })).setState("i1", "ARN", "started");
+  assert.equal((await store(() => ({ issueCreate: { success: true, issue: node } })).createIssue({ teamKey: "ARN", title: "t", description: "d" })).id, "n1");
+  // false, a missing flag, a non-boolean flag or a missing payload is an unconfirmed write.
+  for (const bad of [{ success: false }, {}, { success: "true" }, { success: 1 }, null, undefined]) {
+    const label = JSON.stringify(bad);
+    await assert.rejects(store(() => ({ commentCreate: bad })).comment("i1", "claim"), /did not confirm the comment/, label);
+    await assert.rejects(store(() => ({ issueUpdate: bad })).setState("i1", "ARN", "started"), /did not confirm the started state/, label);
+    const withIssue = bad && typeof bad === "object" ? { ...bad, issue: node } : bad;
+    await assert.rejects(store(() => ({ issueCreate: withIssue })).createIssue({ teamKey: "ARN", title: "t", description: "d" }), /did not confirm the new issue/, label);
+  }
+  // A confirmed create that returns no usable issue is unconfirmed too.
+  for (const issue of [undefined, null, {}, { ...node, id: "" }]) {
+    await assert.rejects(store(() => ({ issueCreate: { success: true, issue } })).createIssue({ teamKey: "ARN", title: "t", description: "d" }), /did not return the new issue/);
+  }
+});
