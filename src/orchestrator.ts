@@ -336,7 +336,7 @@ export async function work(d: Deps, task: Issue, agent: AgentKey, report: TickRe
 }
 
 /** A result comment's first line, exactly as the engine writes it: "## Result (Name, done|blocked)". */
-const RESULT_LINE = new RegExp(`^${RESULT_MARKER} \\([^,()\\n]+, (?:done|blocked)\\)[ \\t\\r]*$`);
+const RESULT_LINE = new RegExp(`^${RESULT_MARKER} \\([^,()\\n]+, (done|blocked)\\)[ \\t\\r]*$`);
 
 /**
  * The newest result posted on a sub-task. Only a comment whose first line is a result header counts, so a quoted
@@ -360,11 +360,23 @@ export function latestResult(comments: { body: string; createdAt?: string }[], w
   return best?.body;
 }
 
-/** When every sub-task is done, the lead writes one summary on the command and closes it. */
+/** "done" or "blocked" from a result comment's header line. */
+function resultStatus(body: string): string | undefined {
+  return RESULT_LINE.exec(body.split("\n", 1)[0]!)?.[1];
+}
+
+/**
+ * When every sub-task is done, the lead writes one summary on the command and closes it. A sub-task marked Done
+ * whose newest result is missing or blocked contradicts itself, so the command's outcome is unknown: this throws,
+ * and the command is reported instead of summarized or marked Completed.
+ */
 async function childResults(d: Deps, children: Issue[]): Promise<string[]> {
   const results: string[] = [];
   for (const c of children) {
     const last = latestResult(await d.store.getComments(c.id), c.identifier);
+    if (c.stateType === "completed" && (!last || resultStatus(last) !== "done")) {
+      throw new Error(`${c.identifier} is marked Done but its newest result ${last ? "says blocked" : "is missing"}, so the command's outcome is unknown`);
+    }
     results.push(`### ${c.identifier} ${c.title}\n${last ?? "(no result posted)"}`);
   }
   return results;

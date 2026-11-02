@@ -98,6 +98,14 @@ const freeRates = {
 
 // ---------- agents ----------
 
+
+// A sub-task marked Done carries a done result, as the engine writes one; a Done sub-task without one is inconsistent.
+function addDone(store: MemoryStore, p: Partial<Issue> & { title: string }): Issue {
+  const k = store.add({ ...p, stateType: "completed" });
+  store.comments.set(k.id, [{ body: `${RESULT_MARKER} (ChatGPT, done)\n\nok`, createdAt: "2026-10-01T00:00:00.000Z" }]);
+  return k;
+}
+
 test("agentFor reads title prefix, then labels, then assignee", () => {
   assert.equal(agentFor({ title: "[Claude] fix it" }), "claude");
   assert.equal(agentFor({ title: "[ChatGPT] plan" }), "chatgpt");
@@ -296,7 +304,7 @@ test("full loop: lead plans, workers execute with a tool, lead reconciles", asyn
 test("a command reconciles when its sub-tasks are completed, canceled or marked duplicate", async () => {
   const store = new MemoryStore();
   const cmd = store.add({ title: "[Claude] Tidy backlog", description: `**${COMMAND_MARKER}**`, stateType: "started" });
-  store.add({ title: "[ChatGPT] A", parentId: cmd.id, stateType: "completed" });
+  addDone(store, { title: "[ChatGPT] A", parentId: cmd.id });
   store.add({ title: "[ChatGPT] B", parentId: cmd.id, stateType: "canceled" });
   store.add({ title: "[ChatGPT] C", parentId: cmd.id, stateType: "duplicate" });
   const d = deps(store, { claude: scripted(["## Final\nDone."]) });
@@ -309,7 +317,7 @@ test("ARN-45: a command whose sub-task list wasn't read in full is neither compl
   const store = new MemoryStore();
   // Visible: one completed sub-task. Not visible: a started sub-task on a page that was never read.
   const cmd = store.add({ title: "[Claude] Tidy backlog", description: `**${COMMAND_MARKER}**`, stateType: "started", childrenIncomplete: true });
-  store.add({ title: "[ChatGPT] A", parentId: cmd.id, stateType: "completed" });
+  addDone(store, { title: "[ChatGPT] A", parentId: cmd.id });
   // A new command whose sub-task list came back unreadable may already have sub-tasks: it must not be planned.
   const fresh = store.add({ title: "[Claude] New work", description: `**${COMMAND_MARKER}**`, childrenIncomplete: true });
   const seen: ChatMessage[][] = [];
@@ -337,14 +345,14 @@ test("ARN-45: a command is completed only from sub-tasks that name it as their p
     return { r: await tick(d), store, cmd, seen };
   };
   // Control: a real completed child is reconciled.
-  const ok = await run((store, cmd) => { store.add({ title: "[ChatGPT] A", parentId: cmd.id, stateType: "completed" }); });
+  const ok = await run((store, cmd) => { addDone(store, { title: "[ChatGPT] A", parentId: cmd.id }); });
   assert.deepEqual(ok.r.reconciled, ["T-1"]);
   const other = (store: MemoryStore) => store.add({ title: "[Claude] Other command", description: `**${COMMAND_MARKER}**`, stateType: "completed" });
   const bad: [string, (store: MemoryStore, cmd: Issue) => void][] = [
     ["a child with another parent", (store, cmd) => { const o = other(store); const k = store.add({ title: "[ChatGPT] X", parentId: o.id, stateType: "completed" }); cmd.childIds.push(k.id); }],
     ["a child with no parent", (store, cmd) => { const k = store.add({ title: "[ChatGPT] X", stateType: "completed" }); cmd.childIds.push(k.id); }],
     ["a real child plus a foreign one", (store, cmd) => {
-      store.add({ title: "[ChatGPT] A", parentId: cmd.id, stateType: "completed" });
+      addDone(store, { title: "[ChatGPT] A", parentId: cmd.id });
       const k = store.add({ title: "[ChatGPT] X", stateType: "completed" }); cmd.childIds.push(k.id);
     }],
   ];
@@ -593,4 +601,43 @@ test("ARN-45: the lead summarizes each sub-task from its newest result; an ambig
   assert.deepEqual(bad.store.comments.get(bad.cmd.id) ?? [], [], "no summary written");
   assert.equal(bad.store.issues.find((i) => i.id === bad.cmd.id)!.stateType, "started");
   assert.ok(bad.r.errors.some((e) => e.startsWith("T-1:") && e.includes("two different results")));
+});
+
+test("ARN-45: a command is not completed from a Done sub-task whose newest result is missing or blocked", async () => {
+  const at = (m: number) => `2026-11-02T10:0${m}:00.000Z`;
+  const done = (m: number) => ({ body: `${RESULT_MARKER} (ChatGPT, done)\n\nok`, createdAt: at(m) });
+  const blocked = (m: number) => ({ body: `${RESULT_MARKER} (ChatGPT, blocked)\n\nno`, createdAt: at(m) });
+  const quote = (m: number) => ({ body: `> ${RESULT_MARKER} (ChatGPT, done)`, createdAt: at(m) });
+  type Kid = { state: StateType; comments: { body: string; createdAt: string }[] };
+  const run = async (kids: Kid[]) => {
+    const store = new MemoryStore();
+    const cmd = store.add({ title: "[Claude] Tidy backlog", description: `**${COMMAND_MARKER}**`, stateType: "started" });
+    kids.forEach((k, i) => store.comments.set(store.add({ title: `[ChatGPT] ${i}`, parentId: cmd.id, stateType: k.state }).id, k.comments));
+    const seen: ChatMessage[][] = [];
+    const d = deps(store, { claude: scripted(["## Final\nDone."], seen) });
+    d.budget.rates.claude = freeRates.claude;
+    return { r: await tick(d), store, cmd, seen };
+  };
+  const bad: [string, Kid[], RegExp][] = [
+    ["Done with no result", [{ state: "completed", comments: [] }], /is missing/],
+    ["Done with only a quoted result", [{ state: "completed", comments: [quote(1)] }], /is missing/],
+    ["Done whose newest result is blocked", [{ state: "completed", comments: [done(1), blocked(2)] }], /says blocked/],
+    ["Done and canceled, neither with a result", [{ state: "completed", comments: [] }, { state: "canceled", comments: [] }], /is missing/],
+  ];
+  for (const [name, kids, why] of bad) {
+    const { r, store, cmd, seen } = await run(kids);
+    assert.deepEqual(r.reconciled, [], name);
+    assert.equal(seen.length, 0, `${name}: no model call`);
+    assert.deepEqual(store.comments.get(cmd.id) ?? [], [], `${name}: no summary written`);
+    assert.equal(store.issues.find((i) => i.id === cmd.id)!.stateType, "started", `${name}: command left open`);
+    assert.ok(r.errors.some((e) => e.startsWith("T-1:") && e.includes("is marked Done but its newest result") && why.test(e)), name);
+  }
+  // Controls: a Done sub-task whose newest result is done completes the command (even after an earlier blocked);
+  // a canceled sub-task with a blocked result still closes the command as canceled.
+  const ok = await run([{ state: "completed", comments: [blocked(1), done(2)] }]);
+  assert.deepEqual(ok.r.reconciled, ["T-1"]);
+  assert.equal(ok.store.issues.find((i) => i.id === ok.cmd.id)!.stateType, "completed");
+  const off = await run([{ state: "canceled", comments: [blocked(1)] }]);
+  assert.deepEqual(off.r.reconciled, ["T-1"]);
+  assert.equal(off.store.issues.find((i) => i.id === off.cmd.id)!.stateType, "canceled");
 });
