@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { statusContent } from "../api/lib/engine-status.js";
 import { AGENTS, AGENT_LIST, agentFor, titleFor } from "./agents.ts";
 import { Budget, estimateTokens, ledgerContent } from "./budget.ts";
@@ -388,6 +389,24 @@ export function isSummary(body: unknown): boolean {
   return typeof body === "string" && SUMMARY_LINE.test(body.split("\n", 1)[0]!);
 }
 
+/**
+ * A fingerprint of the evidence a summary was written from: each sub-task's id and state plus the result text the
+ * lead was given. A posted summary records it on its second line, so a later run can tell whether that summary
+ * still describes the sub-tasks as they stand now.
+ */
+export function evidenceDigest(children: Issue[], results: string[]): string {
+  const rows = children.map((c, i) => [c.id, c.stateType, results[i] ?? ""]).sort((a, b) => (a[0]! < b[0]! ? -1 : a[0]! > b[0]! ? 1 : 0));
+  return createHash("sha256").update(JSON.stringify(rows)).digest("hex");
+}
+const EVIDENCE_LINE = /^<!-- acp-evidence: ([0-9a-f]{64}) -->[ \t\r]*$/;
+
+/** True for a real summary (header, evidence line, non-empty body) written from exactly this evidence. */
+export function summaryMatches(body: unknown, digest: string): boolean {
+  if (!isSummary(body)) return false;
+  const [, second = "", ...rest] = (body as string).split("\n");
+  return EVIDENCE_LINE.exec(second)?.[1] === digest && rest.join("\n").trim().length > 0;
+}
+
 async function reconcile(d: Deps, cmd: Issue, lead: AgentKey, children: Issue[], results: string[], report: TickReport): Promise<void> {
   // Never report a command as completed when none of its sub-tasks actually completed (all canceled/blocked).
   const anyDone = children.some((c) => c.stateType === "completed");
@@ -395,10 +414,12 @@ async function reconcile(d: Deps, cmd: Issue, lead: AgentKey, children: Issue[],
     await d.store.setState(cmd.id, d.cfg.linearTeamKey, anyDone ? "completed" : "canceled");
     report.reconciled.push(cmd.identifier);
   };
-  // Only a comment whose first line is a summary header counts; a quote or mention of the marker doesn't. A summary
-  // already posted (an earlier run's state change failed) is not paid for again: the command is just closed.
+  // A summary already posted from this exact evidence (an earlier run's state change failed) is not paid for again:
+  // the command is just closed. A header-only, unbound or stale summary (the sub-tasks changed since) doesn't count;
+  // the command is summarized again through the normal budget check.
+  const digest = evidenceDigest(children, results);
   const comments = await d.store.getComments(cmd.id);
-  if (comments.some((c) => isSummary(c?.body))) return close();
+  if (comments.some((c) => summaryMatches(c?.body, digest))) return close();
   const out = await callModel(
     d,
     lead,
@@ -416,7 +437,7 @@ async function reconcile(d: Deps, cmd: Issue, lead: AgentKey, children: Issue[],
     report.waiting.push(`${cmd.identifier}: lead cannot reconcile (${out.blocked})`);
     return;
   }
-  await d.store.comment(cmd.id, `${RECONCILED_MARKER} (${AGENTS[lead].name})\n\n${out}`);
+  await d.store.comment(cmd.id, `${RECONCILED_MARKER} (${AGENTS[lead].name})\n<!-- acp-evidence: ${digest} -->\n\n${out}`);
   await close();
 }
 

@@ -8,7 +8,7 @@ import { Budget, DEFAULT_RATES } from "../src/budget.ts";
 import { loadConfig, type AgentKey } from "../src/config.ts";
 import { extractJson } from "../src/json.ts";
 import type { Issue, StateType, TaskStore } from "../src/linear.ts";
-import { COMMAND_MARKER, isSummary, latestResult, RECONCILED_MARKER, RESULT_MARKER, tick, type Deps } from "../src/orchestrator.ts";
+import { COMMAND_MARKER, isSummary, latestResult, RECONCILED_MARKER, RESULT_MARKER, summaryMatches, tick, type Deps } from "../src/orchestrator.ts";
 import { decide } from "../src/policy.ts";
 import { ProviderError, type ChatMessage, type ModelClient } from "../src/providers.ts";
 import { runTool } from "../src/tools.ts";
@@ -786,21 +786,59 @@ test("ARN-45: only a real summary header stops reconciliation, and a posted summ
     assert.equal(store.issues.find((i) => i.id === cmd.id)!.stateType, "completed", body);
     assert.equal(summaries(store, cmd.id), 1, body);
   }
-  // A summary already posted (an earlier run's state change failed) closes the command without another model call.
-  const done = setup([{ body: `${RECONCILED_MARKER} (Claude)\n\nEarlier.`, createdAt: "2026-11-02T10:00:00.000Z" }]);
-  const r = await tick(done.d);
-  assert.equal(done.seen.length, 0, "no second paid summary");
-  assert.deepEqual(r.reconciled, ["T-1"]);
-  assert.equal(done.store.issues.find((i) => i.id === done.cmd.id)!.stateType, "completed");
-  // Restart after a failed close: the first run posts the summary and fails to close; the next closes it, unpaid.
-  const flaky = setup([]);
-  flaky.store.failClose = true;
-  const r1 = await tick(flaky.d);
-  assert.ok(r1.errors.some((e) => e.startsWith("T-1:") && e.includes("completed state")));
-  assert.equal(flaky.store.issues.find((i) => i.id === flaky.cmd.id)!.stateType, "started");
-  const r2 = await tick(flaky.d);
-  assert.equal(flaky.seen.length, 1, "summarized once across both runs");
-  assert.equal(summaries(flaky.store, flaky.cmd.id), 1, "one summary comment");
+  // A first run posts a summary and fails to close the command, leaving the receipt a restart has to judge.
+  const posted = async (extra?: (s: ReturnType<typeof setup>) => void) => {
+    const s = setup([]);
+    extra?.(s);
+    s.store.failClose = true;
+    const r1 = await tick(s.d);
+    assert.ok(r1.errors.some((e) => e.startsWith("T-1:") && e.includes("completed state")));
+    assert.equal(s.store.issues.find((i) => i.id === s.cmd.id)!.stateType, "started");
+    assert.equal(s.seen.length, 1);
+    const receipt = (s.store.comments.get(s.cmd.id) ?? []).find((c) => isSummary(c.body))!;
+    const [header, evidence] = receipt.body.split("\n");
+    assert.match(evidence!, /^<!-- acp-evidence: [0-9a-f]{64} -->$/, "the summary records the evidence it was written from");
+    assert.ok(summaryMatches(receipt.body, /[0-9a-f]{64}/.exec(evidence!)![0]));
+    return { ...s, receipt, header: header!, evidence: evidence! };
+  };
+  // Matching receipt, restart after a failed close: only the state change is retried; the summary isn't paid for twice.
+  const same = await posted();
+  const r2 = await tick(same.d);
+  assert.equal(same.seen.length, 1, "summarized once across both runs");
+  assert.equal(summaries(same.store, same.cmd.id), 1, "one summary comment");
   assert.deepEqual(r2.reconciled, ["T-1"]);
-  assert.equal(flaky.store.issues.find((i) => i.id === flaky.cmd.id)!.stateType, "completed");
+  assert.equal(same.store.issues.find((i) => i.id === same.cmd.id)!.stateType, "completed");
+  // A receipt that is header-only, header plus evidence with no body, or has no evidence line doesn't count.
+  const bare = await posted();
+  for (const body of [bare.header, `${bare.header}\n${bare.evidence}`, `${bare.header}\n${bare.evidence}\n\n   `, `${bare.header}\n\nEarlier.`]) {
+    const s = setup([{ body, createdAt: "2026-11-02T10:00:00.000Z" }]);
+    assert.equal(summaryMatches(body, /[0-9a-f]{64}/.exec(bare.evidence)![0]), false, body);
+    const r = await tick(s.d);
+    assert.equal(s.seen.length, 1, `${JSON.stringify(body)}: summarized again through the normal gate`);
+    assert.deepEqual(r.reconciled, ["T-1"], body);
+  }
+  // Stale receipts: the evidence changed after the summary was posted, so it is summarized again (one more paid call).
+  const stale: [string, (s: Awaited<ReturnType<typeof posted>>) => void][] = [
+    ["a newer child result", (s) => {
+      const k = s.store.issues.find((i) => i.parentId === s.cmd.id)!;
+      s.store.comments.get(k.id)!.push({ body: `${RESULT_MARKER} (ChatGPT, done)\n\nchanged`, createdAt: "2026-10-02T00:00:00.000Z" });
+    }],
+    ["a child state change", (s) => { s.store.issues.find((i) => i.parentId === s.cmd.id)!.stateType = "canceled"; }],
+    ["a child added to the command", (s) => { addDone(s.store, { title: "[ChatGPT] B", parentId: s.cmd.id }); }],
+  ];
+  for (const [name, change] of stale) {
+    const s = await posted();
+    change(s);
+    const r = await tick(s.d);
+    assert.equal(s.seen.length, 2, `${name}: summarized again`);
+    assert.equal(summaries(s.store, s.cmd.id), 2, `${name}: a new summary next to the stale one`);
+    assert.deepEqual(r.reconciled, ["T-1"], name);
+    const latest = (s.store.comments.get(s.cmd.id) ?? []).filter((c) => isSummary(c.body)).at(-1)!;
+    assert.notEqual(latest.body.split("\n")[1], s.evidence, `${name}: the new summary records the new evidence`);
+  }
+  // A receipt is bound to its own command's evidence: the same text under a different sub-task set is stale.
+  const other = await posted((s) => { addDone(s.store, { title: "[ChatGPT] B", parentId: s.cmd.id }); });
+  const moved = setup([{ body: other.receipt.body, createdAt: "2026-11-02T10:00:00.000Z" }]);
+  await tick(moved.d);
+  assert.equal(moved.seen.length, 1, "a receipt from different evidence doesn't close the command");
 });
