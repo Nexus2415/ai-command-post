@@ -147,6 +147,49 @@ test("ARN-45: the store reads every document page and never treats an unread pag
       assert.ok(![...w.calls, ...st.calls].some(c => c.query.includes("documentCreate") || c.query.includes("documentUpdate")), "no write for an id-less match");
     }
   }
+  // Any unreadable entry, matching or not, makes the whole list untrusted: it might be the ledger under a title the
+  // store couldn't read. No read result, and no create or update, whether the bad entry is on page 1 or 2, alone or
+  // beside a readable match.
+  const malformed: any[] = [null, 7, "doc", [], {}, { id: "x" }, { id: "x", title: null }, { id: "x", title: 5 },
+    { title: "Other" }, { id: null, title: "Other" }, { id: "", title: "Other" }, { id: 9, title: "Other" }];
+  for (const bad of malformed) {
+    for (const ledgerPages of [
+      [{ nodes: [bad], pageInfo: { hasNextPage: false } }],
+      [{ nodes: [...filler.slice(0, 3), bad], pageInfo: { hasNextPage: false } }],
+      [{ nodes: [hidden, bad], pageInfo: { hasNextPage: false } }],
+      [{ nodes: filler, pageInfo: { hasNextPage: true, endCursor: "c1" } }, { nodes: [bad], pageInfo: { hasNextPage: false } }],
+      [{ nodes: [bad], pageInfo: { hasNextPage: true, endCursor: "c1" } }, { nodes: [hidden], pageInfo: { hasNextPage: false } }],
+    ]) {
+      const label = JSON.stringify(bad) + " " + ledgerPages.length;
+      await assert.rejects(store(ledgerPages).s.readLedger(), /without (a readable title|an id)/, label);
+      const w = store(ledgerPages);
+      await assert.rejects(w.s.saveLedger("new"), /without (a readable title|an id)/, label);
+      const st = store(ledgerPages.map((p: any) => ({ ...p, nodes: p.nodes.map((n: any) => n?.title === LEDGER_TITLE ? { ...n, title: STATUS_TITLE } : n) })));
+      await assert.rejects(st.s.publishStatus("status"), /without (a readable title|an id)/, label);
+      assert.ok(![...w.calls, ...st.calls].some(c => c.query.includes("documentCreate") || c.query.includes("documentUpdate")), "no write on " + label);
+    }
+  }
+  // A repeated cursor would re-read a page rather than reach the rest: never "absent", no create.
+  for (const cursors of [["c1", "c1"], ["c1", "c2", "c1"]]) {
+    const pages: any[] = cursors.map(c => ({ nodes: filler, pageInfo: { hasNextPage: true, endCursor: c } }));
+    pages.push({ nodes: [], pageInfo: { hasNextPage: false } });
+    const w = store(pages);
+    await assert.rejects(w.s.saveLedger("new"), /could not be read in full/, cursors.join(","));
+    assert.ok(!w.calls.some(c => c.query.includes("documentCreate") || c.query.includes("documentUpdate")));
+    assert.deepEqual(w.calls.map(c => c.variables.after), [null, ...cursors.slice(0, -1)]);
+  }
+  // Controls: readable unrelated documents only = absent (save creates); a three-page chain with distinct cursors finds page 3.
+  const empty = store([{ nodes: filler, pageInfo: { hasNextPage: false } }]);
+  assert.equal(await empty.s.readLedger(), null);
+  const fresh = store([{ nodes: filler, pageInfo: { hasNextPage: false } }]);
+  await fresh.s.saveLedger("new");
+  assert.ok(fresh.calls.some(c => c.query.includes("documentCreate")), "a complete, readable list without the ledger creates it");
+  const chain = store([
+    { nodes: filler, pageInfo: { hasNextPage: true, endCursor: "c1" } },
+    { nodes: filler, pageInfo: { hasNextPage: true, endCursor: "c2" } },
+    { nodes: [hidden], pageInfo: { hasNextPage: false, endCursor: "c2" } },
+  ]);
+  assert.deepEqual(await chain.s.readLedger(), state);
   // Duplicates are ordered by creation time: the oldest wins across pages, and a duplicate without a valid date fails
   // closed (it would otherwise sort first) with no create or update.
   const newer = { ...hidden, id: "led-2", content: "newer copy", createdAt: "2026-10-05T00:00:00Z" };

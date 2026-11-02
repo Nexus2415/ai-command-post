@@ -204,6 +204,7 @@ export class LinearStore implements TaskStore {
     const docs: { id: string; title?: string; content?: string; createdAt?: string }[] = [];
     let after: string | null = null;
     let more: unknown = true;
+    const seen = new Set<string>();
     for (let page = 0; page < DOC_PAGES && more === true; page++) {
       const d: { project?: { documents?: { nodes?: unknown; pageInfo?: { hasNextPage?: unknown; endCursor?: string | null } } } } = await this.gql(
         `query($p:String!,$after:String){ project(id:$p){ documents(first:50, after:$after){ nodes { id title content createdAt } pageInfo { hasNextPage endCursor } } } }`,
@@ -211,13 +212,19 @@ export class LinearStore implements TaskStore {
       );
       const list = d.project?.documents;
       if (!list || !Array.isArray(list.nodes)) throw new Error("Linear returned an unreadable document list");
-      const matches = list.nodes.filter((n: { title?: string }) => n?.title === title);
-      // A match without an id can't be updated, and must never make upsertDoc create a duplicate.
-      if (matches.some((n: { id?: unknown }) => typeof n.id !== "string" || !n.id.trim())) throw new Error(`Linear returned "${title}" without an id`);
-      docs.push(...matches);
+      // Every entry must be readable, not just the matches: an entry whose title can't be read might be this
+      // document, so skipping it could read "absent" and make upsertDoc create a duplicate. A match without an id
+      // can't be updated either.
+      const nodes = list.nodes as { id?: unknown; title?: unknown }[];
+      for (const n of nodes) {
+        if (!n || typeof n !== "object" || typeof n.title !== "string") throw new Error(`Linear returned a document without a readable title, so "${title}" may be unseen`);
+        if (typeof n.id !== "string" || !n.id.trim()) throw new Error(n.title === title ? `Linear returned "${title}" without an id` : `Linear returned a document without an id, so the list can't be trusted`);
+      }
+      docs.push(...(nodes.filter((n) => n.title === title) as typeof docs));
       more = list.pageInfo?.hasNextPage;
       after = list.pageInfo?.endCursor ?? null;
-      if (more === true && (typeof after !== "string" || !after)) break;
+      if (more === true && (typeof after !== "string" || !after || seen.has(after))) break;
+      if (typeof after === "string") seen.add(after);
     }
     if (more !== false) throw new Error(`the project's document list could not be read in full, so "${title}" may exist unseen`);
     // Duplicates are ordered by creation time, so each must carry a real one: a missing or invalid date would
