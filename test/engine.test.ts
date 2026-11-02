@@ -8,7 +8,7 @@ import { Budget, DEFAULT_RATES } from "../src/budget.ts";
 import { loadConfig, type AgentKey } from "../src/config.ts";
 import { extractJson } from "../src/json.ts";
 import type { Issue, StateType, TaskStore } from "../src/linear.ts";
-import { COMMAND_MARKER, isSummary, latestResult, RECONCILED_MARKER, RESULT_MARKER, summaryMatches, tick, type Deps } from "../src/orchestrator.ts";
+import { COMMAND_MARKER, evidenceDigest, isSummary, latestResult, RECONCILED_MARKER, RESULT_MARKER, summaryMatches, tick, type Deps } from "../src/orchestrator.ts";
 import { decide } from "../src/policy.ts";
 import { ProviderError, type ChatMessage, type ModelClient } from "../src/providers.ts";
 import { runTool } from "../src/tools.ts";
@@ -825,6 +825,8 @@ test("ARN-45: only a real summary header stops reconciliation, and a posted summ
     }],
     ["a child state change", (s) => { s.store.issues.find((i) => i.parentId === s.cmd.id)!.stateType = "canceled"; }],
     ["a child added to the command", (s) => { addDone(s.store, { title: "[ChatGPT] B", parentId: s.cmd.id }); }],
+    ["the owner editing the command's instructions", (s) => { s.store.issues.find((i) => i.id === s.cmd.id)!.description = `**${COMMAND_MARKER}**\nAlso drop the old labels.`; }],
+    ["the owner editing the command's title", (s) => { s.store.issues.find((i) => i.id === s.cmd.id)!.title = "[Claude] Tidy backlog and labels"; }],
   ];
   for (const [name, change] of stale) {
     const s = await posted();
@@ -836,6 +838,14 @@ test("ARN-45: only a real summary header stops reconciliation, and a posted summ
     const latest = (s.store.comments.get(s.cmd.id) ?? []).filter((c) => isSummary(c.body)).at(-1)!;
     assert.notEqual(latest.body.split("\n")[1], s.evidence, `${name}: the new summary records the new evidence`);
   }
+  // The fingerprint also covers the command's identity and its lead, which no tick-level edit above changes.
+  const base = same.store.issues.find((i) => i.id === same.cmd.id)!;
+  const kids = same.store.issues.filter((i) => i.parentId === base.id);
+  const fp = evidenceDigest(base, "claude", kids, ["r"]);
+  assert.equal(evidenceDigest({ ...base }, "claude", [...kids], ["r"]), fp, "same inputs, same fingerprint");
+  assert.notEqual(evidenceDigest(base, "chatgpt", kids, ["r"]), fp, "another lead");
+  assert.notEqual(evidenceDigest({ ...base, id: "other-id" }, "claude", kids, ["r"]), fp, "another command id");
+  assert.notEqual(evidenceDigest({ ...base, identifier: "T-99" }, "claude", kids, ["r"]), fp, "another command identifier");
   // A receipt is bound to its own command's evidence: the same text under a different sub-task set is stale.
   const other = await posted((s) => { addDone(s.store, { title: "[ChatGPT] B", parentId: s.cmd.id }); });
   const moved = setup([{ body: other.receipt.body, createdAt: "2026-11-02T10:00:00.000Z" }]);

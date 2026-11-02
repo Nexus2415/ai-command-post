@@ -390,13 +390,14 @@ export function isSummary(body: unknown): boolean {
 }
 
 /**
- * A fingerprint of the evidence a summary was written from: each sub-task's id and state plus the result text the
- * lead was given. A posted summary records it on its second line, so a later run can tell whether that summary
- * still describes the sub-tasks as they stand now.
+ * A fingerprint of everything a summary was written from: the command (id, identifier, title and instructions), the
+ * lead, and each sub-task's id and state plus the result text the lead was given. A posted summary records it on its
+ * second line, so a later run can tell whether that summary still answers the command and sub-tasks as they stand now.
  */
-export function evidenceDigest(children: Issue[], results: string[]): string {
+export function evidenceDigest(cmd: Issue, lead: AgentKey, children: Issue[], results: string[]): string {
   const rows = children.map((c, i) => [c.id, c.stateType, results[i] ?? ""]).sort((a, b) => (a[0]! < b[0]! ? -1 : a[0]! > b[0]! ? 1 : 0));
-  return createHash("sha256").update(JSON.stringify(rows)).digest("hex");
+  const command = [cmd.id, cmd.identifier, cmd.title, cmd.description];
+  return createHash("sha256").update(JSON.stringify({ command, lead, rows })).digest("hex");
 }
 const EVIDENCE_LINE = /^<!-- acp-evidence: ([0-9a-f]{64}) -->[ \t\r]*$/;
 
@@ -415,9 +416,9 @@ async function reconcile(d: Deps, cmd: Issue, lead: AgentKey, children: Issue[],
     report.reconciled.push(cmd.identifier);
   };
   // A summary already posted from this exact evidence (an earlier run's state change failed) is not paid for again:
-  // the command is just closed. A header-only, unbound or stale summary (the sub-tasks changed since) doesn't count;
+  // the command is just closed. A header-only, unbound or stale summary (the command or sub-tasks changed since) doesn't count;
   // the command is summarized again through the normal budget check.
-  const digest = evidenceDigest(children, results);
+  const digest = evidenceDigest(cmd, lead, children, results);
   const comments = await d.store.getComments(cmd.id);
   if (comments.some((c) => summaryMatches(c?.body, digest))) return close();
   const out = await callModel(
