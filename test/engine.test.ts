@@ -641,3 +641,72 @@ test("ARN-45: a command is not completed from a Done sub-task whose newest resul
   assert.deepEqual(off.r.reconciled, ["T-1"]);
   assert.equal(off.store.issues.find((i) => i.id === off.cmd.id)!.stateType, "canceled");
 });
+
+test("ARN-45: a plan cut short is never re-planned and its sub-tasks don't run until the command is In Progress", async () => {
+  // Fails one write during planning: the second sub-task create, the plan comment, or the command's state change.
+  class Flaky extends MemoryStore {
+    fail = "";
+    creates = 0;
+    override async createIssue(input: { title: string; description: string; parentId?: string; priority?: number }) {
+      if (this.fail === "second create" && ++this.creates === 2) throw new Error("Linear did not return the new issue; treating the create as unconfirmed");
+      return super.createIssue(input);
+    }
+    override async comment(id: string, body: string) {
+      if (this.fail === "plan comment" && body.startsWith("**Plan from")) throw new Error("Linear did not confirm the comment");
+      return super.comment(id, body);
+    }
+    override async setState(id: string, team: string, type: StateType) {
+      if (this.fail === "state change" && type === "started" && this.issues.find((i) => i.id === id)!.childIds.length) throw new Error("Linear did not confirm the started state");
+      return super.setState(id, team, type);
+    }
+  }
+  const planReply = JSON.stringify({
+    summary: "Two steps.",
+    tasks: [
+      { agent: "chatgpt", title: "Step one", description: "a" },
+      { agent: "chatgpt", title: "Step two", description: "b" },
+    ],
+  });
+  for (const fail of ["second create", "plan comment", "state change"]) {
+    const store = new Flaky();
+    store.fail = fail;
+    const cmd = store.add({ title: "[Claude] Two steps", description: `**${COMMAND_MARKER}**` });
+    const lead: ChatMessage[][] = [];
+    const worker: ChatMessage[][] = [];
+    const d = deps(store, { claude: scripted([planReply, planReply], lead), chatgpt: scripted([JSON.stringify({ final: "ok", status: "done" })], worker) });
+    d.budget.rates.claude = freeRates.claude;
+    const r1 = await tick(d);
+    assert.deepEqual(r1.planned, [], fail);
+    assert.ok(r1.errors.some((e) => e.startsWith("T-1:")), `${fail}: the failed write is reported`);
+    const kids = () => store.issues.filter((i) => i.parentId === cmd.id);
+    const made = kids().length;
+    assert.ok(made >= 1, `${fail}: some sub-tasks exist`);
+    assert.equal(store.issues.find((i) => i.id === cmd.id)!.stateType, "unstarted", `${fail}: command never reached In Progress`);
+    store.fail = "";
+    // Next runs: no second plan, no duplicate sub-tasks, no sub-task work, and the cut-short plan is reported.
+    for (const run of [2, 3]) {
+      const r = await tick(d);
+      assert.equal(lead.length, 1, `${fail} run ${run}: the lead is not asked to plan again`);
+      assert.equal(kids().length, made, `${fail} run ${run}: no sub-tasks recreated`);
+      assert.equal(worker.length, 0, `${fail} run ${run}: no sub-task runs`);
+      assert.ok(kids().every((k) => k.stateType === "unstarted"), `${fail} run ${run}: sub-tasks untouched`);
+      assert.ok(r.errors.some((e) => e.startsWith("T-1:") && e.includes("never moved to In Progress")), `${fail} run ${run}`);
+      assert.ok(r.waiting.some((w) => w.includes("its command T-1 isn't In Progress")), `${fail} run ${run}`);
+    }
+    // Once the owner has checked the sub-tasks and moved the command to In Progress, they run.
+    await store.setState(cmd.id, "ENG", "started");
+    const r4 = await tick(d);
+    assert.equal(worker.length, 1, `${fail}: sub-tasks run after the owner's move`);
+    assert.ok(!r4.errors.some((e) => e.includes("never moved to In Progress")), fail);
+  }
+  // Control: a complete plan starts the command, and its sub-tasks run on the next tick.
+  const store = new MemoryStore();
+  const cmd = store.add({ title: "[Claude] Two steps", description: `**${COMMAND_MARKER}**` });
+  const worker: ChatMessage[][] = [];
+  const d = deps(store, { claude: scripted([planReply]), chatgpt: scripted([JSON.stringify({ final: "ok", status: "done" })], worker) });
+  d.budget.rates.claude = freeRates.claude;
+  assert.deepEqual((await tick(d)).planned, ["T-1 → 2 sub-tasks"]);
+  assert.equal(store.issues.find((i) => i.id === cmd.id)!.stateType, "started");
+  await tick(d);
+  assert.equal(worker.length, 1);
+});

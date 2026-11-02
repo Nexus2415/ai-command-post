@@ -421,6 +421,10 @@ export async function tick(deps: Deps): Promise<TickReport> {
   const newCommands = issues.filter((i) => !isQuestion(i) && isCommand(i) && OPEN.includes(i.stateType) && i.childIds.length === 0 && !i.childrenIncomplete);
   const tasks = issues.filter((i) => !isQuestion(i) && !isCommand(i) && OPEN.includes(i.stateType));
   const runningCommands = issues.filter((i) => !isQuestion(i) && isCommand(i) && i.stateType === "started" && i.childIds.length > 0 && !i.childrenIncomplete);
+  // A command that has sub-tasks but never reached In Progress had its planning cut short (a sub-task, the plan
+  // comment or the state change failed). It is never planned again (that would duplicate sub-tasks) and its
+  // sub-tasks don't run until the owner checks them and moves the command to In Progress.
+  const partialCommands = issues.filter((i) => !isQuestion(i) && isCommand(i) && OPEN.includes(i.stateType) && i.childIds.length > 0 && !i.childrenIncomplete);
 
   if (!d.cfg.active) {
     report.waiting.push(`Engine is off (ACP_ACTIVE=false). ${newCommands.length} command(s) and ${tasks.length} task(s) waiting.`);
@@ -431,6 +435,9 @@ export async function tick(deps: Deps): Promise<TickReport> {
 
   for (const cmd of unreadCommands) {
     report.errors.push(`${cmd.identifier}: its sub-task list couldn't be read in full, so it was neither planned nor completed`);
+  }
+  for (const cmd of partialCommands) {
+    report.errors.push(`${cmd.identifier}: has sub-tasks but was never moved to In Progress, so its plan may be incomplete; it was not planned again and its sub-tasks wait until the owner checks them and moves it to In Progress`);
   }
 
   for (const cmd of newCommands) {
@@ -448,6 +455,12 @@ export async function tick(deps: Deps): Promise<TickReport> {
   const busy = new Set<AgentKey>();
   const ordered = [...tasks].sort((a, b) => (a.priority || 9) - (b.priority || 9) || a.createdAt.localeCompare(b.createdAt));
   for (const t of ordered) {
+    // A sub-task runs only once its command finished planning (In Progress); see partialCommands above.
+    const parent = t.parentId ? byId.get(t.parentId) : undefined;
+    if (parent && isCommand(parent) && parent.stateType !== "started") {
+      report.waiting.push(`${t.identifier}: its command ${parent.identifier} isn't In Progress, so it waits`);
+      continue;
+    }
     const agent = agentFor({ title: t.title, labels: t.labels, assignee: t.assignee });
     // No owner, or an owner that isn't connected: leave it. An offline preferred agent never silently becomes
     // another agent (e.g. Gemini); only an explicit title prefix, label or assignee routes a task.
