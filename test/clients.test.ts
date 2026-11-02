@@ -120,13 +120,36 @@ test("ARN-45: listOpenAndRecent pages through the whole queue and refuses a part
     ["more with an empty cursor", [{ nodes: one, pageInfo: { hasNextPage: true, endCursor: "" } }]],
     ["a cursor that doesn't advance", [{ nodes: one, pageInfo: { hasNextPage: true, endCursor: "c1" } }, { nodes: [issue("b")], pageInfo: { hasNextPage: true, endCursor: "c1" } }]],
     ["a malformed later page", [page1, { nodes: [issue("i251")] }]],
+    // Cursors that loop back (A, B, A) before a final page: the later "no more pages" proves nothing.
+    ["a cursor cycle A-B-A, then a last page", [
+      { nodes: [issue("a")], pageInfo: { hasNextPage: true, endCursor: "A" } },
+      { nodes: [issue("b")], pageInfo: { hasNextPage: true, endCursor: "B" } },
+      { nodes: [issue("c")], pageInfo: { hasNextPage: true, endCursor: "A" } },
+      { nodes: [issue("d")], pageInfo: { hasNextPage: false, endCursor: null } },
+    ]],
+    ["a cursor cycle A-B-C-A, then a last page", [
+      { nodes: [issue("a")], pageInfo: { hasNextPage: true, endCursor: "A" } },
+      { nodes: [issue("b")], pageInfo: { hasNextPage: true, endCursor: "B" } },
+      { nodes: [issue("c")], pageInfo: { hasNextPage: true, endCursor: "C" } },
+      { nodes: [issue("d")], pageInfo: { hasNextPage: true, endCursor: "A" } },
+      { nodes: [issue("e")], pageInfo: { hasNextPage: false, endCursor: null } },
+    ]],
     ["more pages than ACP reads", Array.from({ length: 9 }, (_, n) => ({ nodes: [issue(`p${n}`)], pageInfo: { hasNextPage: true, endCursor: `c${n + 1}` } }))],
   ];
   for (const [name, pages] of bad) {
     const r = run(pages);
     await assert.rejects(r.result, /refusing to act on a partial queue/, name);
     assert.ok(r.afters.length <= pages.length, `${name}: no reads past the bad page`);
+    if (name.startsWith("a cursor cycle")) assert.equal(r.afters.length, pages.length - 1, `${name}: stops at the repeated cursor`);
   }
+  // Control: three pages with distinct cursors read in full.
+  const chain = run([
+    { nodes: [issue("a")], pageInfo: { hasNextPage: true, endCursor: "A" } },
+    { nodes: [issue("b")], pageInfo: { hasNextPage: true, endCursor: "B" } },
+    { nodes: [issue("c")], pageInfo: { hasNextPage: false, endCursor: "B" } },
+  ]);
+  assert.deepEqual((await chain.result).map((i) => i.id), ["a", "b", "c"]);
+  assert.deepEqual(chain.afters, [null, "A", "B"]);
 });
 
 test("ARN-45: listOpenAndRecent refuses a queue with a repeated or unreadable issue id, never picks a copy", async () => {
@@ -302,10 +325,33 @@ test("ARN-45: getComments refuses a comment list it can't read in full", async (
       { nodes: [later], pageInfo: { hasNextPage: true, endCursor: "c1" } },
       { nodes: [{ body: "earlier foreign claim", createdAt: "2026-10-08T10:00:00Z" }] },
     ]],
+    // Cursors that loop back before a final page: the earliest claim could sit on a page never reached.
+    ["a cursor cycle A-B-A, then a last page", [
+      { nodes: [later], pageInfo: { hasNextPage: true, endCursor: "A" } },
+      { nodes: [], pageInfo: { hasNextPage: true, endCursor: "B" } },
+      { nodes: [], pageInfo: { hasNextPage: true, endCursor: "A" } },
+      { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+    ]],
+    ["a cursor cycle A-B-C-A, then a last page", [
+      { nodes: [later], pageInfo: { hasNextPage: true, endCursor: "A" } },
+      { nodes: [], pageInfo: { hasNextPage: true, endCursor: "B" } },
+      { nodes: [], pageInfo: { hasNextPage: true, endCursor: "C" } },
+      { nodes: [], pageInfo: { hasNextPage: true, endCursor: "A" } },
+      { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+    ]],
   ];
   for (const [name, pages] of bad) {
     const r = await run(pages);
     await assert.rejects(r.result, /refusing to guess the earliest claim/, name);
     assert.ok(r.reads() <= pages.length, `${name}: no reads past the bad page`);
+    if (name.startsWith("a cursor cycle")) assert.equal(r.reads(), pages.length - 1, `${name}: stops at the repeated cursor`);
   }
+  // Control: three pages with distinct cursors read in full.
+  const chain = await run([
+    { nodes: [later], pageInfo: { hasNextPage: true, endCursor: "A" } },
+    { nodes: [], pageInfo: { hasNextPage: true, endCursor: "B" } },
+    { nodes: [{ body: "early", createdAt: "2026-10-08T10:00:00Z" }], pageInfo: { hasNextPage: false, endCursor: "B" } },
+  ]);
+  assert.deepEqual((await chain.result).map((c) => c.body), ["acp claim later", "early"]);
+  assert.equal(chain.reads(), 3);
 });

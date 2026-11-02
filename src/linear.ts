@@ -131,6 +131,9 @@ export class LinearStore implements TaskStore {
     // throws, so the engine never acts on a queue it only partly read.
     const out: Issue[] = [];
     const seen = new Set<string>();
+    // Every continuation cursor must be new: a cursor seen before means the pages loop back on themselves, so a
+    // later "no more pages" can't prove the queue was read in full.
+    const cursors = new Set<string>();
     let after: string | null = null;
     for (let page = 0; page < 8; page++) {
       const d: any = await this.gql(
@@ -159,9 +162,10 @@ export class LinearStore implements TaskStore {
       }
       if (!c.pageInfo.hasNextPage) return out;
       const next = c.pageInfo.endCursor;
-      if (typeof next !== "string" || !next || next === after) {
+      if (typeof next !== "string" || !next || cursors.has(next)) {
         throw new Error(`team ${teamKey} returned no usable cursor for its next issue page; refusing to act on a partial queue`);
       }
+      cursors.add(next);
       after = next;
     }
     throw new Error(`team ${teamKey} has more open and recent issues than ACP will page through; refusing to act on a partial queue`);
@@ -185,6 +189,8 @@ export class LinearStore implements TaskStore {
   async getComments(issueId: string) {
     // Page through every comment: claim ownership depends on the earliest claim, which may not be on page one.
     const out: { body: string; createdAt: string }[] = [];
+    // Any repeated continuation cursor (not just the last one) means the pages loop, so the list isn't proven whole.
+    const cursors = new Set<string>();
     let after: string | null = null;
     for (let page = 0; page < 50; page++) {
       const d: any = await this.gql(
@@ -206,9 +212,10 @@ export class LinearStore implements TaskStore {
       out.push(...c.nodes);
       if (!c.pageInfo.hasNextPage) return out;
       const next = c.pageInfo.endCursor;
-      if (typeof next !== "string" || !next || next === after) {
+      if (typeof next !== "string" || !next || cursors.has(next)) {
         throw new Error(`issue ${issueId} returned no usable cursor for its next comment page; refusing to guess the earliest claim`);
       }
+      cursors.add(next);
       after = next;
     }
     throw new Error(`issue ${issueId} has more comments than ACP will page through; refusing to guess the earliest claim`);
