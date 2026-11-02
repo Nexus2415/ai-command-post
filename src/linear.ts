@@ -46,6 +46,8 @@ interface TeamInfo {
   states: { id: string; type: StateType; position: number }[];
 }
 
+/** Document pages findDoc reads (50 each) before giving up on an incomplete list. */
+const DOC_PAGES = 4;
 const ISSUE_FIELDS = `
   id identifier title description url priority createdAt
   state { type name }
@@ -190,11 +192,46 @@ export class LinearStore implements TaskStore {
     return this.upsertDoc(LEDGER_TITLE, content);
   }
 
-  /** The engine's own document with this title in the fixed project (the oldest, if someone duplicated it). */
+  /**
+   * The engine's own document with this title in the fixed project (the oldest, if someone duplicated it). Follows
+   * document pages up to DOC_PAGES and answers only from the whole list: a malformed page, a missing cursor or a list
+   * still incomplete at the cap throws. So a ledger on an unread page reads as unreadable (paid calls blocked), is
+   * never mistaken for absent and duplicated by a create, and "oldest" is never chosen from part of the list.
+   */
   private async findDoc(title: string): Promise<{ id: string; content?: string } | null> {
-    const d = await this.gql(`query($p:String!){ project(id:$p){ documents(first:50){ nodes { id title content createdAt } } } }`, { p: PROJECT_ID });
-    const docs = (d.project?.documents?.nodes ?? []).filter((n: { title?: string }) => n.title === title);
-    docs.sort((a: { createdAt?: string }, b: { createdAt?: string }) => String(a.createdAt ?? "").localeCompare(String(b.createdAt ?? "")));
+    // Forget any id cached from an earlier lookup first: if this one fails, no later write may reuse it.
+    this.docIds.delete(title);
+    const docs: { id: string; title?: string; content?: string; createdAt?: string }[] = [];
+    let after: string | null = null;
+    let more: unknown = true;
+    const seen = new Set<string>();
+    for (let page = 0; page < DOC_PAGES && more === true; page++) {
+      const d: { project?: { documents?: { nodes?: unknown; pageInfo?: { hasNextPage?: unknown; endCursor?: string | null } } } } = await this.gql(
+        `query($p:String!,$after:String){ project(id:$p){ documents(first:50, after:$after){ nodes { id title content createdAt } pageInfo { hasNextPage endCursor } } } }`,
+        { p: PROJECT_ID, after },
+      );
+      const list = d.project?.documents;
+      if (!list || !Array.isArray(list.nodes)) throw new Error("Linear returned an unreadable document list");
+      // Every entry must be readable, not just the matches: an entry whose title can't be read might be this
+      // document, so skipping it could read "absent" and make upsertDoc create a duplicate. A match without an id
+      // can't be updated either.
+      const nodes = list.nodes as { id?: unknown; title?: unknown }[];
+      for (const n of nodes) {
+        if (!n || typeof n !== "object" || typeof n.title !== "string") throw new Error(`Linear returned a document without a readable title, so "${title}" may be unseen`);
+        if (typeof n.id !== "string" || !n.id.trim()) throw new Error(n.title === title ? `Linear returned "${title}" without an id` : `Linear returned a document without an id, so the list can't be trusted`);
+      }
+      docs.push(...(nodes.filter((n) => n.title === title) as typeof docs));
+      more = list.pageInfo?.hasNextPage;
+      after = list.pageInfo?.endCursor ?? null;
+      if (more === true && (typeof after !== "string" || !after || seen.has(after))) break;
+      if (typeof after === "string") seen.add(after);
+    }
+    if (more !== false) throw new Error(`the project's document list could not be read in full, so "${title}" may exist unseen`);
+    // Duplicates are ordered by creation time, so each must carry a real one: a missing or invalid date would
+    // otherwise sort first and pick the wrong copy to read or update.
+    const created = (d: { createdAt?: unknown }) => (typeof d.createdAt === "string" ? Date.parse(d.createdAt) : NaN);
+    if (docs.length > 1 && docs.some((d) => !Number.isFinite(created(d)))) throw new Error(`Linear returned duplicate "${title}" documents without valid creation dates`);
+    docs.sort((a, b) => created(a) - created(b));
     if (docs[0]) this.docIds.set(title, docs[0].id);
     return docs[0] ?? null;
   }
