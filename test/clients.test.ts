@@ -33,9 +33,10 @@ test("LinearStore maps GraphQL issue nodes", async () => {
                 labels: { nodes: [{ name: "Feature" }] },
                 assignee: null,
                 parent: null,
-                children: { nodes: [{ id: "u2" }] },
+                children: { nodes: [{ id: "u2" }], pageInfo: { hasNextPage: false } },
               },
             ],
+            pageInfo: { hasNextPage: false, endCursor: null },
           },
         },
       },
@@ -48,7 +49,155 @@ test("LinearStore maps GraphQL issue nodes", async () => {
   assert.equal(i!.description, "");
   assert.deepEqual(i!.labels, ["Feature"]);
   assert.deepEqual(i!.childIds, ["u2"]);
+  assert.equal(i!.childrenIncomplete, undefined, "an explicit last page proves the sub-task list complete");
   assert.equal((seen[0]!.init.headers as Record<string, string>)["authorization"], "lin_key");
+});
+
+test("ARN-45: a sub-task list without proof of completeness is flagged, never read as complete", async () => {
+  const read = async (children: unknown) => {
+    const node = { id: "u1", identifier: "ARN-20", title: "t", url: "u", createdAt: "2026-10-07T00:00:00Z", parent: null, state: { type: "started", name: "In Progress" }, labels: { nodes: [] }, children };
+    const [i] = await new LinearStore("k", fakeFetch({ data: { issues: { nodes: [node], pageInfo: { hasNextPage: false, endCursor: null } } } })).listOpenAndRecent("ARN");
+    return i!;
+  };
+  const done = { hasNextPage: false };
+  for (const [name, children, ids] of [
+    ["empty, complete", { nodes: [], pageInfo: done }, []],
+    ["two children, complete", { nodes: [{ id: "c1" }, { id: "c2" }], pageInfo: done }, ["c1", "c2"]],
+  ] as [string, unknown, string[]][]) {
+    const i = await read(children);
+    assert.deepEqual(i.childIds, ids, name);
+    assert.equal(i.childrenIncomplete, undefined, name);
+  }
+  for (const [name, children] of [
+    ["no children", undefined],
+    ["null children", null],
+    ["no nodes", { pageInfo: done }],
+    ["no pageInfo", { nodes: [{ id: "c1" }] }],
+    ["string hasNextPage", { nodes: [{ id: "c1" }], pageInfo: { hasNextPage: "false" } }],
+    ["more children on another page", { nodes: [{ id: "c1" }], pageInfo: { hasNextPage: true } }],
+    ["a child without an id", { nodes: [{ id: "c1" }, {}], pageInfo: done }],
+    ["a null child", { nodes: [null], pageInfo: done }],
+    ["the same child twice", { nodes: [{ id: "c1" }, { id: "c1" }], pageInfo: done }],
+    ["the same child three times", { nodes: [{ id: "c1" }, { id: "c1" }, { id: "c1" }], pageInfo: done }],
+    ["a repeat among distinct children", { nodes: [{ id: "c1" }, { id: "c2" }, { id: "c1" }], pageInfo: done }],
+    ["a repeat plus a child without an id", { nodes: [{ id: "c1" }, { id: "c1" }, {}], pageInfo: done }],
+  ] as [string, unknown][]) {
+    assert.equal((await read(children)).childrenIncomplete, true, name);
+  }
+  // A repeated child is listed once, and the list stays flagged incomplete rather than deduped into "complete".
+  const dup = await read({ nodes: [{ id: "c1" }, { id: "c2" }, { id: "c1" }], pageInfo: done });
+  assert.deepEqual(dup.childIds, ["c1", "c2"]);
+  assert.equal(dup.childrenIncomplete, true);
+});
+
+test("ARN-45: listOpenAndRecent pages through the whole queue and refuses a partial one", async () => {
+  const issue = (id: string) => ({ id, identifier: id, title: "t", url: "u", createdAt: "2026-10-07T00:00:00Z", parent: null, state: { type: "unstarted", name: "Todo" }, labels: { nodes: [] }, children: { nodes: [], pageInfo: { hasNextPage: false } } });
+  const run = (pages: unknown[]) => {
+    const afters: unknown[] = [];
+    const f = (async (_u: string, init: { body: string }) => {
+      afters.push(JSON.parse(init.body).variables.after);
+      return new Response(JSON.stringify({ data: { issues: pages[afters.length - 1] } }), { status: 200 });
+    }) as unknown as typeof fetch;
+    return { result: new LinearStore("k", f).listOpenAndRecent("ARN"), afters };
+  };
+  // Issue 251 sits on page 2 and is still read.
+  const page1 = { nodes: Array.from({ length: 250 }, (_, n) => issue(`i${n + 1}`)), pageInfo: { hasNextPage: true, endCursor: "c250" } };
+  const ok = run([page1, { nodes: [issue("i251")], pageInfo: { hasNextPage: false, endCursor: null } }]);
+  const all = await ok.result;
+  assert.equal(all.length, 251);
+  assert.equal(all[250]!.id, "i251");
+  assert.deepEqual(ok.afters, [null, "c250"]);
+  const one = [issue("a")];
+  const bad: [string, unknown[]][] = [
+    ["no pageInfo", [{ nodes: one }]],
+    ["null pageInfo", [{ nodes: one, pageInfo: null }]],
+    ["string hasNextPage", [{ nodes: one, pageInfo: { hasNextPage: "false" } }]],
+    ["no nodes", [{ pageInfo: { hasNextPage: false } }]],
+    ["null nodes", [{ nodes: null, pageInfo: { hasNextPage: false } }]],
+    ["a null issue", [{ nodes: [null], pageInfo: { hasNextPage: false } }]],
+    ["no issues connection", [undefined]],
+    ["more without a cursor", [{ nodes: one, pageInfo: { hasNextPage: true, endCursor: null } }]],
+    ["more with an empty cursor", [{ nodes: one, pageInfo: { hasNextPage: true, endCursor: "" } }]],
+    ["a cursor that doesn't advance", [{ nodes: one, pageInfo: { hasNextPage: true, endCursor: "c1" } }, { nodes: [issue("b")], pageInfo: { hasNextPage: true, endCursor: "c1" } }]],
+    ["a malformed later page", [page1, { nodes: [issue("i251")] }]],
+    // Cursors that loop back (A, B, A) before a final page: the later "no more pages" proves nothing.
+    ["a cursor cycle A-B-A, then a last page", [
+      { nodes: [issue("a")], pageInfo: { hasNextPage: true, endCursor: "A" } },
+      { nodes: [issue("b")], pageInfo: { hasNextPage: true, endCursor: "B" } },
+      { nodes: [issue("c")], pageInfo: { hasNextPage: true, endCursor: "A" } },
+      { nodes: [issue("d")], pageInfo: { hasNextPage: false, endCursor: null } },
+    ]],
+    ["a cursor cycle A-B-C-A, then a last page", [
+      { nodes: [issue("a")], pageInfo: { hasNextPage: true, endCursor: "A" } },
+      { nodes: [issue("b")], pageInfo: { hasNextPage: true, endCursor: "B" } },
+      { nodes: [issue("c")], pageInfo: { hasNextPage: true, endCursor: "C" } },
+      { nodes: [issue("d")], pageInfo: { hasNextPage: true, endCursor: "A" } },
+      { nodes: [issue("e")], pageInfo: { hasNextPage: false, endCursor: null } },
+    ]],
+    ["more pages than ACP reads", Array.from({ length: 9 }, (_, n) => ({ nodes: [issue(`p${n}`)], pageInfo: { hasNextPage: true, endCursor: `c${n + 1}` } }))],
+  ];
+  for (const [name, pages] of bad) {
+    const r = run(pages);
+    await assert.rejects(r.result, /refusing to act on a partial queue/, name);
+    assert.ok(r.afters.length <= pages.length, `${name}: no reads past the bad page`);
+    if (name.startsWith("a cursor cycle")) assert.equal(r.afters.length, pages.length - 1, `${name}: stops at the repeated cursor`);
+  }
+  // Control: three pages with distinct cursors read in full.
+  const chain = run([
+    { nodes: [issue("a")], pageInfo: { hasNextPage: true, endCursor: "A" } },
+    { nodes: [issue("b")], pageInfo: { hasNextPage: true, endCursor: "B" } },
+    { nodes: [issue("c")], pageInfo: { hasNextPage: false, endCursor: "B" } },
+  ]);
+  assert.deepEqual((await chain.result).map((i) => i.id), ["a", "b", "c"]);
+  assert.deepEqual(chain.afters, [null, "A", "B"]);
+});
+
+test("ARN-45: listOpenAndRecent refuses a queue with a repeated or unreadable issue id, never picks a copy", async () => {
+  const issue = (id: unknown, type = "unstarted", identifier: unknown = id) => ({ id, identifier, title: "t", url: "u", createdAt: "2026-10-07T00:00:00Z", parent: null, state: { type, name: type }, labels: { nodes: [] }, children: { nodes: [], pageInfo: { hasNextPage: false } } });
+  const run = (pages: unknown[]) => {
+    let reads = 0;
+    const f = (async () => new Response(JSON.stringify({ data: { issues: pages[reads++] } }), { status: 200 })) as unknown as typeof fetch;
+    return { result: new LinearStore("k", f).listOpenAndRecent("ARN"), reads: () => reads };
+  };
+  const last = (nodes: unknown[]) => ({ nodes, pageInfo: { hasNextPage: false, endCursor: null } });
+  const more = (nodes: unknown[], c: string) => ({ nodes, pageInfo: { hasNextPage: true, endCursor: c } });
+  // Control: distinct ids on one page and across two pages are all read.
+  assert.deepEqual((await run([last([issue("a"), issue("b")])]).result).map(i => i.id), ["a", "b"]);
+  assert.deepEqual((await run([more([issue("a")], "c1"), last([issue("b")])]).result).map(i => i.id), ["a", "b"]);
+  const dupes: [string, unknown[]][] = [
+    ["same id twice on one page", [last([issue("a"), issue("a")])]],
+    ["same id on two pages", [more([issue("a")], "c1"), last([issue("a")])]],
+    ["conflicting snapshots of one id", [more([issue("a", "unstarted")], "c1"), last([issue("a", "started")])]],
+  ];
+  for (const [name, pages] of dupes) await assert.rejects(run(pages).result, /more than once; refusing to act on an inconsistent queue/, name);
+  const unreadable: [string, unknown][] = [
+    ["missing id", issue(undefined, "unstarted", "ARN-1")], ["empty id", issue("", "unstarted", "ARN-1")],
+    ["numeric id", issue(7, "unstarted", "ARN-1")], ["missing identifier", { ...issue("a"), identifier: undefined }],
+    ["empty identifier", issue("a", "unstarted", "")],
+  ];
+  for (const [name, node] of unreadable) {
+    await assert.rejects(run([last([issue("ok"), node])]).result, /without a readable id; refusing to act on an inconsistent queue/, name);
+  }
+  // A bad first page stops before any later page is read.
+  const r = run([more([issue("a"), issue("a")], "c1"), last([issue("b")])]);
+  await assert.rejects(r.result);
+  assert.equal(r.reads(), 1);
+  // A task whose state can't be read would drop out of every open/started/done filter unseen: refuse the queue,
+  // whether the bad task is on page 1 or a later page, next to readable ones.
+  const badStates: [string, unknown][] = [
+    ["missing state", { ...issue("x"), state: undefined }], ["null state", { ...issue("x"), state: null }],
+    ["missing type", { ...issue("x"), state: { name: "Todo" } }], ["null type", issue("x", null as any)],
+    ["numeric type", issue("x", 3 as any)], ["unknown type", issue("x", "paused")], ["empty type", issue("x", "")],
+  ];
+  for (const [name, node] of badStates) {
+    await assert.rejects(run([last([issue("ok"), node])]).result, /without a readable state; refusing to act on an inconsistent queue/, `${name} on page 1`);
+    const later = run([more([issue("ok")], "c1"), last([node, issue("ok2")])]);
+    await assert.rejects(later.result, /without a readable state/, `${name} on a later page`);
+    assert.equal(later.reads(), 2);
+  }
+  // Controls: every Linear state type is readable.
+  const types = ["triage", "backlog", "unstarted", "started", "completed", "canceled", "duplicate"];
+  assert.deepEqual((await run([last(types.map((t, i) => issue(`s${i}`, t)))]).result).map(i => i.stateType), types);
 });
 
 test("LinearStore surfaces GraphQL errors", async () => {
@@ -111,6 +260,29 @@ test("provider HTTP errors become ProviderError", async () => {
   await assert.rejects(() => c.chat([{ role: "user", content: "q" }], { maxOutputTokens: 10 }), ProviderError);
 });
 
+test("ARN-45: getLabels refuses a label list it can't read in full; only an explicit empty list means no labels", async () => {
+  const read = (data: unknown) => new LinearStore("k", (async () => new Response(JSON.stringify({ data }), { status: 200 })) as unknown as typeof fetch).getLabels("i1");
+  const done = { hasNextPage: false };
+  assert.deepEqual(await read({ issue: { labels: { nodes: [], pageInfo: done } } }), []);
+  assert.deepEqual(await read({ issue: { labels: { nodes: [{ name: "executor:manual" }], pageInfo: done } } }), ["executor:manual"]);
+  const bad: [string, unknown][] = [
+    ["no issue", {}],
+    ["null issue", { issue: null }],
+    ["no labels", { issue: {} }],
+    ["null labels", { issue: { labels: null } }],
+    ["no nodes", { issue: { labels: { pageInfo: done } } }],
+    ["null nodes", { issue: { labels: { nodes: null, pageInfo: done } } }],
+    ["object nodes", { issue: { labels: { nodes: {}, pageInfo: done } } }],
+    ["no pageInfo", { issue: { labels: { nodes: [] } } }],
+    ["string hasNextPage", { issue: { labels: { nodes: [], pageInfo: { hasNextPage: "false" } } } }],
+    ["more labels than one page", { issue: { labels: { nodes: [{ name: "a" }], pageInfo: { hasNextPage: true } } } }],
+    ["a null label", { issue: { labels: { nodes: [null], pageInfo: done } } }],
+    ["a label without a name", { issue: { labels: { nodes: [{}], pageInfo: done } } }],
+    ["a non-string name", { issue: { labels: { nodes: [{ name: 7 }], pageInfo: done } } }],
+  ];
+  for (const [name, data] of bad) await assert.rejects(read(data), /refusing to guess its executor/, name);
+});
+
 test("LinearStore.getComments pages through every comment", async () => {
   const pages = [
     { nodes: [{ body: "late", createdAt: "2026-10-08T10:00:02Z" }], pageInfo: { hasNextPage: true, endCursor: "c1" } },
@@ -126,4 +298,122 @@ test("LinearStore.getComments pages through every comment", async () => {
   const all = await new LinearStore("k", f).getComments("i1");
   assert.deepEqual(all.map((c) => c.body), ["late", "early"]);
   assert.deepEqual(afters, [null, "c1"]);
+});
+
+test("ARN-45: getComments refuses a comment list it can't read in full", async () => {
+  // An earlier foreign claim sits on page 2; page 1's page signal is missing or malformed.
+  const later = { body: "acp claim later", createdAt: "2026-10-08T10:00:02Z" };
+  const run = async (pages: unknown[]) => {
+    let n = 0;
+    const f = (async () => new Response(JSON.stringify({ data: { issue: { comments: pages[n++] } } }), { status: 200 })) as unknown as typeof fetch;
+    return { result: new LinearStore("k", f).getComments("i1"), reads: () => n };
+  };
+  const bad: [string, unknown[]][] = [
+    ["no pageInfo", [{ nodes: [later] }]],
+    ["null pageInfo", [{ nodes: [later], pageInfo: null }]],
+    ["missing hasNextPage", [{ nodes: [later], pageInfo: { endCursor: "c1" } }]],
+    ["string hasNextPage", [{ nodes: [later], pageInfo: { hasNextPage: "false", endCursor: null } }]],
+    ["null hasNextPage", [{ nodes: [later], pageInfo: { hasNextPage: null } }]],
+    ["no nodes", [{ pageInfo: { hasNextPage: false } }]],
+    ["no comments", [undefined]],
+    ["more without a cursor", [{ nodes: [later], pageInfo: { hasNextPage: true, endCursor: null } }]],
+    ["more with an empty cursor", [{ nodes: [later], pageInfo: { hasNextPage: true, endCursor: "" } }]],
+    ["a cursor that doesn't advance", [
+      { nodes: [later], pageInfo: { hasNextPage: true, endCursor: "c1" } },
+      { nodes: [], pageInfo: { hasNextPage: true, endCursor: "c1" } },
+    ]],
+    ...([
+      ["a missing body", { createdAt: "2026-10-08T10:00:00Z" }],
+      ["a null body", { body: null, createdAt: "2026-10-08T10:00:00Z" }],
+      ["a non-string body", { body: 7, createdAt: "2026-10-08T10:00:00Z" }],
+      ["a missing timestamp", { body: "ACP executor: manual" }],
+      ["a null timestamp", { body: "ACP executor: manual", createdAt: null }],
+      ["an unparseable timestamp", { body: "ACP executor: manual", createdAt: "not a date" }],
+      ["a null comment", null],
+    ] as [string, unknown][]).flatMap(([what, node]): [string, unknown[]][] => [
+      [`${what} on page 1`, [{ nodes: [later, node], pageInfo: { hasNextPage: false, endCursor: null } }]],
+      [`${what} on a later page`, [
+        { nodes: [later], pageInfo: { hasNextPage: true, endCursor: "c1" } },
+        { nodes: [node], pageInfo: { hasNextPage: false, endCursor: null } },
+      ]],
+    ]),
+    ["a malformed later page", [
+      { nodes: [later], pageInfo: { hasNextPage: true, endCursor: "c1" } },
+      { nodes: [{ body: "earlier foreign claim", createdAt: "2026-10-08T10:00:00Z" }] },
+    ]],
+    // Cursors that loop back before a final page: the earliest claim could sit on a page never reached.
+    ["a cursor cycle A-B-A, then a last page", [
+      { nodes: [later], pageInfo: { hasNextPage: true, endCursor: "A" } },
+      { nodes: [], pageInfo: { hasNextPage: true, endCursor: "B" } },
+      { nodes: [], pageInfo: { hasNextPage: true, endCursor: "A" } },
+      { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+    ]],
+    ["a cursor cycle A-B-C-A, then a last page", [
+      { nodes: [later], pageInfo: { hasNextPage: true, endCursor: "A" } },
+      { nodes: [], pageInfo: { hasNextPage: true, endCursor: "B" } },
+      { nodes: [], pageInfo: { hasNextPage: true, endCursor: "C" } },
+      { nodes: [], pageInfo: { hasNextPage: true, endCursor: "A" } },
+      { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+    ]],
+  ];
+  for (const [name, pages] of bad) {
+    const r = await run(pages);
+    await assert.rejects(r.result, /refusing to guess the earliest claim/, name);
+    assert.ok(r.reads() <= pages.length, `${name}: no reads past the bad page`);
+    if (name.startsWith("a cursor cycle")) assert.equal(r.reads(), pages.length - 1, `${name}: stops at the repeated cursor`);
+  }
+  // Control: three pages with distinct cursors read in full.
+  const chain = await run([
+    { nodes: [later], pageInfo: { hasNextPage: true, endCursor: "A" } },
+    { nodes: [], pageInfo: { hasNextPage: true, endCursor: "B" } },
+    { nodes: [{ body: "early", createdAt: "2026-10-08T10:00:00Z" }], pageInfo: { hasNextPage: false, endCursor: "B" } },
+  ]);
+  assert.deepEqual((await chain.result).map((c) => c.body), ["acp claim later", "early"]);
+  assert.equal(chain.reads(), 3);
+});
+
+test("ARN-45: a comment, state change or new issue counts only when Linear confirms success: true", async () => {
+  const team = { teams: { nodes: [{ id: "t1", states: { nodes: [{ id: "s-start", type: "started", position: 1 }] } }] } };
+  const node = { id: "n1", identifier: "ARN-9", title: "t", url: "u", createdAt: "2026-10-07T00:00:00Z", state: { type: "unstarted", name: "Todo" }, labels: { nodes: [] }, children: { nodes: [], pageInfo: { hasNextPage: false } } };
+  const store = (payload: (q: string) => unknown) => {
+    const f = (async (_u: string, init: { body: string }) => {
+      const q = JSON.parse(init.body).query as string;
+      return new Response(JSON.stringify({ data: q.includes("teams(") ? team : payload(q) }), { status: 200 });
+    }) as unknown as typeof fetch;
+    return new LinearStore("k", f);
+  };
+  // Controls: an explicit success: true is accepted.
+  await store(() => ({ commentCreate: { success: true } })).comment("i1", "claim");
+  await store(() => ({ issueUpdate: { success: true } })).setState("i1", "ARN", "started");
+  assert.equal((await store(() => ({ issueCreate: { success: true, issue: node } })).createIssue({ teamKey: "ARN", title: "t", description: "d" })).id, "n1");
+  // false, a missing flag, a non-boolean flag or a missing payload is an unconfirmed write.
+  for (const bad of [{ success: false }, {}, { success: "true" }, { success: 1 }, null, undefined]) {
+    const label = JSON.stringify(bad);
+    await assert.rejects(store(() => ({ commentCreate: bad })).comment("i1", "claim"), /did not confirm the comment/, label);
+    await assert.rejects(store(() => ({ issueUpdate: bad })).setState("i1", "ARN", "started"), /did not confirm the started state/, label);
+    const withIssue = bad && typeof bad === "object" ? { ...bad, issue: node } : bad;
+    await assert.rejects(store(() => ({ issueCreate: withIssue })).createIssue({ teamKey: "ARN", title: "t", description: "d" }), /did not confirm the new issue/, label);
+  }
+  // A confirmed create that returns no usable issue is unconfirmed too.
+  for (const issue of [undefined, null, {}, { ...node, id: "" }]) {
+    await assert.rejects(store(() => ({ issueCreate: { success: true, issue } })).createIssue({ teamKey: "ARN", title: "t", description: "d" }), /did not return the new issue/);
+  }
+});
+
+test("ARN-45: listOpenAndRecent refuses a queue with an unreadable parent link; only an explicit null is a root", async () => {
+  const issue = (id: string, extra: Record<string, unknown>) => ({ id, identifier: id, title: "t", url: "u", createdAt: "2026-10-07T00:00:00Z", state: { type: "unstarted", name: "Todo" }, labels: { nodes: [] }, children: { nodes: [], pageInfo: { hasNextPage: false } }, ...extra });
+  const read = (nodes: unknown[]) => {
+    const f = (async () => new Response(JSON.stringify({ data: { issues: { nodes, pageInfo: { hasNextPage: false, endCursor: null } } } }), { status: 200 })) as unknown as typeof fetch;
+    return new LinearStore("k", f).listOpenAndRecent("ARN");
+  };
+  // Controls: an explicit null parent is a root task; a parent with an id is a sub-task of it.
+  const ok = await read([issue("a", { parent: null }), issue("b", { parent: { id: "a" } })]);
+  assert.deepEqual(ok.map((i) => [i.id, i.parentId]), [["a", null], ["b", "a"]]);
+  const bad: [string, Record<string, unknown>][] = [
+    ["missing parent field", {}], ["parent without id", { parent: {} }], ["null parent id", { parent: { id: null } }],
+    ["empty parent id", { parent: { id: "" } }], ["numeric parent id", { parent: { id: 7 } }], ["string parent", { parent: "a" }],
+  ];
+  for (const [name, extra] of bad) {
+    await assert.rejects(read([issue("ok", { parent: null }), issue("x", extra)]), /issue x without a readable parent link; refusing to act on an inconsistent queue/, name);
+  }
 });

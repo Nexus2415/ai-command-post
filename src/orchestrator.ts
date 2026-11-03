@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { statusContent } from "../api/lib/engine-status.js";
 import { AGENTS, AGENT_LIST, agentFor, titleFor } from "./agents.ts";
 import { Budget, estimateTokens, ledgerContent } from "./budget.ts";
@@ -335,20 +336,98 @@ export async function work(d: Deps, task: Issue, agent: AgentKey, report: TickRe
   report.worked.push(`${task.identifier} hit step limit`);
 }
 
-/** When every sub-task is done, the lead writes one summary on the command and closes it. */
+/** A result comment's first line, exactly as the engine writes it: "## Result (Name, done|blocked)". */
+const RESULT_LINE = new RegExp(`^${RESULT_MARKER} \\([^,()\\n]+, (done|blocked)\\)[ \\t\\r]*$`);
+
+/**
+ * The newest result posted on a sub-task. Only a comment whose first line is a result header counts, so a quoted
+ * or mentioned "## Result" never stands in for one. Linear doesn't guarantee comment order, so the newest is chosen
+ * by parsed creation time; a result without a readable time, or two different results at the same newest time,
+ * makes the outcome unknowable and throws rather than picking one.
+ */
+export function latestResult(comments: { body: string; createdAt?: string }[], where: string): string | undefined {
+  let best: { at: number; body: string } | undefined;
+  let conflict = false;
+  for (const c of comments) {
+    if (typeof c?.body !== "string" || !RESULT_LINE.test(c.body.split("\n", 1)[0]!)) continue;
+    const at = typeof c.createdAt === "string" ? Date.parse(c.createdAt) : NaN;
+    if (Number.isNaN(at)) throw new Error(`${where} has a result without a readable time, so its latest result can't be chosen`);
+    if (!best || at > best.at) {
+      best = { at, body: c.body };
+      conflict = false;
+    } else if (at === best.at && c.body !== best.body) conflict = true;
+  }
+  if (conflict) throw new Error(`${where} has two different results posted at the same time, so its outcome is unknown`);
+  return best?.body;
+}
+
+/** "done" or "blocked" from a result comment's header line. */
+function resultStatus(body: string): string | undefined {
+  return RESULT_LINE.exec(body.split("\n", 1)[0]!)?.[1];
+}
+
+/**
+ * When every sub-task is done, the lead writes one summary on the command and closes it. A sub-task marked Done
+ * whose newest result is missing or blocked contradicts itself, so the command's outcome is unknown: this throws,
+ * and the command is reported instead of summarized or marked Completed.
+ */
 async function childResults(d: Deps, children: Issue[]): Promise<string[]> {
   const results: string[] = [];
   for (const c of children) {
-    const cs = await d.store.getComments(c.id);
-    const last = [...cs].reverse().find((x) => x.body.includes(RESULT_MARKER));
-    results.push(`### ${c.identifier} ${c.title}\n${last?.body ?? "(no result posted)"}`);
+    const last = latestResult(await d.store.getComments(c.id), c.identifier);
+    if (c.stateType === "completed" && (!last || resultStatus(last) !== "done")) {
+      throw new Error(`${c.identifier} is marked Done but its newest result ${last ? "says blocked" : "is missing"}, so the command's outcome is unknown`);
+    }
+    results.push(`### ${c.identifier} ${c.title}\n${last ?? "(no result posted)"}`);
   }
   return results;
 }
 
+/** A summary comment's first line, exactly as the engine writes it: "## Command summary (Name)". */
+const SUMMARY_LINE = new RegExp(`^${RECONCILED_MARKER} \\([^()\\n]+\\)[ \\t\\r]*$`);
+export function isSummary(body: unknown): boolean {
+  return typeof body === "string" && SUMMARY_LINE.test(body.split("\n", 1)[0]!);
+}
+
+/**
+ * A fingerprint of everything a summary was written from: the command (id, identifier, title and instructions), the
+ * lead, and each sub-task's id and state plus the result text the lead was given. A posted summary records it on its
+ * second line, so a later run can tell whether that summary still answers the command and sub-tasks as they stand now.
+ */
+export function evidenceDigest(cmd: Issue, lead: AgentKey, children: Issue[], results: string[]): string {
+  const rows = children.map((c, i) => [c.id, c.stateType, results[i] ?? ""]).sort((a, b) => (a[0]! < b[0]! ? -1 : a[0]! > b[0]! ? 1 : 0));
+  const command = [cmd.id, cmd.identifier, cmd.title, cmd.description];
+  return createHash("sha256").update(JSON.stringify({ command, lead, rows })).digest("hex");
+}
+const EVIDENCE_LINE = /^<!-- acp-evidence: ([0-9a-f]{64}) -->[ \t\r]*$/;
+
+/** True for a real summary (header, evidence line, non-empty body) written from exactly this evidence. */
+export function summaryMatches(body: unknown, digest: string): boolean {
+  if (!isSummary(body)) return false;
+  const [, second = "", ...rest] = (body as string).split("\n");
+  return EVIDENCE_LINE.exec(second)?.[1] === digest && rest.join("\n").trim().length > 0;
+}
+
 async function reconcile(d: Deps, cmd: Issue, lead: AgentKey, children: Issue[], results: string[], report: TickReport): Promise<void> {
+  // Never report a command as completed when none of its sub-tasks actually completed (all canceled/blocked).
+  const anyDone = children.some((c) => c.stateType === "completed");
+  const close = async () => {
+    await d.store.setState(cmd.id, d.cfg.linearTeamKey, anyDone ? "completed" : "canceled");
+    report.reconciled.push(cmd.identifier);
+  };
+  // A summary already posted from this exact evidence (say an earlier run's state change failed) is not paid for
+  // again, but it doesn't close the command either: anyone who can comment could have written it, and a comment can't
+  // prove the engine did. The command stays In Progress and is reported for the owner to check and close. A
+  // header-only, unbound or stale summary (the command or sub-tasks changed since) doesn't count; the command is
+  // summarized again through the normal budget check. Only a summary this run wrote itself closes the command.
+  const digest = evidenceDigest(cmd, lead, children, results);
   const comments = await d.store.getComments(cmd.id);
-  if (comments.some((c) => c.body.includes(RECONCILED_MARKER))) return;
+  if (comments.some((c) => summaryMatches(c?.body, digest))) {
+    report.errors.push(
+      `${cmd.identifier}: a summary for its current sub-task results is already posted, but a comment can't prove the engine wrote it, so the command stays In Progress for the owner to check and close (no new summary was paid for)`,
+    );
+    return;
+  }
   const out = await callModel(
     d,
     lead,
@@ -366,11 +445,8 @@ async function reconcile(d: Deps, cmd: Issue, lead: AgentKey, children: Issue[],
     report.waiting.push(`${cmd.identifier}: lead cannot reconcile (${out.blocked})`);
     return;
   }
-  await d.store.comment(cmd.id, `${RECONCILED_MARKER} (${AGENTS[lead].name})\n\n${out}`);
-  // Never report a command as completed when none of its sub-tasks actually completed (all canceled/blocked).
-  const anyDone = children.some((c) => c.stateType === "completed");
-  await d.store.setState(cmd.id, d.cfg.linearTeamKey, anyDone ? "completed" : "canceled");
-  report.reconciled.push(cmd.identifier);
+  await d.store.comment(cmd.id, `${RECONCILED_MARKER} (${AGENTS[lead].name})\n<!-- acp-evidence: ${digest} -->\n\n${out}`);
+  await close();
 }
 
 export async function tick(deps: Deps): Promise<TickReport> {
@@ -379,15 +455,29 @@ export async function tick(deps: Deps): Promise<TickReport> {
   const issues = await d.store.listOpenAndRecent(d.cfg.linearTeamKey);
   const byId = new Map(issues.map((i) => [i.id, i]));
 
-  const newCommands = issues.filter((i) => !isQuestion(i) && isCommand(i) && OPEN.includes(i.stateType) && i.childIds.length === 0);
+  // A command whose sub-task list wasn't read in full is neither planned again (it may already have sub-tasks)
+  // nor completed from the sub-tasks that happened to be visible.
+  const unreadCommands = issues.filter((i) => !isQuestion(i) && isCommand(i) && i.childrenIncomplete && (OPEN.includes(i.stateType) || i.stateType === "started"));
+  const newCommands = issues.filter((i) => !isQuestion(i) && isCommand(i) && OPEN.includes(i.stateType) && i.childIds.length === 0 && !i.childrenIncomplete);
   const tasks = issues.filter((i) => !isQuestion(i) && !isCommand(i) && OPEN.includes(i.stateType));
-  const runningCommands = issues.filter((i) => !isQuestion(i) && isCommand(i) && i.stateType === "started" && i.childIds.length > 0);
+  const runningCommands = issues.filter((i) => !isQuestion(i) && isCommand(i) && i.stateType === "started" && i.childIds.length > 0 && !i.childrenIncomplete);
+  // A command that has sub-tasks but never reached In Progress had its planning cut short (a sub-task, the plan
+  // comment or the state change failed). It is never planned again (that would duplicate sub-tasks) and its
+  // sub-tasks don't run until the owner checks them and moves the command to In Progress.
+  const partialCommands = issues.filter((i) => !isQuestion(i) && isCommand(i) && OPEN.includes(i.stateType) && i.childIds.length > 0 && !i.childrenIncomplete);
 
   if (!d.cfg.active) {
     report.waiting.push(`Engine is off (ACP_ACTIVE=false). ${newCommands.length} command(s) and ${tasks.length} task(s) waiting.`);
     // Non-mutating stopped-state record: the run halted before any step, and says so in the run log.
     d.log?.(JSON.stringify({ at: new Date().toISOString(), ...report, budget: d.budget.summary() }));
     return report;
+  }
+
+  for (const cmd of unreadCommands) {
+    report.errors.push(`${cmd.identifier}: its sub-task list couldn't be read in full, so it was neither planned nor completed`);
+  }
+  for (const cmd of partialCommands) {
+    report.errors.push(`${cmd.identifier}: has sub-tasks but was never moved to In Progress, so its plan may be incomplete; it was not planned again and its sub-tasks wait until the owner checks them and moves it to In Progress`);
   }
 
   for (const cmd of newCommands) {
@@ -405,6 +495,25 @@ export async function tick(deps: Deps): Promise<TickReport> {
   const busy = new Set<AgentKey>();
   const ordered = [...tasks].sort((a, b) => (a.priority || 9) - (b.priority || 9) || a.createdAt.localeCompare(b.createdAt));
   for (const t of ordered) {
+    // A sub-task runs only when its lineage checks out: the parent is in this run's list (else it can't be told
+    // whether the parent is a command), and a command parent is In Progress (planning finished; see
+    // partialCommands above) with a fully read sub-task list that names this task.
+    if (t.parentId) {
+      const parent = byId.get(t.parentId);
+      const why = !parent
+        ? "its parent isn't in this run's issue list, so its lineage can't be checked"
+        : !isCommand(parent)
+          ? null
+          : parent.stateType !== "started"
+            ? `its command ${parent.identifier} isn't In Progress`
+            : parent.childrenIncomplete || !parent.childIds.includes(t.id)
+              ? `its command ${parent.identifier}'s sub-task list doesn't confirm it`
+              : null;
+      if (why) {
+        report.waiting.push(`${t.identifier}: ${why}, so it waits`);
+        continue;
+      }
+    }
     const agent = agentFor({ title: t.title, labels: t.labels, assignee: t.assignee });
     // No owner, or an owner that isn't connected: leave it. An offline preferred agent never silently becomes
     // another agent (e.g. Gemini); only an explicit title prefix, label or assignee routes a task.
@@ -438,6 +547,12 @@ export async function tick(deps: Deps): Promise<TickReport> {
     const kids = cmd.childIds.map((id) => byId.get(id));
     if (kids.some((k) => !k)) continue; // a child fell outside the window; skip rather than guess
     const children = kids as Issue[];
+    // Each listed sub-task must point back at this command. A child that names another parent (or none) means
+    // the sub-task link can't be trusted, so the command is reported and never completed from it.
+    if (children.some((c) => c.parentId !== cmd.id)) {
+      report.errors.push(`${cmd.identifier}: a listed sub-task doesn't name this command as its parent, so it was not completed`);
+      continue;
+    }
     if (children.every((c) => DONE.includes(c.stateType))) {
       try {
         // Budget preflight must cover the full reconciliation prompt (command plus every child result).
