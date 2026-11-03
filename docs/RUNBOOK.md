@@ -18,6 +18,7 @@
   - Retries exhausted, or a permanent error: comment `## Result … blocked` and set the issue to Canceled.
   - Failure **after** a tool call: blocked immediately (never replayed, to avoid duplicate writes).
 - To retry a blocked task, reopen it in Linear (or re-issue the command).
+- If a run reports that a command's summary "is already posted, but a comment can't prove the engine wrote it", the engine closes it only when that run wrote the summary itself (an earlier close failed, or someone else posted a matching one). Read the summary; if it's genuine, move the command to Done yourself. It isn't paid for again either way.
 
 ## How to pause
 1. Fastest: set repo variable `ACP_ACTIVE` to `false`. Next run does nothing.

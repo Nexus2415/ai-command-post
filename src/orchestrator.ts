@@ -415,12 +415,19 @@ async function reconcile(d: Deps, cmd: Issue, lead: AgentKey, children: Issue[],
     await d.store.setState(cmd.id, d.cfg.linearTeamKey, anyDone ? "completed" : "canceled");
     report.reconciled.push(cmd.identifier);
   };
-  // A summary already posted from this exact evidence (an earlier run's state change failed) is not paid for again:
-  // the command is just closed. A header-only, unbound or stale summary (the command or sub-tasks changed since) doesn't count;
-  // the command is summarized again through the normal budget check.
+  // A summary already posted from this exact evidence (say an earlier run's state change failed) is not paid for
+  // again, but it doesn't close the command either: anyone who can comment could have written it, and a comment can't
+  // prove the engine did. The command stays In Progress and is reported for the owner to check and close. A
+  // header-only, unbound or stale summary (the command or sub-tasks changed since) doesn't count; the command is
+  // summarized again through the normal budget check. Only a summary this run wrote itself closes the command.
   const digest = evidenceDigest(cmd, lead, children, results);
   const comments = await d.store.getComments(cmd.id);
-  if (comments.some((c) => summaryMatches(c?.body, digest))) return close();
+  if (comments.some((c) => summaryMatches(c?.body, digest))) {
+    report.errors.push(
+      `${cmd.identifier}: a summary for its current sub-task results is already posted, but a comment can't prove the engine wrote it, so the command stays In Progress for the owner to check and close (no new summary was paid for)`,
+    );
+    return;
+  }
   const out = await callModel(
     d,
     lead,
