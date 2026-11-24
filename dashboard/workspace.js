@@ -137,17 +137,17 @@
       const box = el("div", "m " + (m.role === "assistant" ? "assistant" : "user") + (kind === "synthesis" ? " synth" : ""));
       if (m.model) box.dataset.model = m.model;
       const name = m.role === "assistant" ? (MODEL_NAMES[m.model] || "AI") : "You";
-      box.append(el("span", "who", kind === "critique" ? name + " · critique and revised answer"
-        : kind === "synthesis" ? "Roundtable conclusion · written by " + name : name));
+      box.append(el("span", "who", kind === "critique" ? name + " · review and revised answer"
+        : kind === "synthesis" ? "Recommendation · written by " + name : name));
       showContent(box, kind === "critique" || kind === "synthesis" ? m.content.replace(/^\[Roundtable[^\]\n]*\]\n?/, "") : m.content);
       if (m.role !== "assistant" || kind === "synthesis") {
         row = null; rowKind = null;
-        if (kind === "synthesis") list.append(el("div", "round", "Round 3: one conclusion"));
+        if (kind === "synthesis") list.append(el("div", "round", "Step 3 · Final answer"));
         list.append(box); return;
       }
       if (!row || rowKind !== kind) {
         row = el("div", "cmp"); rowKind = kind; row.dataset.kind = kind;
-        if (kind === "critique") list.append(el("div", "round", "Round 2: the AIs critique each other"));
+        if (kind === "critique") list.append(el("div", "round", "Step 2 · Reviewing each other"));
         list.append(row);
       }
       row.append(box);

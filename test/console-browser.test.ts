@@ -43,7 +43,7 @@ test('ARN-77 real console DOM: outage, stale refresh, thread recovery and malfor
     (window as any).ACPConsole.start(); await flush();
     check($('cUpdated').textContent === 'Not loaded', 'initial outage must be not loaded');
     check($('cOverviewMsg').textContent.includes('synthetic outage'), 'initial outage message');
-    check(!$('cList').textContent.includes('No active taskings'), 'outage must not imply empty workload');
+    check(!$('cList').textContent.includes('No active tasks'), 'outage must not imply empty workload');
     outage = false; $('cRefresh').click(); await flush();
     check($('cList').textContent.includes('Synthetic command'), 'successful overview renders task');
     outage = true; $('cRefresh').click(); await flush();

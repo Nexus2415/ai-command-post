@@ -145,6 +145,8 @@ button.link{background:none;border:0;padding:0;margin-left:8px;color:inherit;tex
 @media (max-width:640px){.roster{grid-template-columns:repeat(2,minmax(0,1fr))}.sitrep{grid-template-columns:repeat(2,minmax(0,1fr))}.sitrep > div:nth-child(3){border-left:0}.sitrep > div:nth-child(n+3){border-top:1px solid var(--line)}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 </style>
+<link rel="stylesheet" href="ops-theme.css">
+<script src="ops-ui.js"></script>
 
 <div class="wrap">
   <div class="bar">
@@ -161,7 +163,7 @@ button.link{background:none;border:0;padding:0;margin-left:8px;color:inherit;tex
 
   <section class="panel console" aria-labelledby="cmdH" data-legacy>
     <div class="left">
-      <div class="leadrow"><span class="eyebrow" id="cmdH">Command authority</span></div>
+      <div class="leadrow"><span class="eyebrow" id="cmdH">Lead AI</span></div>
       <div class="seg" id="leadSeg" role="group" aria-label="Lead AI"></div>
       <label class="eyebrow" for="cmdText">Command</label>
       <textarea id="cmdText" placeholder="e.g. Research the top 5 FSM tools used by specialty subcontractors in South Florida and draft a connector shortlist"></textarea>
@@ -169,7 +171,7 @@ button.link{background:none;border:0;padding:0;margin-left:8px;color:inherit;tex
         <label class="eyebrow" for="prioSel">Priority</label>
         <select id="prioSel" class="sel"><option value="1">Urgent</option><option value="2">High</option><option value="3" selected>Medium</option><option value="4">Low</option></select>
         <button class="btn" id="issueBtn" type="button">Issue command</button>
-        <span id="confirmBox" hidden><button class="btn" id="confirmBtn" type="button">Confirm — create tasking</button> <button class="btn ghost" id="cancelBtn" type="button">Cancel</button></span>
+        <span id="confirmBox" hidden><button class="btn" id="confirmBtn" type="button">Confirm — create task</button> <button class="btn ghost" id="cancelBtn" type="button">Cancel</button></span>
       </div>
       <div id="cmdMsg" class="msg" hidden></div>
       <p class="note">Each command becomes a Linear issue titled with the lead AI's name. The lead breaks it into sub-tasks and hands them to the other AIs once the engine is connected.</p>
@@ -187,15 +189,15 @@ button.link{background:none;border:0;padding:0;margin-left:8px;color:inherit;tex
     </aside>
   </section>
 
-  <section class="panel sitrep" aria-label="Situation report" data-legacy>
+  <section class="panel sitrep" aria-label="Summary" data-legacy>
     <div><span class="eyebrow">In progress</span><span class="n mono" id="nProg">—</span><span class="s">Being worked now</span></div>
-    <div><span class="eyebrow">Queued</span><span class="n mono" id="nQueue">—</span><span class="s">Future taskings</span></div>
+    <div><span class="eyebrow">Queued</span><span class="n mono" id="nQueue">—</span><span class="s">Future tasks</span></div>
     <div><span class="eyebrow">Accomplished · 7 days</span><span class="n mono" id="nDone">—</span><span class="s" id="nDoneAll">Completed</span></div>
     <div><span class="eyebrow">Unclaimed</span><span class="n mono" id="nUncl">—</span><span class="s">Open, no AI owner</span></div>
   </section>
 
   <section data-legacy aria-labelledby="rosterH" style="display:grid;gap:10px">
-    <h2 id="rosterH" class="eyebrow" style="font-family:var(--mono);font-size:11px">Agent roster</h2>
+    <h2 id="rosterH" class="eyebrow" style="font-family:var(--mono);font-size:11px">AI roster</h2>
     <div class="roster" id="roster"></div>
   </section>
 
@@ -205,7 +207,7 @@ button.link{background:none;border:0;padding:0;margin-left:8px;color:inherit;tex
   <div id="eveConsole" class="cgrid" hidden>
     <section class="panel console" aria-labelledby="cComposeH">
       <div class="left">
-        <span class="eyebrow" id="cComposeH">POTUS composer</span>
+        <span class="eyebrow" id="cComposeH">Send a command</span>
         <div class="seg" id="cIntent" role="group" aria-label="Intent">
           <button type="button" data-intent="command" aria-pressed="true">Command</button>
           <button type="button" data-intent="question" aria-pressed="false">Question <span class="mono note">no agent execution</span></button>
@@ -227,12 +229,12 @@ button.link{background:none;border:0;padding:0;margin-left:8px;color:inherit;tex
     </section>
     <div id="cOverviewMsg" class="msg" role="status" hidden></div>
     <div class="cmain">
-      <section class="panel lane" aria-label="Taskings">
+      <section class="panel lane" aria-label="Tasks">
         <div class="ctabs" id="cTabs" role="tablist" aria-label="Task lanes"></div>
         <ol id="cList" role="tabpanel" tabindex="0"></ol>
       </section>
       <section aria-labelledby="cRosterH" class="croster-wrap">
-        <h2 id="cRosterH" class="eyebrow" style="font-family:var(--mono);font-size:11px">Agent roster · workload</h2>
+        <h2 id="cRosterH" class="eyebrow" style="font-family:var(--mono);font-size:11px">AI roster · workload</h2>
         <div class="croster" id="cRoster"></div>
       </section>
     </div>
@@ -243,10 +245,10 @@ button.link{background:none;border:0;padding:0;margin-left:8px;color:inherit;tex
     </section>
   </div>
 
-  <section class="board" aria-label="Taskings" data-legacy>
-    <div class="panel lane"><header><h2>In progress</h2><span class="mono note" id="cProg"></span></header><ol id="lProg"><li class="empty">Loading taskings from Linear…</li></ol></div>
-    <div class="panel lane"><header><h2>Queued</h2><span class="mono note" id="cQueue"></span></header><ol id="lQueue"><li class="empty">Loading taskings from Linear…</li></ol></div>
-    <div class="panel lane"><header><h2>Accomplished</h2><span class="mono note" id="cDone"></span></header><ol id="lDone"><li class="empty">Loading taskings from Linear…</li></ol></div>
+  <section class="board" aria-label="Tasks" data-legacy>
+    <div class="panel lane"><header><h2>In progress</h2><span class="mono note" id="cProg"></span></header><ol id="lProg"><li class="empty">Loading tasks from Linear…</li></ol></div>
+    <div class="panel lane"><header><h2>Queued</h2><span class="mono note" id="cQueue"></span></header><ol id="lQueue"><li class="empty">Loading tasks from Linear…</li></ol></div>
+    <div class="panel lane"><header><h2>Done</h2><span class="mono note" id="cDone"></span></header><ol id="lDone"><li class="empty">Loading tasks from Linear…</li></ol></div>
   </section>
 
   <div class="foot" data-legacy><span id="fresh">Waiting for Linear…</span><span>Ownership: an AI's name in [brackets] at the start of a title, a label, or the assignee.</span></div>
@@ -302,7 +304,7 @@ async function setLead(k){if(paused(k)||!AGENTS.find(a=>a.key===k))return;lead=k
 
 function renderRoster(){
   const r=$("roster"); r.innerHTML="";
-  const cols=[...AGENTS,{key:"none",name:"Unclaimed",role:"Open taskings with no AI owner yet"}];
+  const cols=[...AGENTS,{key:"none",name:"Unclaimed",role:"Open tasks with no AI owner yet"}];
   cols.forEach(a=>{const mine=issues.filter(i=>agentOf(i)===a.key);
     const c=k=>mine.filter(i=>lane(i)===k).length;
     const el=document.createElement("div");el.className="panel agent";el.dataset.ag=a.key;
@@ -337,7 +339,7 @@ function renderBoard(){
   $("nUncl").textContent=[...prog,...queue].filter(i=>agentOf(i)==="none").length;
   $("cProg").textContent=prog.length; $("cQueue").textContent=queue.length; $("cDone").textContent=done.length;
   fill("lProg",prog,"Nothing in progress. Issue a command to put an AI to work.");
-  fill("lQueue",queue,"No queued taskings.");
+  fill("lQueue",queue,"No queued tasks.");
   fill("lDone",done.slice(0,25),"Nothing completed yet.");
   renderRoster();
 }
@@ -345,7 +347,7 @@ function renderBoard(){
 function showPage(html,cls){const p=$("pageState");p.hidden=!html;p.className="panel state"+(cls?" msg "+cls:"");p.innerHTML=html||"";}
 function errText(e){const s=e&&e.server||"Linear";switch(e&&e.code){
   case "needs_reauth":return "Your "+s+" connection expired. Reconnect "+s+" in claude.ai Settings → Connectors, then reload.";
-  case "server_not_connected":case "selection_required":return "Add the "+s+" connector in claude.ai Settings → Connectors to see your taskings here.";
+  case "server_not_connected":case "selection_required":return "Add the "+s+" connector in claude.ai Settings → Connectors to see your tasks here.";
   case "not_in_manifest":case "not_granted":case "capability_disabled":case "capability_removed":return "This view isn't allowed to read "+s+". Allow it from the page's Permissions menu.";
   case "blocked_by_policy":return "Your organization's policy blocks "+s+" for this page.";
   case "approval_required":return s+" needs your approval for this page.";
