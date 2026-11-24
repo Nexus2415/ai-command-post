@@ -4,7 +4,7 @@
 import { hasSitePassword, isSameOrigin } from "./_lib/site-auth.js";
 import { MODELS, StoreError, createSupabaseStore, isId, workspaceConfigured } from "./_lib/workspace-store.js";
 import { BudgetStop, ModelError, estimateUsd, isPaid, mergeTurns, modelStatus, runChat, trimHistory } from "./_lib/workspace-models.js";
-import { pluginStatus, readyTools, runTool } from "./_lib/workspace-plugins.js";
+import { pluginStatus, readyTools, runTool, urlsIn } from "./_lib/workspace-plugins.js";
 import { mcpStatus, mcpTools } from "./_lib/workspace-mcp.js";
 import { STOP_MARK, harmCheck, logRefusal, refusalText, textOf } from "./_lib/workspace-rules.js";
 import { CRITIQUE_MARK, SYNTHESIS_MARK, critiquePrompt, estimateRounds, roundtableState, synthesisPrompt } from "./_lib/workspace-roundtable.js";
@@ -78,23 +78,23 @@ const stopped = (why) => error(423, why);
 
 // Rules gate: a refused request, tool call or reply is logged and written into the thread, so the owner sees what
 // was refused and why. `r` carries the cost when a model call already happened (a withheld reply still cost money).
-async function refuse(store, threadId, where, rule, model = null, r = null) {
+async function refuse(store, threadId, where, rule, model = null, r = null, suffix = "") {
   logRefusal(where, rule);
   return store.addMessage(threadId, {
-    role: "assistant", content: refusalText(where, rule), model,
+    role: "assistant", content: (refusalText(where, rule) + suffix).slice(0, 32_000), model,
     ...(r ? { input_tokens: r.inputTokens, output_tokens: r.outputTokens, cost_usd: Math.round(r.costUsd * 1e6) / 1e6 } : {}),
   });
 }
 // A model's reply, saved — unless the rules gate refuses it, in which case the refusal is saved instead (with the
-// cost, which was spent either way).
-async function gatedReply(store, threadId, model, text, r, prefix = "") {
+// cost, which was spent either way). `suffix` (the web audit) is kept either way.
+async function gatedReply(store, threadId, model, text, r, prefix = "", suffix = "") {
   const rule = harmCheck(text);
-  if (rule) return refuse(store, threadId, "reply", rule, model, r);
-  return reply(store, threadId, model, `${prefix}${text}`.slice(0, 32_000), r);
+  if (rule) return refuse(store, threadId, "reply", rule, model, r, suffix);
+  return reply(store, threadId, model, `${prefix}${text}`.slice(0, 32_000 - suffix.length) + suffix, r);
 }
 // Tools as the model sees them, wrapped so every call first passes the stop switch and the rules gate.
 function gatedRunTool(store, threadId, run) {
-  return async (name, args) => {
+  return async (name, args, soFar) => {
     const why = await stopReason(store);
     if (why) return { ok: false, text: "Stopped by the owner. Do not call any more tools; answer with what you have." };
     const rule = harmCheck(textOf(args).join("\n"));
@@ -102,12 +102,20 @@ function gatedRunTool(store, threadId, run) {
       await refuse(store, threadId, String(name).slice(0, 80), rule);
       return { ok: false, text: `Refused by the workspace's rules: ${rule.reason}. Do not try this again.` };
     }
-    return run(name, args);
+    return run(name, args, soFar);
   };
 }
 const refusedRequest = (rule, message) => ({
   status: 422, body: { error: `Refused by the rules gate: ${rule.reason}. Nothing was sent to any AI. The reason is saved in the thread.`, refused: message },
 });
+
+// The audit list of web calls made during one reply, written under it in the thread.
+function webAuditText(log) {
+  if (!log.length) return "";
+  const total = log.reduce((n, e) => n + e.usd, 0);
+  return `\n\nWeb activity (audit, times UTC, total $${total.toFixed(3)}):\n` +
+    log.map((e) => `- ${e.at.slice(11, 19)} ${e.kind}: ${e.target}${e.usd ? ` ($${e.usd.toFixed(3)})` : ""}`).join("\n");
+}
 
 const reply = (store, threadId, model, text, r) => store.addMessage(threadId, {
   role: "assistant", content: text, model,
@@ -227,15 +235,24 @@ const ACTIONS = Object.freeze({
     const saved = content ? await store.addMessage(thread.id, { role: "user", content }) : null;
     // MCP servers are asked for their tools only for models that can use tools.
     const tools = [...readyTools(env), ...(model === "perplexity" ? [] : await mcpTools(env, deps.fetch))];
-    const record = (text, r) => reply(store, thread.id, model, text, r);
+    // Web access for this reply: pages the owner linked may be read; search results add more. Each web call is
+    // checked against the caps first (web calls are always paid) and listed under the reply.
+    const allowedUrls = new Set(urlsIn(asked));
+    const overWeb = await budgetCheck(store, env, deps, thread.id, true);
+    const webLog = [];
+    const webCtx = (soFar) => ({
+      allowedUrls, charge: async (usd) => overWeb(soFar + usd),
+      audit: (kind, target, usd) => webLog.push({ at: deps.now().toISOString(), kind, target: String(target).slice(0, 300), usd }),
+    });
+    const record = (text, r) => reply(store, thread.id, model, (text + webAuditText(webLog)).slice(0, 32_000), r);
     let out;
     try {
       out = await runChat(env, model, sent, {
         f: deps.fetch, tools,
         notes: (await store.listNotes(thread.project_id)).map((n) => n.content),
-        runTool: gatedRunTool(store, thread.id, (name, a) => runTool(env, tools, name, a, deps.fetch)),
+        runTool: gatedRunTool(store, thread.id, (name, a, soFar = 0) => runTool(env, tools, name, a, deps.fetch, webCtx(soFar))),
         // Every later round of tool use is checked again: the stop switch, and the caps counting what this reply
-        // has already cost.
+        // has already cost (web calls included).
         beforeCall: async (est, soFar) => {
           if (soFar > 0 && await stopReason(store)) throw new BudgetStop(`${STOP_MARK} The reply was cut short; no further steps ran.`);
           const why = soFar > 0 ? over(soFar + est) : null;
@@ -248,7 +265,7 @@ const ACTIONS = Object.freeze({
       if (e.usage?.costUsd > 0) await record(`(The AI provider failed partway through this reply: ${e.message})`, e.usage);
       return { status: 502, body: { error: `${e.message} Your message was saved; try again for a reply.`, saved } };
     }
-    const message = await gatedReply(store, thread.id, model, out.text, out);
+    const message = await gatedReply(store, thread.id, model, out.text, out, "", webAuditText(webLog));
     return { saved, message };
   },
   // Side-by-side answers: one message goes to 2-3 AIs at once and each answer is saved with its AI. Plugins stay

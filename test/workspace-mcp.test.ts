@@ -71,7 +71,7 @@ test("only owner-named tools that the server marks read-only are offered, and th
   assert.equal(log[1].headers["mcp-session-id"], "sess-1");
   assert.equal(log[2].headers["mcp-protocol-version"], "2025-06-18");
   const r = await runTool(base, tools, "mcp_notes_search", { q: "launch" }, f);
-  assert.deepEqual(r, { ok: true, text: "Found: launch plan\n[image left out]" });
+  assert.deepEqual(r, { ok: true, text: "Found: launch plan\n[image left out]", usd: 0 });
   const call = log.at(-1);
   assert.equal(call.method, "tools/call");
   assert.deepEqual(call.body.params, { name: "search", arguments: { q: "launch" } });
