@@ -4,7 +4,7 @@
 // Dispatch is unsupported until its contract, budget reservation and ownership claim exist (see DISPATCH_UNSUPPORTED).
 // An ambiguous health answer (malformed 2xx) is reported as unknown, never as ready.
 // Turning this on in a preview is not production activation, and this file never mints or requests tokens.
-import { hasSitePassword, isSameOrigin } from "./lib/site-auth.js";
+import { hasSitePassword, isSameOrigin } from "./_lib/site-auth.js";
 
 export const HEALTH_PATH = "/eve/v1/health"; // documented in HYBRID-ARCHITECTURE.md
 export const DISPATCH_UNSUPPORTED = "Eve dispatch is not implemented: its route, auth and payload are unverified, there is no budget reservation, and no ownership claim yet (ARN-52).";

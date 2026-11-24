@@ -74,7 +74,7 @@ test/                node:test suites (fake models, fake fetch; no network)
 
 ## Website (Vercel)
 
-The dashboard also runs as a website: `vercel.json` serves `dashboard/`, `api/console.js` (read-only) and `api/intake.js` (commands and questions) talk to Linear for it, and `api/linear.js` is the legacy read-only adapter. All of them share one password and origin check (`api/lib/site-auth.js` once ARN-83 F6 is merged). Import the repo in Vercel and set two environment variables: `LINEAR_API_KEY` and `ACP_SITE_PASSWORD` (anyone with the password can see your Linear team and issue commands). Without both, the site refuses every request. It can list teams and issues and create new command issues, nothing else.
+The dashboard also runs as a website: `vercel.json` serves `dashboard/`, `api/console.js` (read-only) and `api/intake.js` (commands and questions) talk to Linear for it, and `api/linear.js` is the legacy read-only adapter. All of them share one password and origin check (`api/_lib/site-auth.js` once ARN-83 F6 is merged). Import the repo in Vercel and set two environment variables: `LINEAR_API_KEY` and `ACP_SITE_PASSWORD` (anyone with the password can see your Linear team and issue commands). Without both, the site refuses every request. It can list teams and issues and create new command issues, nothing else.
 
 The owner console sends new commands only to an AI lead you have explicitly approved. In Vercel, set `ACP_DEFAULT_LEAD` (for example `claude`) and list it in `ACP_INTAKE_ALLOWED_LEADS` (comma-separated). If either is missing, or the lead isn't on the list, the console refuses commands and files nothing. Questions still work.
 

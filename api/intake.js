@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { hasSitePassword, isSameOrigin } from "./lib/site-auth.js";
+import { hasSitePassword, isSameOrigin } from "./_lib/site-auth.js";
 
 // Owner command/question intake. Scope is fixed here, never taken from the browser.
 const LINEAR = "https://api.linear.app/graphql";

@@ -2,9 +2,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { handle } from "../api/console.js";
-import { TEAM_ID, PROJECT_ID } from "../api/lib/console-state.js";
+import { TEAM_ID, PROJECT_ID } from "../api/_lib/console-state.js";
 // @ts-ignore plain-JS module served by Vercel
-import { lifecycleOf } from "../api/lib/command-lifecycle.js";
+import { lifecycleOf } from "../api/_lib/command-lifecycle.js";
 import { COMMAND_MARKER, RESULT_MARKER, RECONCILED_MARKER, EXECUTOR_MARKER } from "../src/orchestrator.ts";
 
 // Synthetic fixtures only (ARN-71). Nothing here reaches Linear, a model provider or Eve.
@@ -22,7 +22,7 @@ const life = (issue: any, comments: any[] = [], children: any = [], complete: an
   lifecycleOf({ ...issue, labels: issue.labels.nodes.map((l: any) => l.name) }, comments, children, complete);
 
 test("JS markers match the engine's markers", () => {
-  const src = readFileSync("api/lib/command-lifecycle.js", "utf8");
+  const src = readFileSync("api/_lib/command-lifecycle.js", "utf8");
   for (const m of [COMMAND_MARKER, RESULT_MARKER, RECONCILED_MARKER]) assert.ok(src.includes(JSON.stringify(m)), m);
   assert.ok(src.includes("^" + EXECUTOR_MARKER), EXECUTOR_MARKER);
 });
@@ -112,7 +112,7 @@ test("thread endpoint returns the lifecycle with one read-only Linear query and 
 });
 
 test("lifecycle code has no write, model or Eve path", () => {
-  const src = readFileSync("api/lib/command-lifecycle.js", "utf8");
+  const src = readFileSync("api/_lib/command-lifecycle.js", "utf8");
   assert.doesNotMatch(src, /fetch\(|mutation|^import\s|\beve\b|anthropic|openai|generativelanguage/im);
 });
 

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { handle } from "../api/console.js";
-import { TEAM_ID, PROJECT_ID, laneOf, ownerOf, overviewOf, safeLinearUrl } from "../api/lib/console-state.js";
+import { TEAM_ID, PROJECT_ID, laneOf, ownerOf, overviewOf, safeLinearUrl } from "../api/_lib/console-state.js";
 
 const env = { ACP_SITE_PASSWORD: "pw", LINEAR_API_KEY: "lin" };
 const req = (body: any = { action: "overview" }, headers = {}) => ({
@@ -215,7 +215,7 @@ test("upstream errors and malformed replies are sanitized; no false empty succes
 });
 
 test("Codex is a separate owner from ChatGPT, and questions are marked as questions", async () => {
-  const { ownerOf, projectIssue, overviewOf } = await import("../api/lib/console-state.js");
+  const { ownerOf, projectIssue, overviewOf } = await import("../api/_lib/console-state.js");
   assert.equal(ownerOf("[Codex] fix CI"), "codex");
   assert.equal(ownerOf("  [codex] review"), "codex");
   assert.equal(ownerOf("[ChatGPT] plan"), "chatgpt");
@@ -232,7 +232,7 @@ test("Codex is a separate owner from ChatGPT, and questions are marked as questi
 });
 
 test("ARN-54: Codex metadata survives non-agent prefixes; agent prefixes and other metadata still win", async () => {
-  const { ownerOf } = await import("../api/lib/console-state.js");
+  const { ownerOf } = await import("../api/_lib/console-state.js");
   const L = (...n: string[]) => ({ nodes: n.map((name) => ({ name })) });
   // Codex label or assignee under a non-agent prefix ([Question]) is Codex, never ChatGPT via "openai".
   assert.equal(ownerOf({ title: "[Question] What is blocked?", labels: L("codex") }), "codex");
@@ -251,7 +251,7 @@ test("ARN-54: Codex metadata survives non-agent prefixes; agent prefixes and oth
 });
 
 test("ARN-54: an owner question is never an agent's nextTask", async () => {
-  const { overviewOf } = await import("../api/lib/console-state.js");
+  const { overviewOf } = await import("../api/_lib/console-state.js");
   const q = { id: "q", identifier: "ARN-1", title: "[Question] what?", priority: 1, state: { name: "Todo", type: "unstarted" }, labels: { nodes: [{ name: "codex" }] } };
   const t = { id: "t", identifier: "ARN-2", title: "[Codex] fix", priority: 3, state: { name: "Todo", type: "unstarted" }, labels: { nodes: [] } };
   const codex = overviewOf([q, t], "now").agents.find((a: any) => a.key === "codex")!;

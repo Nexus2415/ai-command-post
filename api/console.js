@@ -1,7 +1,7 @@
-import { TEAM_ID, PROJECT_ID, overviewOf, projectIssue, safeLinearUrl } from "./lib/console-state.js";
-import { lifecycleOf } from "./lib/command-lifecycle.js";
-import { engineStatusRead } from "./lib/engine-status.js";
-import { hasSitePassword, isCrossSite } from "./lib/site-auth.js";
+import { TEAM_ID, PROJECT_ID, overviewOf, projectIssue, safeLinearUrl } from "./_lib/console-state.js";
+import { lifecycleOf } from "./_lib/command-lifecycle.js";
+import { engineStatusRead } from "./_lib/engine-status.js";
+import { hasSitePassword, isCrossSite } from "./_lib/site-auth.js";
 
 const LINEAR = "https://api.linear.app/graphql";
 const FIELDS = `id identifier title url priority updatedAt completedAt

@@ -3,11 +3,11 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PROJECT_ID } from "../api/lib/console-state.js";
+import { PROJECT_ID } from "../api/_lib/console-state.js";
 import { Budget, LEDGER_TITLE, ledgerContent, ledgerFromContent, type LedgerState } from "../src/budget.ts";
 import { loadConfig } from "../src/config.ts";
 import { DryRunStore, LinearStore, type TaskStore } from "../src/linear.ts";
-import { STATUS_TITLE } from "../api/lib/engine-status.js";
+import { STATUS_TITLE } from "../api/_lib/engine-status.js";
 import { tick, type Deps } from "../src/orchestrator.ts";
 
 // HANDOFF gap 2: the spend ledger also lives in a Linear project document, merged with the Actions cache copy.

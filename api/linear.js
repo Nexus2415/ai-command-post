@@ -1,8 +1,8 @@
 // Website backend (Vercel serverless function). Legacy read-only adapter.
 // The active dashboard uses /api/console; command creation uses /api/intake.
 // This compatibility endpoint is fixed to the Arnexyia Launch Operations scope.
-import { TEAM_ID, PROJECT_ID } from "./lib/console-state.js";
-import { hasSitePassword, isCrossSite } from "./lib/site-auth.js";
+import { TEAM_ID, PROJECT_ID } from "./_lib/console-state.js";
+import { hasSitePassword, isCrossSite } from "./_lib/site-auth.js";
 
 const LINEAR = "https://api.linear.app/graphql";
 const MAX_BODY = 8192;

@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { handle } from "../api/workspace.js";
-import { createMemoryStore } from "../api/lib/workspace-store.js";
-import { PLUGINS, readyTools, runTool, pluginStatus } from "../api/lib/workspace-plugins.js";
-import { TEAM_ID, PROJECT_ID } from "../api/lib/console-state.js";
+import { createMemoryStore } from "../api/_lib/workspace-store.js";
+import { PLUGINS, readyTools, runTool, pluginStatus } from "../api/_lib/workspace-plugins.js";
+import { TEAM_ID, PROJECT_ID } from "../api/_lib/console-state.js";
 
 // Phase 1 step 4: plugins every tool-using model shares. Fake fetch only.
 const base = {

@@ -1,6 +1,6 @@
 // Minimal Linear GraphQL client. Linear is the shared task queue: commands, sub-tasks, handoffs and evidence all live there.
-import { PROJECT_ID } from "../api/lib/console-state.js";
-import { STATUS_TITLE } from "../api/lib/engine-status.js";
+import { PROJECT_ID } from "../api/_lib/console-state.js";
+import { STATUS_TITLE } from "../api/_lib/engine-status.js";
 import { LEDGER_TITLE, ledgerFromContent } from "./budget.ts";
 
 type Fetch = typeof fetch;

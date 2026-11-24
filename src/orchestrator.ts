@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { statusContent } from "../api/lib/engine-status.js";
+import { statusContent } from "../api/_lib/engine-status.js";
 import { AGENTS, AGENT_LIST, agentFor, titleFor } from "./agents.ts";
 import { Budget, estimateTokens, ledgerContent } from "./budget.ts";
 import { isAgentKey, isSuspended, type AgentKey, type Config } from "./config.ts";

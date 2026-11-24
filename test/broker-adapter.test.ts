@@ -421,7 +421,7 @@ test("ARN-89 disabled: the adapter is reachable from no live API, scheduler, web
   const live = [
     ...readdirSync("src").filter((x) => x !== "broker-adapter.ts").map((x) => `src/${x}`),
     ...readdirSync("api").filter((x) => x.endsWith(".js")).map((x) => `api/${x}`),
-    ...readdirSync("api/lib").map((x) => `api/lib/${x}`),
+    ...readdirSync("api/_lib").map((x) => `api/_lib/${x}`),
     ...readdirSync("dashboard").map((x) => `dashboard/${x}`),
     ...readdirSync(".github/workflows").map((x) => `.github/workflows/${x}`),
     "package.json", "vercel.json",

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { handle } from "../api/linear.js";
-import { TEAM_ID, PROJECT_ID } from "../api/lib/console-state.js";
+import { TEAM_ID, PROJECT_ID } from "../api/_lib/console-state.js";
 
 const env = { ACP_SITE_PASSWORD: "pw", LINEAR_API_KEY: "lin" };
 const req = (tool: string, args: object = {}, password = "pw") => ({ method: "POST", headers: { "x-acp-password": password }, body: { tool, args } });

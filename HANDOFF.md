@@ -55,7 +55,7 @@ The placeholder value only satisfies the startup check; the proxy replaces the h
 
 ## Known gaps (prioritized)
 
-1. ~~**Dashboard spend panel is static.**~~ Done: after each active run the engine rewrites the Linear project document "AI Command Post: engine status" (`api/lib/engine-status.js`), and the website console's Engine & budget panel reads it through `/api/console`. The document is display data only; anyone with Linear access can edit it.
+1. ~~**Dashboard spend panel is static.**~~ Done: after each active run the engine rewrites the Linear project document "AI Command Post: engine status" (`api/_lib/engine-status.js`), and the website console's Engine & budget panel reads it through `/api/console`. The document is display data only; anyone with Linear access can edit it.
 2. ~~**Ledger on Actions**~~ Done: the ledger is kept in the Actions cache and in the Linear document "AI Command Post: spend ledger", merged each run; a lost, unreadable or future-dated copy refuses paid calls until the owner sets `ACP_LEDGER_RESET=<YYYY-MM>` (ARN-83 F5).
 3. **Native tool calling.** Workers use a JSON-reply protocol so all four providers behave the same. Native function calling per provider would be more reliable; keep `runTool` and the policy check as the single gate.
 4. ~~**Paid-agent rates**~~ Updated 2026-10-20 to list prices for the default models (`src/budget.ts`), including Perplexity's per-request search fee. Re-check before raising the cap. Third-party sources say Perplexity's Sonar Chat Completions endpoint (used by `src/providers.ts`) was only supported until 2026-09-27; verify before keying Perplexity.

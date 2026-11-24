@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { handle } from "../api/workspace.js";
-import { createMemoryStore } from "../api/lib/workspace-store.js";
-import { mcpServers, mcpStatus, mcpTools } from "../api/lib/workspace-mcp.js";
-import { runTool } from "../api/lib/workspace-plugins.js";
+import { createMemoryStore } from "../api/_lib/workspace-store.js";
+import { mcpServers, mcpStatus, mcpTools } from "../api/_lib/workspace-mcp.js";
+import { runTool } from "../api/_lib/workspace-plugins.js";
 
 // Phase 2 step 4: MCP plugins. A fake MCP server answers over a fake fetch; nothing real is ever called.
 const MCP_URL = "https://mcp.example.com/mcp";

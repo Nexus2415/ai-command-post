@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { hasSitePassword, isCrossSite, isSameOrigin } from "../api/lib/site-auth.js";
+import { hasSitePassword, isCrossSite, isSameOrigin } from "../api/_lib/site-auth.js";
 
 // ARN-83 F6: the one shared copy of the site-password and origin checks used by every API route.
 const req = (headers: Record<string, string>) => ({ headers: { host: "acp.example", ...headers } });
