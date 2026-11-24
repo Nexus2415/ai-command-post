@@ -6,6 +6,7 @@ import { MODELS, StoreError, createSupabaseStore, isId, workspaceConfigured } fr
 import { BudgetStop, ModelError, estimateUsd, isPaid, mergeTurns, modelStatus, runChat, trimHistory } from "./_lib/workspace-models.js";
 import { pluginStatus, readyTools, runTool } from "./_lib/workspace-plugins.js";
 import { mcpStatus, mcpTools } from "./_lib/workspace-mcp.js";
+import { CRITIQUE_MARK, SYNTHESIS_MARK, critiquePrompt, estimateRounds, roundtableState, synthesisPrompt } from "./_lib/workspace-roundtable.js";
 
 // Vercel: model replies can take a while.
 export const config = { maxDuration: 120 };
@@ -181,42 +182,158 @@ const ACTIONS = Object.freeze({
   // Side-by-side answers: one message goes to 2-3 AIs at once and each answer is saved with its AI. Plugins stay
   // off here, so the budget check before the calls covers everything they can spend.
   async compare(store, args, env, deps) {
-    if (!isId(args.threadId)) return error(400, "Unknown thread.");
-    const { content, error: bad } = userMessage(args);
-    if (bad) return error(400, bad);
-    const models = Array.isArray(args.models) ? [...new Set(args.models)] : [];
-    if (models.length < 2 || models.length > MAX_COMPARE || !models.every((m) => MODELS.includes(m))) {
-      return error(400, `Pick 2 to ${MAX_COMPARE} AIs to compare.`);
+    const p = await askSeveral(store, args, env);
+    if (p.status) return p;
+    const why = (await budgetCheck(store, env, deps, p.thread.id, p.paid.length > 0))(p.paid.reduce((n, m) => n + estimateUsd(m, p.sent, env), 0));
+    if (why) return error(402, why);
+    return runRound1(store, env, deps, p);
+  },
+  // Roundtable mode, before it starts: the worst-case cost of all three rounds and whether the caps allow it.
+  async roundtable_estimate(store, args, env, deps) {
+    const p = await askSeveral(store, { ...args, content: typeof args.content === "string" && args.content.trim() ? args.content : "?" }, env);
+    if (p.status) return p;
+    const { estimate, why } = await planCheck(store, env, deps, p);
+    const spent = await store.spend(p.thread.id, monthStart(deps.now()));
+    return { estimate, lead: p.lead, fits: !why, why, budget: { ...caps(env), monthSpent: spent.monthUsd, threadSpent: spent.threadUsd } };
+  },
+  // Roundtable mode, one round per request so each stays inside the time limit and is budget-checked on its own.
+  // step "start": round 1, every AI answers on its own (side-by-side), refused unless all 3 rounds fit the caps.
+  // step "critique": round 2, each AI that answered reads the others' answers (labelled A, B…), critiques them and
+  // revises its own. step "synthesize": round 3, the lead AI writes one conclusion for the owner.
+  async roundtable(store, args, env, deps) {
+    if (args.step === "start") {
+      const p = await askSeveral(store, args, env);
+      if (p.status) return p;
+      const { estimate, why } = await planCheck(store, env, deps, p);
+      if (why) return error(402, `A full roundtable could cost up to ${usd(estimate.total)}. ${why}`);
+      const out = await runRound1(store, env, deps, p);
+      return { ...out, estimate, lead: p.lead, roundtableUsd: sumCost(out.messages) };
     }
+    if (args.step !== "critique" && args.step !== "synthesize") return error(400, "Unknown roundtable step.");
+    if (!isId(args.threadId)) return error(400, "Unknown thread.");
     const thread = await store.getThread(args.threadId);
     if (!thread) return error(404, "Unknown thread.");
-    for (const m of models) {
-      const status = modelStatus(env, m);
-      if (!status.ready) return error(409, `${NAMES[m]} isn't available: ${status.reason}`);
-    }
-    const history = mergeTurns(await store.listMessages(thread.id));
-    history.push({ role: "user", content });
-    const sent = trimHistory(mergeTurns(history));
-
-    const paid = models.filter((m) => isPaid(env, m));
-    const over = await budgetCheck(store, env, deps, thread.id, paid.length > 0);
-    const why = over(paid.reduce((n, m) => n + estimateUsd(m, sent, env), 0));
-    if (why) return error(402, why);
-
-    const saved = await store.addMessage(thread.id, { role: "user", content });
+    const state = roundtableState(await store.listMessages(thread.id));
+    if (!state || !state.answers.length) return error(409, "There is no side-by-side answer to discuss yet.");
+    if (state.synthesis) return error(409, "This roundtable is already finished. Ask a new question to start another.");
+    const over = await budgetCheck(store, env, deps, thread.id, true);
     const notes = (await store.listNotes(thread.project_id)).map((n) => n.content);
-    const results = await Promise.all(models.map((m) => runChat(env, m, sent, { f: deps.fetch, notes })
-      .then((r) => ({ m, r }), (e) => { if (e instanceof ModelError) return { m, e }; throw e; })));
-    const messages = [], failed = [];
-    for (const { m, r, e } of results) {
-      if (r) { messages.push(await reply(store, thread.id, m, r.text, r)); continue; }
-      // Calls made before the failure still cost money, so they are recorded.
-      if (e.usage?.costUsd > 0) await reply(store, thread.id, m, `(The AI provider failed partway through this reply: ${e.message})`, e.usage);
-      failed.push({ model: m, error: e.message });
+    const ask = (m, prompt) => runChat(env, m, [{ role: "user", content: prompt }], { f: deps.fetch, notes });
+    const failedReply = (m, e) => (e.usage?.costUsd > 0
+      ? reply(store, thread.id, m, `(The AI provider failed partway through this reply: ${e.message})`, e.usage) : null);
+    const ready = (m) => modelStatus(env, m).ready;
+
+    if (args.step === "critique") {
+      if (state.answers.length < 2) return error(409, "A roundtable needs answers from at least 2 AIs; only 1 answered.");
+      const done = new Set(state.critiques.map((c) => c.model));
+      const todo = state.answers.filter((a) => !done.has(a.model) && ready(a.model));
+      if (!todo.length) return error(409, "Round 2 has already run.");
+      const prompts = todo.map((a) => ({
+        m: a.model,
+        prompt: critiquePrompt(state.question.content, a.content, state.answers.filter((o) => o !== a).map((o) => o.content)),
+      }));
+      const why = over(prompts.filter(({ m }) => isPaid(env, m)).reduce((n, { m, prompt }) => n + estimateUsd(m, [{ content: prompt }], env), 0));
+      if (why) return error(402, why);
+      const results = await Promise.all(prompts.map(({ m, prompt }) => ask(m, prompt)
+        .then((r) => ({ m, r }), (e) => { if (e instanceof ModelError) return { m, e }; throw e; })));
+      const messages = [], failed = [];
+      for (const { m, r, e } of results) {
+        if (r) { messages.push(await reply(store, thread.id, m, `${CRITIQUE_MARK}\n${r.text}`.slice(0, 32_000), r)); continue; }
+        await failedReply(m, e);
+        failed.push({ model: m, error: e.message });
+      }
+      const after = roundtableState(await store.listMessages(thread.id));
+      return { messages, failed, roundtableUsd: sumCost([...after.answers, ...after.critiques]) };
     }
-    return { saved, messages, failed };
+
+    // Round 3. The lead is the thread's own AI when it answered; if the lead fails, the next AI that answered takes
+    // over, so one failure doesn't lose the conclusion.
+    const answered = state.answers.map((a) => a.model);
+    const order = [...new Set([thread.model, ...state.critiques.map((c) => c.model), ...answered])]
+      .filter((m) => answered.includes(m) && ready(m));
+    if (!order.length) return error(409, "None of the AIs that answered can write the conclusion right now.");
+    const prompt = synthesisPrompt(state.question.content, state.answers, state.critiques);
+    const failed = [];
+    let failedUsd = 0;
+    for (const m of order) {
+      const why = over(failedUsd + (isPaid(env, m) ? estimateUsd(m, [{ content: prompt }], env) : 0));
+      if (why) return { status: 402, body: { error: why, failed } };
+      let r;
+      try { r = await ask(m, prompt); } catch (e) {
+        if (!(e instanceof ModelError)) throw e;
+        await failedReply(m, e);
+        failedUsd += e.usage?.costUsd ?? 0;
+        failed.push({ model: m, error: e.message });
+        continue;
+      }
+      const footer = whoTookPart(args.models, state, m, failed);
+      const message = await reply(store, thread.id, m, `${SYNTHESIS_MARK}\n${r.text}\n\n${footer}`.slice(0, 32_000), r);
+      return { message, failed, lead: m, roundtableUsd: sumCost([...state.answers, ...state.critiques, message]) };
+    }
+    return { status: 502, body: { error: "No AI could write the conclusion. The first answers and critiques are saved.", failed } };
   },
 });
+
+const sumCost = (ms) => Math.round(ms.reduce((n, m) => n + Number(m.cost_usd || 0), 0) * 1e6) / 1e6;
+
+// Who took part, and who dropped out at which round, written under the conclusion.
+function whoTookPart(selected, state, lead, leadFailed) {
+  const name = (m) => NAMES[m] ?? m;
+  const answered = state.answers.map((a) => a.model);
+  const critiqued = new Set(state.critiques.map((c) => c.model));
+  const picked = Array.isArray(selected) ? [...new Set(selected)].filter((m) => MODELS.includes(m)) : answered;
+  const out = [];
+  for (const m of picked) if (!answered.includes(m)) out.push(`${name(m)} (didn't answer round 1)`);
+  if (answered.length > 1) for (const m of answered) if (!critiqued.has(m)) out.push(`${name(m)} (missed round 2)`);
+  for (const f of leadFailed) out.push(`${name(f.model)} (couldn't write the conclusion)`);
+  return `Roundtable: ${answered.map(name).join(", ")}. Conclusion by ${name(lead)}.` +
+    (out.length ? ` Dropped out: ${out.join("; ")}.` : "");
+}
+
+// Checks shared by side-by-side answers and a roundtable's first round. Returns an error response, or the plan.
+async function askSeveral(store, args, env) {
+  if (!isId(args.threadId)) return error(400, "Unknown thread.");
+  const { content, error: bad } = userMessage(args);
+  if (bad) return error(400, bad);
+  const models = Array.isArray(args.models) ? [...new Set(args.models)] : [];
+  if (models.length < 2 || models.length > MAX_COMPARE || !models.every((m) => MODELS.includes(m))) {
+    return error(400, `Pick 2 to ${MAX_COMPARE} AIs to compare.`);
+  }
+  const thread = await store.getThread(args.threadId);
+  if (!thread) return error(404, "Unknown thread.");
+  for (const m of models) {
+    const status = modelStatus(env, m);
+    if (!status.ready) return error(409, `${NAMES[m]} isn't available: ${status.reason}`);
+  }
+  const before = mergeTurns(await store.listMessages(thread.id));
+  const history = [...before, { role: "user", content }];
+  const sent = trimHistory(mergeTurns(history));
+  const lead = models.includes(thread.model) ? thread.model : models[0];
+  return { thread, content, models, sent, lead, paid: models.filter((m) => isPaid(env, m)) };
+}
+
+// The worst case for all three rounds of a roundtable, and why it would go over a cap (or null).
+async function planCheck(store, env, deps, p) {
+  const chars = p.sent.reduce((n, m) => n + m.content.length, 0);
+  const estimate = estimateRounds(env, p.models, p.lead, chars - p.content.length, p.content.length, (m) => isPaid(env, m));
+  const why = (await budgetCheck(store, env, deps, p.thread.id, p.paid.length > 0))(estimate.total);
+  return { estimate, why };
+}
+
+async function runRound1(store, env, deps, { thread, content, models, sent }) {
+  const saved = await store.addMessage(thread.id, { role: "user", content });
+  const notes = (await store.listNotes(thread.project_id)).map((n) => n.content);
+  const results = await Promise.all(models.map((m) => runChat(env, m, sent, { f: deps.fetch, notes })
+    .then((r) => ({ m, r }), (e) => { if (e instanceof ModelError) return { m, e }; throw e; })));
+  const messages = [], failed = [];
+  for (const { m, r, e } of results) {
+    if (r) { messages.push(await reply(store, thread.id, m, r.text, r)); continue; }
+    // Calls made before the failure still cost money, so they are recorded.
+    if (e.usage?.costUsd > 0) await reply(store, thread.id, m, `(The AI provider failed partway through this reply: ${e.message})`, e.usage);
+    failed.push({ model: m, error: e.message });
+  }
+  return { saved, messages, failed };
+}
 
 // Pure request handler, so tests can drive it with a memory store.
 export async function handle(req, env, makeStore = createSupabaseStore, deps = {}) {
