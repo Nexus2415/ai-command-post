@@ -5,7 +5,7 @@
   const $ = (id) => document.getElementById(id);
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = String(text); return e; };
   const MODEL_NAMES = { claude: "Claude", chatgpt: "ChatGPT", gemini: "Gemini", perplexity: "Perplexity" };
-  let projectId = null, threadId = null, busy = false, status = null, files = [], lastState = null;
+  let projectId = null, threadId = null, busy = false, status = null, files = [], lastState = null, threadPrivate = null;
   // Same markers as api/_lib/workspace-roundtable.js.
   const CRITIQUE_MARK = "[Roundtable round 2: critique and revised answer]", SYNTHESIS_MARK = "[Roundtable final answer]";
   const kindOf = (m) => m.role !== "assistant" ? "user" : m.content.startsWith(SYNTHESIS_MARK) ? "synthesis"
@@ -111,12 +111,13 @@
     if (!projectId) return;
     const { threads } = await post("list_threads", { projectId });
     renderList($("tList"), threads, "No threads yet. Click New to start one.", threadId,
-      (t) => t.title, (t) => (MODEL_NAMES[t.model] || t.model) + " · " + when(t.updated_at), (t) => openThread(t.id));
+      (t) => t.title, (t) => (MODEL_NAMES[t.model] || t.model) + " · " + when(t.updated_at) + (t.private === false ? "" : " · Private"), (t) => openThread(t.id));
   }
 
   function closeThread() {
     $("cH").textContent = "No thread open";
     $("cModel").hidden = true;
+    $("cPrivacy").hidden = true;
     $("cForm").hidden = true;
     $("mList").replaceChildren();
   }
@@ -127,6 +128,7 @@
     $("cH").textContent = thread.title;
     const chip = $("cModel"); chip.hidden = false; chip.dataset.model = thread.model;
     chip.lastElementChild.textContent = MODEL_NAMES[thread.model] || thread.model;
+    showPrivacy(thread.private);
     const list = $("mList"); list.replaceChildren();
     if (!messages.length) list.append(el("p", "empty", "No messages yet."));
     // Back-to-back AI answers to one message are side-by-side answers, shown in columns. A roundtable's critique
@@ -183,9 +185,33 @@
     await Promise.all([loadThreads(), loadStatus()]);
   }
 
+  // Shared or private, at a glance. Shared: other threads' AIs in this project may draw on this thread. Private:
+  // no other thread's AI can see it. Unknown (the database update isn't applied yet): treated as private.
+  function showPrivacy(p) {
+    threadPrivate = p;
+    const b = $("cPrivacy");
+    b.hidden = false;
+    b.disabled = p !== true && p !== false;
+    b.dataset.state = p === false ? "shared" : "private";
+    b.textContent = p === false ? "Shared in this project" : p === true ? "Private" : "Private (setup needed)";
+    b.title = p === false ? "Other threads' AIs in this project can draw on this thread. Click to make it private."
+      : p === true ? "No other thread's AI can see this thread. Click to share it with this project again."
+      : "Sharing between threads needs a one-time database update; until then no thread is shared.";
+    b.setAttribute("aria-label", b.textContent + ". " + b.title);
+  }
+
+  // An answer that drew on other threads ends with this line (same as api/_lib/workspace-shared.js); it is shown
+  // as a small "Drew on" note under the answer.
+  const SOURCES_LINE = /\n*Drew on other threads: ([^\n]*)/;
   // Attached files arrive folded into the message between markers; each shows as a collapsible block.
   const FILE_BLOCK = /<<<file: ([^\n]{1,120})>>>\n([\s\S]*?)\n<<<end of file>>>/g;
   function showContent(box, content) {
+    const src = content.match(SOURCES_LINE);
+    if (src) content = content.replace(SOURCES_LINE, "");
+    showText(box, content);
+    if (src) box.append(el("div", "drew", "Drew on: " + src[1]));
+  }
+  function showText(box, content) {
     let at = 0;
     for (const f of content.matchAll(FILE_BLOCK)) {
       const before = content.slice(at, f.index).trim();
@@ -318,6 +344,13 @@
     say(notes.join(" "), notes.length > 1 ? "warn" : "");
     return true;
   }
+  // Make this thread private, or shared with the project again. Reversible at any time.
+  $("cPrivacy").addEventListener("click", guard(async () => {
+    if (!threadId || (threadPrivate !== true && threadPrivate !== false)) return;
+    const { thread } = await post("set_private", { threadId, private: !threadPrivate });
+    showPrivacy(thread.private);
+    await loadThreads();
+  }));
   $("cDiscuss").addEventListener("click", guard(async () => {
     $("cDiscuss").disabled = true;
     try { await finishRoundtable(null, 0, ""); } finally { $("cDiscuss").disabled = halted; }

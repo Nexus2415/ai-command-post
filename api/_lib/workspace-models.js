@@ -4,6 +4,7 @@
 
 // USD per million tokens plus any flat per-request fee. Same values and sources as DEFAULT_RATES in src/budget.ts.
 import { REFUSAL_MARK, STOP_MARK } from "./workspace-rules.js";
+import { stripSources } from "./workspace-shared.js";
 
 export const RATES = Object.freeze({
   claude: { inputPerM: 2, outputPerM: 10, freeTier: false },
@@ -88,7 +89,11 @@ export function mergeTurns(all) {
     const several = m.role === "assistant" && group.length > 1;
     out.push({
       role: m.role,
-      content: group.map((g) => (several ? `Answer from ${NAMES[g.model] ?? "another AI"}:\n${g.content}` : g.content)).join("\n\n"),
+      // The "drew on other threads" line is for the owner only; it never goes back to a model.
+      content: group.map((g) => {
+        const c = g.role === "assistant" ? stripSources(g.content) : g.content;
+        return several ? `Answer from ${NAMES[g.model] ?? "another AI"}:\n${c}` : c;
+      }).join("\n\n"),
     });
   }
   return out;
@@ -132,7 +137,8 @@ const SYSTEM = "You are an assistant in the AI Command Post workspace for Arnexy
 
 // Project memory: the owner's notes for the project, newest last, up to MAX_NOTES_CHARS in all.
 export const MAX_NOTES_CHARS = 8_000;
-export function systemPrompt(notes) {
+// `shared` is the bounded background from the project's other shared threads (workspace-shared.js), or "".
+export function systemPrompt(notes, shared = "") {
   const kept = [];
   let chars = 0;
   for (let i = notes.length - 1; i >= 0; i--) {
@@ -141,7 +147,8 @@ export function systemPrompt(notes) {
     chars += c.length;
     kept.unshift(c);
   }
-  return kept.length ? `${SYSTEM}\n\nProject notes from the owner (keep them in mind):\n${kept.map((n) => `- ${n}`).join("\n")}` : SYSTEM;
+  const base = kept.length ? `${SYSTEM}\n\nProject notes from the owner (keep them in mind):\n${kept.map((n) => `- ${n}`).join("\n")}` : SYSTEM;
+  return shared ? `${base}\n\n${shared}` : base;
 }
 
 // Most model calls one reply may make: the first, plus up to this many rounds of tool results.
@@ -242,12 +249,12 @@ const tokens = (n) => Math.max(0, Math.floor(Number(n) || 0));
  * `beforeCall(estimateUsd, costSoFarUsd)` runs before every model call and throws BudgetStop to stop. Usage from calls already
  * made is always returned, so it is recorded even when a later step fails.
  */
-export async function runChat(env, model, history, { f = fetch, tools = [], runTool, beforeCall = async () => {}, now = Date.now, notes = [] } = {}) {
+export async function runChat(env, model, history, { f = fetch, tools = [], runTool, beforeCall = async () => {}, now = Date.now, notes = [], shared = "" } = {}) {
   const status = modelStatus(env, model);
   if (!status.ready) throw new ModelError(status.reason);
   const fee = feeFor(env, model);
   const started = now();
-  const system = systemPrompt(notes);
+  const system = systemPrompt(notes, shared);
   const convo = history.map((m) => ({ role: m.role, content: m.content }));
   const used = [];
   let inputTokens = 0, outputTokens = 0, cost = 0, text = "", note = "";
@@ -255,7 +262,8 @@ export async function runChat(env, model, history, { f = fetch, tools = [], runT
   for (let round = 0; ; round++) {
     const allowCalls = round < MAX_TOOL_ROUNDS;
     try {
-      await beforeCall(costUsd(model, Math.ceil(JSON.stringify(convo).length / 3) + 50, MAX_OUTPUT_TOKENS) * fee, cost);
+      // The system prompt (project notes and the shared background) is counted too.
+      await beforeCall(costUsd(model, Math.ceil((JSON.stringify(convo).length + system.length) / 3) + 50, MAX_OUTPUT_TOKENS) * fee, cost);
     } catch (e) {
       if (!(e instanceof BudgetStop)) throw e;
       note = e.message;
