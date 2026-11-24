@@ -37,9 +37,9 @@
     codex: ["Coder", "Reviewer"],
   };
   const PHASES = {
-    start: "PHASE 1/3 · RECON: each unit answers",
-    critique: "PHASE 2/3 · CROSS-CHECK: units critique each other's answers",
-    synthesize: "PHASE 3/3 · COMMAND DECISION: the lead writes one recommendation",
+    start: "Step 1 of 3 · First answers: each AI answers on its own",
+    critique: "Step 2 of 3 · Reviewing each other: the AIs check each other's answers",
+    synthesize: "Step 3 of 3 · Final answer: the lead AI writes one recommendation",
   };
   const keyOf = (k) => (Object.prototype.hasOwnProperty.call(SHAPES, k) ? k : "none");
 
@@ -47,14 +47,14 @@
   function describe(url, init) {
     const path = String(url || "").replace(/^https?:\/\/[^/]+/, "").split("?")[0];
     if (!init || String(init.method || "GET").toUpperCase() !== "POST") return null;
-    if (path === "/api/intake") return { phase: "ISSUING ORDERS: sending your command", units: [] };
+    if (path === "/api/intake") return { phase: "Sending your command", units: [] };
     if (path !== "/api/workspace") return null;
     let body = null;
     try { body = JSON.parse(typeof init.body === "string" ? init.body : ""); } catch (e) { return null; }
     const a = body && body.action, args = (body && body.args) || {};
     const units = Array.isArray(args.models) ? args.models.filter((m) => typeof m === "string").map(keyOf) : [];
-    if (a === "chat") return { phase: "RADIO CHECK: unit is replying", units, thread: true };
-    if (a === "compare") return { phase: "RECON: units answer side by side", units };
+    if (a === "chat") return { phase: "Waiting for the reply", units, thread: true };
+    if (a === "compare") return { phase: "Getting answers side by side", units };
     if (a === "roundtable" && PHASES[args.step]) return { phase: PHASES[args.step], units, step: args.step, roundtable: true };
     return null;
   }
@@ -69,7 +69,7 @@
   }
 
   const money = (n) => "$" + (n < 0.01 && n > 0 ? n.toFixed(4) : n.toFixed(2));
-  const clock = (ms) => { const s = Math.max(0, Math.floor(ms / 1000)); return "T+" + String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0"); };
+  const clock = (ms) => { const s = Math.max(0, Math.floor(ms / 1000)); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); };
 
   const core = { NAMES, SUSPENDED, SHAPES, SUB_UNITS, PHASES, describe, costOf, money, clock, keyOf };
   root.ACPOpsCore = core;
@@ -110,7 +110,7 @@
     const k = keyOf(key), names = SUB_UNITS[k];
     if (!names) return null;
     const box = document.createElement("div"); box.className = "subunits";
-    const tag = document.createElement("span"); tag.className = "tag"; tag.textContent = "Sub-units"; box.append(tag);
+    const tag = document.createElement("span"); tag.className = "tag"; tag.textContent = "Helpers"; box.append(tag);
     names.forEach((n, i) => {
       const chip = document.createElement("span"); chip.className = "subunit";
       const txt = document.createElement("span"); txt.textContent = NAMES[k] + "-" + (i + 1);
@@ -138,7 +138,7 @@
 
   function insigniaKey() {
     const d = document.createElement("details"); d.className = "panel ins-key"; d.id = "insKey";
-    const s = document.createElement("summary"); s.textContent = "Unit insignia key"; d.append(s);
+    const s = document.createElement("summary"); s.textContent = "AI avatar key"; d.append(s);
     const ul = document.createElement("ul");
     Object.keys(SUB_UNITS).forEach((k) => {
       const li = document.createElement("li");
@@ -171,7 +171,7 @@
     beacon.dataset.state = working ? "working" : "idle";
     beacon.style.color = working ? "var(--amber)" : "";
     const grow = span("ob-grow"), head = span("ob-headline"), meta = span("ob-meta");
-    head.append(span("ob-blink"), span("ob-title", working ? "OPERATION IN PROGRESS" : "STANDING BY"));
+    head.append(span("ob-blink"), span("ob-title", working ? "WORKING" : "READY"));
     grow.append(head, meta);
     const kids = [radar(), grow];
     if (working) {
@@ -185,11 +185,11 @@
         kids.push(u);
       }
     } else {
-      meta.append(span("ob-phase", last ? "Last operation: " + clock(last.ms).slice(2) + (last.usd > 0 ? " · " + money(last.usd) : "") + (last.error ? " · ended with an error" : "") : "No operation running"));
+      meta.append(span("ob-phase", last ? "Last job took " + clock(last.ms) + (last.usd > 0 ? " · " + money(last.usd) : "") + (last.error ? " · ended with an error" : "") : "Nothing running"));
     }
     beacon.replaceChildren(...kids);
     // Screen readers hear the state and phase when they change, not every tick of the clock.
-    const say = working ? "Operation in progress. " + op.phase : "Standing by.";
+    const say = working ? "Working. " + op.phase : "Ready. Nothing running.";
     if (live && live.textContent !== say) live.textContent = say;
   }
   function tick() { const t = beacon && beacon.querySelector(".ob-time"); if (t && op) t.textContent = clock(Date.now() - op.started); }
@@ -207,7 +207,7 @@
     if (!op) return;
     if (res && res.cost) op.usd = res.cost.total ? Math.max(op.usd, res.cost.usd) : op.usd + res.cost.usd;
     if (inflight > 0) return render();
-    // A roundtable runs one request per phase; keep the operation open briefly between phases so it doesn't flicker.
+    // A roundtable runs one request per step; keep the job open briefly between steps so it doesn't flicker.
     const between = d.roundtable && d.step !== "synthesize" && res && res.ok;
     clearTimeout(holdTimer);
     holdTimer = setTimeout(() => {

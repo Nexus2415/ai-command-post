@@ -5,7 +5,7 @@
 (function (root) {
   "use strict";
   const TABS = ["done", "active", "queued", "blocked", "review", "canceled"];
-  const TAB_LABEL = { done: "Mission complete", active: "In the field", queued: "Staged", blocked: "Blocked", review: "Review", canceled: "Canceled" };
+  const TAB_LABEL = { done: "Done", active: "In progress", queued: "Queued", blocked: "Blocked", review: "Review", canceled: "Canceled" };
   const AGENT_NAME = { chatgpt: "ChatGPT", claude: "Claude", codex: "Codex", gemini: "Gemini", perplexity: "Perplexity" };
   const ID_RE = /^ARN-[1-9]\d{0,8}$/;
   const QUESTION_EXPLANATION = "Submitting a question creates a Linear issue for an answer. It does not authorize agents to execute tools or change existing work.";
@@ -226,9 +226,9 @@
     const ol = $("cList");
     ol.replaceChildren();
     ol.setAttribute("aria-labelledby", "ctab-" + tab);
-    if (!overview) { ol.appendChild(el("li", "empty", "Loading taskings…")); return; }
+    if (!overview) { ol.appendChild(el("li", "empty", "Loading tasks…")); return; }
     const list = laneIssues(overview, tab).sort((a, b) => Date.parse(b.updatedAt || 0) - Date.parse(a.updatedAt || 0));
-    if (!list.length) { ol.appendChild(el("li", "empty", "No " + TAB_LABEL[tab].toLowerCase() + " taskings.")); return; }
+    if (!list.length) { ol.appendChild(el("li", "empty", "No " + TAB_LABEL[tab].toLowerCase() + " tasks.")); return; }
     list.forEach(it => {
       const li = el("li", "task"); li.dataset.ag = it.owner || "none";
       const body = el("div");

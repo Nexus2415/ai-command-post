@@ -30,14 +30,14 @@ test("the beacon only lights for AI work, and names the briefing phase", () => {
   assert.equal(core.describe("/api/console", post("chat")), null);
   assert.equal(core.describe("/api/workspace", { method: "POST", body: "not json" }), null);
   const chat = core.describe("/api/workspace", post("chat", { threadId: "t" }));
-  assert.ok(chat.thread && /RADIO CHECK/.test(chat.phase));
+  assert.ok(chat.thread && /Waiting for the reply/.test(chat.phase));
   const cmp = core.describe("https://x.example/api/workspace?x=1", post("compare", { models: ["claude", "chatgpt", 7] }));
   assert.deepEqual([...cmp.units], ["claude", "chatgpt"]);
-  assert.match(core.describe("/api/workspace", post("roundtable", { step: "start", models: ["claude"] })).phase, /PHASE 1\/3 · RECON/);
-  assert.match(core.describe("/api/workspace", post("roundtable", { step: "critique" })).phase, /PHASE 2\/3 · CROSS-CHECK/);
-  assert.match(core.describe("/api/workspace", post("roundtable", { step: "synthesize" })).phase, /PHASE 3\/3 · COMMAND DECISION/);
+  assert.match(core.describe("/api/workspace", post("roundtable", { step: "start", models: ["claude"] })).phase, /Step 1 of 3 · First answers/);
+  assert.match(core.describe("/api/workspace", post("roundtable", { step: "critique" })).phase, /Step 2 of 3 · Reviewing each other/);
+  assert.match(core.describe("/api/workspace", post("roundtable", { step: "synthesize" })).phase, /Step 3 of 3 · Final answer/);
   assert.equal(core.describe("/api/workspace", post("roundtable", { step: "bogus" })), null);
-  assert.match(core.describe("/api/intake", { method: "post", body: "{}" }).phase, /ISSUING ORDERS/);
+  assert.match(core.describe("/api/intake", { method: "post", body: "{}" }).phase, /Sending your command/);
 });
 
 test("running cost comes from what the server reports", () => {
@@ -47,7 +47,7 @@ test("running cost comes from what the server reports", () => {
   assert.equal(core.costOf(null).usd, 0);
   assert.equal(core.money(0.0004), "$0.0004");
   assert.equal(core.money(0.06), "$0.06");
-  assert.equal(core.clock(65_000), "T+01:05");
+  assert.equal(core.clock(65_000), "1:05");
 });
 
 test("both owner pages load the theme after their own styles", () => {
