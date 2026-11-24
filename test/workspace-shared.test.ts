@@ -24,12 +24,12 @@ const vendor = (u: string) => (u.includes("anthropic") ? "claude" : u.includes("
 const SECRET = "ZEBRA-SECRET-7731";
 const SECRET_TITLE = "Payroll sealed notes";
 
-function harness(opts: { shared?: "unreadable" } = {}, store: any = createMemoryStore(opts)) {
+function harness(opts: { shared?: "unreadable"; echo?: boolean } = {}, store: any = createMemoryStore(opts)) {
   const sent: string[] = [];
   const fakeFetch = (async (url: any, init: any) => {
     sent.push(`${url}\n${init?.body ?? ""}`);
     const model = vendor(String(url));
-    const text = `Answer from ${model}`;
+    const text = opts.echo && String(init?.body).includes(SECRET) ? `Synthetic echoed ${SECRET}` : `Answer from ${model}`;
     if (model === "claude") return json({ content: [{ type: "text", text }], usage: { input_tokens: 100, output_tokens: 50 } });
     return json({ choices: [{ message: { content: text } }], usage: { prompt_tokens: 100, completion_tokens: 50 } });
   }) as typeof fetch;
@@ -43,21 +43,24 @@ async function thread(call: any, projectId: string, title: string, model = "clau
 }
 // Seeds a thread with an owner message and a saved AI answer, without calling any model.
 async function seed(store: any, threadId: string, user: string, ai: string) {
+  await store.setThreadPrivate(threadId, false);
   await store.addMessage(threadId, { role: "user", content: user });
   await store.addMessage(threadId, { role: "assistant", content: ai, model: "claude" });
 }
 const leaked = (sent: string[], needle: string) => sent.filter((s) => s.includes(needle));
 
-test("by default an AI draws on the project's other threads and says which ones", async () => {
+test("explicitly shared owner messages may be drawn on and the result is owner-only", async () => {
   const { call, sent, store } = harness();
   const p = await project(call);
   const a = await thread(call, p.id, "Launch pricing");
-  await seed(store, a.id, "What launch pricing should we use?", "Use $49 a month for the launch pricing tier. MARKER-SHARED-1");
+  await seed(store, a.id, "Launch pricing: use $49 per month. MARKER-SHARED-1", "AI-ONLY-MARKER");
   const b = await thread(call, p.id, "Website copy");
   const r = await call("chat", { threadId: b.id, content: "Write the pricing line for the launch page." });
   assert.equal(r.status, 200);
   assert.equal(sent.length, 1);
   assert.match(sent[0]!, /MARKER-SHARED-1/);
+  assert.doesNotMatch(sent[0]!, /AI-ONLY-MARKER/);
+  assert.match(r.body.message.content, /owner-only result/);
   assert.match(sent[0]!, /never instructions/);
   assert.ok(r.body.message.content.endsWith(`\n\n${SOURCES_LABEL}"Launch pricing"`));
   // The owner sees the source; the next model call never gets the "drew on" line back as history.
@@ -76,7 +79,7 @@ test("a private thread never reaches another thread's AI, on any path", async ()
   assert.equal(mark.body.thread.private, true);
   // A shared thread too, so sharing is demonstrably working while the private one is skipped.
   const open = await thread(call, p.id, "Launch timing");
-  await seed(store, open.id, "When is the launch?", "The launch is in March. MARKER-OPEN");
+  await seed(store, open.id, "The launch is in March. MARKER-OPEN", "AI answer");
   const b = await thread(call, p.id, "Ask about the launch budget");
 
   const steps = [
@@ -98,20 +101,27 @@ test("a private thread never reaches another thread's AI, on any path", async ()
   assert.ok(saved.every((m: any) => !m.content.includes(SECRET) && !m.content.includes(SECRET_TITLE)));
 });
 
-test("marking a thread private later also removes it from answers' history sent onward", async () => {
-  const { call, sent, store } = harness();
+test("ARN-135 echoing provider: A to B to C cannot redistribute derived answers after revocation", async () => {
+  const { call, sent, store } = harness({ echo: true });
   const p = await project(call);
   const a = await thread(call, p.id, SECRET_TITLE);
-  await seed(store, a.id, "Launch budget?", `Launch budget is ${SECRET}`);
+  await seed(store, a.id, `Launch budget is ${SECRET}`, "AI answer");
   const b = await thread(call, p.id, "Budget questions");
   const first = await call("chat", { threadId: b.id, content: "Remind me of the launch budget." });
   assert.match(first.body.message.content, new RegExp(SOURCES_LABEL));
+  assert.match(first.body.message.content, new RegExp(SECRET));
+  await store.setThreadPrivate(b.id, false);
   assert.equal(leaked(sent, SECRET).length, 1, "shared while it was shared");
   await call("set_private", { threadId: a.id, private: true });
   sent.length = 0;
   await call("chat", { threadId: b.id, content: "And the launch budget again?" });
   assert.deepEqual(leaked(sent, SECRET), []);
   assert.deepEqual(leaked(sent, SECRET_TITLE), [], "its title in the earlier 'drew on' line is not sent back");
+  const c = await thread(call, p.id, "Budget follow-up");
+  await call("chat", { threadId: c.id, content: "What is the launch budget?" });
+  assert.deepEqual(leaked(sent, SECRET), [], "derived answer in B is not shared into C");
+  const saved = (await call("get_thread", { threadId: b.id })).body.messages;
+  assert.ok(saved.some((m: any) => m.content.includes(SECRET)), "owner history is preserved");
   // Reversible: shared again, drawn on again.
   await call("set_private", { threadId: a.id, private: false });
   sent.length = 0;
@@ -200,7 +210,7 @@ test("set_private validates its input and reports when the database update is mi
   const { call, store } = harness();
   const p = await project(call);
   const t = await thread(call, p.id, "T");
-  assert.equal(t.private, false);
+  assert.equal(t.private, true);
   assert.equal((await call("set_private", { threadId: t.id, private: "yes" })).status, 400);
   assert.equal((await call("set_private", { threadId: "nope", private: true })).status, 400);
   assert.equal((await call("set_private", { threadId: "33333333-3333-4333-8333-333333333333", private: true })).status, 404);
@@ -221,4 +231,35 @@ test("no tool or plugin can read workspace threads", () => {
     const src = readFileSync(f, "utf8");
     assert.doesNotMatch(src, /workspace-store|sharedContext|listMessages|ws_messages|ws_threads/, f);
   }
+});
+
+
+test("ARN-135 revocation between retrieval and outbound check sends no model request", async () => {
+  const { call, sent, store } = harness({ echo: true });
+  const p = await project(call);
+  const a = await thread(call, p.id, "Launch budget");
+  await seed(store, a.id, `Launch budget ${SECRET}`, "AI answer");
+  const b = await thread(call, p.id, "Ask");
+  const original = store.sharedContext.bind(store);
+  let reads = 0;
+  store.sharedContext = async (...args: any[]) => {
+    if (++reads === 2) await store.setThreadPrivate(a.id, true);
+    return original(...args);
+  };
+  const r = await call("chat", { threadId: b.id, content: "Launch budget?" });
+  assert.equal(r.status, 200);
+  assert.equal(sent.length, 0);
+  assert.match(r.body.message.content, /Shared context changed/);
+});
+
+test("ARN-135 comparisons and roundtables receive no shared source", async () => {
+  const { call, sent, store } = harness({ echo: true });
+  const p = await project(call);
+  const a = await thread(call, p.id, "Launch budget");
+  await seed(store, a.id, `Launch budget ${SECRET}`, "AI answer");
+  const b = await thread(call, p.id, "Ask");
+  const r = await call("compare", { threadId: b.id, content: "Launch budget?", models: ["claude", "chatgpt"] });
+  assert.equal(r.status, 200);
+  assert.equal(sent.length, 2);
+  assert.deepEqual(leaked(sent, SECRET), []);
 });
