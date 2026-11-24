@@ -191,6 +191,11 @@
     // Screen readers hear the state and phase when they change, not every tick of the clock.
     const say = working ? "Working. " + op.phase : "Ready. Nothing running.";
     if (live && live.textContent !== say) live.textContent = say;
+    // The flow chart (flow-view.js) follows the same operation. A copy, so a listener can't change the beacon.
+    try {
+      root.dispatchEvent(new CustomEvent("acp:op", { detail: working
+        ? { phase: op.phase, units: op.units.slice(), step: op.step, roundtable: op.roundtable, usd: op.usd } : null }));
+    } catch (e) { /* no listener support: the beacon still works */ }
   }
   function tick() { const t = beacon && beacon.querySelector(".ob-time"); if (t && op) t.textContent = clock(Date.now() - op.started); }
   function begin(d) {
@@ -198,7 +203,7 @@
     let units = d.units.length ? d.units : (op && op.units.length ? op.units : []);
     if (!units.length && d.thread && threadModel()) units = [threadModel()];
     if (!op) op = { started: Date.now(), usd: 0, units };
-    op.phase = d.phase; op.units = units;
+    op.phase = d.phase; op.units = units; op.step = d.step; op.roundtable = Boolean(d.roundtable);
     if (!timer) timer = setInterval(tick, 1000);
     render();
   }
