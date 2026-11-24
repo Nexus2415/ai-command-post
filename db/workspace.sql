@@ -77,3 +77,21 @@ create table if not exists ws_control (
 insert into ws_control (id, stopped) values (1, false) on conflict (id) do nothing;
 alter table ws_control enable row level security;
 revoke all on ws_control from anon, authenticated;
+
+-- Connectors and custom tools the owner adds on the Tools page (READ-ONLY tools only; see
+-- api/_lib/workspace-connectors.js). No keys are ever stored here: a connector names the Vercel variable that holds
+-- its key. `fingerprint` is the hash of the definition the owner confirmed; a row whose definition no longer matches
+-- it is ignored. A missing table only means no connectors: chat carries on without them.
+create table if not exists ws_connectors (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid references ws_projects(id) on delete cascade,
+  kind text not null check (kind in ('mcp', 'http')),
+  name text not null check (name ~ '^[a-z][a-z0-9]{1,19}$'),
+  spec jsonb not null check (octet_length(spec::text) <= 8000),
+  fingerprint text not null check (fingerprint ~ '^[0-9a-f]{32}$'),
+  enabled boolean not null default true,
+  created_at timestamptz not null default now()
+);
+create unique index if not exists ws_connectors_name_idx on ws_connectors (name);
+alter table ws_connectors enable row level security;
+revoke all on ws_connectors from anon, authenticated;

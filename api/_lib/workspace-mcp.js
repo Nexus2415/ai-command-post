@@ -23,7 +23,7 @@ const ARG_TYPES = ["string", "number", "boolean"];
 const SECRET_VAR = /(KEY|TOKEN|SECRET|PASSWORD)/i;
 
 // One owner-approved tool: a bare name (no arguments) or {name, args: {argName: "string"|"number"|"boolean"}}.
-function ownerTool(t) {
+export function ownerTool(t) {
   const name = typeof t === "string" ? t : t && typeof t === "object" && !Array.isArray(t) ? t.name : null;
   if (typeof name !== "string" || !/^[A-Za-z0-9_-]{1,40}$/.test(name)) return null;
   const raw = typeof t === "string" || t.args === undefined ? {} : t.args;
@@ -33,22 +33,28 @@ function ownerTool(t) {
   return { name, args: Object.fromEntries(entries) };
 }
 
-// The owner's server list, keeping only well-formed entries.
+// One server entry, or null when it isn't well formed.
+export function parseServer(s) {
+  const ok = s && typeof s === "object" && typeof s.name === "string" && /^[a-z][a-z0-9]{1,19}$/.test(s.name)
+    && typeof s.url === "string" && /^https:\/\/[^\s/?#@]+(\/[^\s]*)?$/.test(s.url)
+    && (s.tokenVar === undefined || s.tokenVar === null || (typeof s.tokenVar === "string" && /^ACP_MCP_TOKEN_[A-Z0-9_]{1,40}$/.test(s.tokenVar)))
+    && Array.isArray(s.tools) && s.tools.length > 0 && s.tools.length <= 20
+    && s.tools.every((t) => ownerTool(t) !== null)
+    && new Set(s.tools.map((t) => ownerTool(t).name)).size === s.tools.length;
+  return ok ? { name: s.name, url: s.url, tokenVar: s.tokenVar ?? null, tools: s.tools.map(ownerTool) } : null;
+}
+
+// The owner's server list (ACP_MCP_SERVERS), keeping only well-formed entries.
 export function mcpServers(env) {
   let list;
   try { list = JSON.parse(String(env.ACP_MCP_SERVERS ?? "[]")); } catch { return []; }
   if (!Array.isArray(list)) return [];
   const seen = new Set();
-  return list.filter((s) => {
-    const ok = s && typeof s === "object" && typeof s.name === "string" && /^[a-z][a-z0-9]{1,19}$/.test(s.name) && !seen.has(s.name)
-      && typeof s.url === "string" && /^https:\/\/[^\s/?#@]+(\/[^\s]*)?$/.test(s.url)
-      && (s.tokenVar === undefined || (typeof s.tokenVar === "string" && /^ACP_MCP_TOKEN_[A-Z0-9_]{1,40}$/.test(s.tokenVar)))
-      && Array.isArray(s.tools) && s.tools.length > 0 && s.tools.length <= 20
-      && s.tools.every((t) => ownerTool(t) !== null)
-      && new Set(s.tools.map((t) => ownerTool(t).name)).size === s.tools.length;
-    if (ok) seen.add(s.name);
-    return ok;
-  }).slice(0, MAX_SERVERS).map((s) => ({ name: s.name, url: s.url, tokenVar: s.tokenVar ?? null, tools: s.tools.map(ownerTool) }));
+  return list.map(parseServer).filter((s) => {
+    if (!s || seen.has(s.name)) return false;
+    seen.add(s.name);
+    return true;
+  }).slice(0, MAX_SERVERS);
 }
 
 // A server is ready when it is listed and, if it names a token variable, that variable is set.
@@ -100,7 +106,7 @@ async function rpc(f, s, env, session, body) {
   throw new ToolError(`${label} sent an invalid response.`);
 }
 
-async function connect(f, s, env) {
+export async function connect(f, s, env) {
   const session = { id: null, version: null };
   const init = await rpc(f, s, env, session, {
     id: 1, method: "initialize",
@@ -146,8 +152,11 @@ const flatten = (content) => (Array.isArray(content) ? content : [])
  * The tools of every ready MCP server: the ones the owner named, that the server lists and also marks read-only.
  * A server that can't be reached is skipped, so the reply still goes ahead.
  */
-export async function mcpTools(env, f = fetch) {
-  const servers = mcpServers(env).filter((s) => mcpReady(env, s));
+export async function mcpTools(env, f = fetch, list = mcpServers(env), opts = {}) {
+  // Servers added on the Tools page (opts.net set) talk only through the guarded network function, which refuses
+  // private and internal addresses, and each call is counted against the spend caps (opts.costUsd).
+  if (opts.net) f = opts.net;
+  const servers = list.filter((s) => mcpReady(env, s));
   const lists = await Promise.all(servers.map((s) => connect(f, s, env).then((c) => ({ s, ...c }), () => null)));
   const tools = [];
   let nextId = 100;
@@ -169,11 +178,14 @@ export async function mcpTools(env, f = fetch) {
         name,
         description: `[${s.name}, remote MCP tool] ${remote || own.name}`,
         parameters: schema,
-        async run(env2, args, f2) {
+        ...(opts.net ? { costUsd: opts.costUsd } : {}),
+        async run(env2, args, f2, ctx = {}) {
           const safe = checkArgs(env2, own, args);
-          const r = await rpc(f2, s, env2, session, { id: nextId++, method: "tools/call", params: { name: own.name, arguments: safe } });
+          if (opts.net) ctx.audit?.("tool", `${name} (${new URL(s.url).host})`, opts.costUsd ?? 0);
+          const r = await rpc(opts.net ?? f2, s, env2, session, { id: nextId++, method: "tools/call", params: { name: own.name, arguments: safe } });
           const text = flatten(r.content);
           if (r.isError) throw new ToolError(`The ${s.name} tool reported a problem: ${text.slice(0, 500)}`);
+          if (opts.wrap) return opts.wrap(`the ${s.name} connector's ${own.name} tool`, text || "(The tool returned nothing.)");
           return text || "(The tool returned nothing.)";
         },
       });

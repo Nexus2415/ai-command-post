@@ -10,6 +10,7 @@ const PROJECT_COLS = "id,name,created_at";
 const THREAD_COLS = "id,project_id,title,model,created_at,updated_at";
 const NOTE_COLS = "id,project_id,content,created_at";
 const CONTROL_COLS = "stopped,updated_at";
+const CONNECTOR_COLS = "id,project_id,kind,name,spec,fingerprint,enabled,created_at";
 const MESSAGE_COLS = "id,thread_id,role,content,model,input_tokens,output_tokens,cost_usd,created_at";
 
 export class StoreError extends Error {}
@@ -65,6 +66,12 @@ export function createSupabaseStore(env, f = fetch) {
       const row = one(await call("POST", "rpc/ws_spend", { p_thread: threadId, p_since: since }));
       return { monthUsd: Number(row.month_usd) || 0, threadUsd: Number(row.thread_usd) || 0 };
     },
+    // Connectors and custom tools from the Tools page (api/_lib/workspace-connectors.js).
+    listConnectors: () => call("GET", `ws_connectors?select=${CONNECTOR_COLS}&order=created_at.asc&limit=100`),
+    addConnector: async (c) => one(await call("POST", `ws_connectors?select=${CONNECTOR_COLS}`, c)),
+    setConnectorEnabled: async (id, enabled) =>
+      (await call("PATCH", `ws_connectors?id=eq.${id}&select=${CONNECTOR_COLS}`, { enabled }, "return=representation"))[0] ?? null,
+    deleteConnector: async (id) => (await call("DELETE", `ws_connectors?id=eq.${id}&select=id`)).length > 0,
     // The "Stop everything" switch: one row. A missing row reads as stopped (fail closed).
     getControl: async () => (await call("GET", `ws_control?select=${CONTROL_COLS}&id=eq.1`))[0] ?? null,
     setControl: async (stopped) => one(await call("POST", `ws_control?select=${CONTROL_COLS}`,
@@ -76,7 +83,7 @@ export function createSupabaseStore(env, f = fetch) {
 // `control` sets the stop switch: false (running, the default), true (stopped), or "unreadable" to fail the read.
 /** @param {{ control?: boolean | "unreadable" }} [opts] */
 export function createMemoryStore({ control = false } = {}) {
-  const projects = [], threads = [], messages = [], notes = [];
+  const projects = [], threads = [], messages = [], notes = [], connectors = [];
   let ctl = control;
   let clock = Date.parse("2026-10-21T00:00:00Z");
   const now = () => new Date(clock++).toISOString();
@@ -123,6 +130,22 @@ export function createMemoryStore({ control = false } = {}) {
       monthUsd: messages.filter((m) => m.created_at >= since).reduce((n, m) => n + m.cost_usd, 0),
       threadUsd: messages.filter((m) => m.thread_id === threadId).reduce((n, m) => n + m.cost_usd, 0),
     }),
+    listConnectors: async () => connectors.map((c) => structuredClone(c)),
+    addConnector: async (c) => {
+      const row = { id: randomUUID(), enabled: true, ...structuredClone(c), created_at: now() };
+      connectors.push(row);
+      return structuredClone(row);
+    },
+    setConnectorEnabled: async (id, enabled) => {
+      const c = connectors.find((x) => x.id === id);
+      if (c) c.enabled = enabled;
+      return c ? structuredClone(c) : null;
+    },
+    deleteConnector: async (id) => {
+      const i = connectors.findIndex((c) => c.id === id);
+      if (i >= 0) connectors.splice(i, 1);
+      return i >= 0;
+    },
     getControl: async () => {
       if (ctl === "unreadable") throw new StoreError("Workspace storage returned 404");
       return { stopped: ctl, updated_at: now() };
