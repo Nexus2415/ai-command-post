@@ -5,7 +5,7 @@
 (function (root) {
   "use strict";
   const TABS = ["done", "active", "queued", "blocked", "review", "canceled"];
-  const TAB_LABEL = { done: "Done", active: "Active", queued: "Queued", blocked: "Blocked", review: "Review", canceled: "Canceled" };
+  const TAB_LABEL = { done: "Mission complete", active: "In the field", queued: "Staged", blocked: "Blocked", review: "Review", canceled: "Canceled" };
   const AGENT_NAME = { chatgpt: "ChatGPT", claude: "Claude", codex: "Codex", gemini: "Gemini", perplexity: "Perplexity" };
   const ID_RE = /^ARN-[1-9]\d{0,8}$/;
   const QUESTION_EXPLANATION = "Submitting a question creates a Linear issue for an answer. It does not authorize agents to execute tools or change existing work.";

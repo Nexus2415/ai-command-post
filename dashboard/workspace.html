@@ -92,6 +92,8 @@ details.file pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:300px;ov
 @media (max-width:900px){.ws{grid-template-columns:minmax(0,1fr)}.m{max-width:100%}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 </style>
+<link rel="stylesheet" href="ops-theme.css">
+<script src="ops-ui.js"></script>
 
 <div class="wrap">
   <div class="bar">
@@ -133,7 +135,7 @@ details.file pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:300px;ov
         <textarea id="cText" maxlength="32000"></textarea>
         <div class="row"><button class="btn ghost" type="button" id="cAttach">Attach text file</button><input type="file" id="cFile" multiple hidden accept=".txt,.md,.csv,.tsv,.json,.log,.xml,.yaml,.yml,.html,.css,.js,.ts,.py,.sql,.sh,text/plain,text/markdown,text/csv"><span class="row" id="cFiles"></span></div>
         <fieldset class="row" id="cCompare" hidden><legend class="note">Also ask, side by side:</legend></fieldset>
-        <label class="row note" id="cRoundRow" hidden><input type="checkbox" id="cRound" style="width:auto"> Roundtable: the AIs read each other's answers, debate, and agree on one recommendation (3 rounds)</label>
+        <label class="row note" id="cRoundRow" hidden><input type="checkbox" id="cRound" style="width:auto"> Briefing (roundtable): units report, cross-check each other's answers, and the lead issues one recommendation (3 phases)</label>
         <div class="row"><button class="btn" type="submit" id="cSend">Send</button><button class="btn ghost" type="button" id="cRetry" hidden>Get reply</button><button class="btn ghost" type="button" id="cDiscuss" hidden>Finish roundtable</button><span class="note" id="cNote">Ctrl+Enter to send.</span></div>
       </form>
     </section>

@@ -138,6 +138,8 @@ button.link{background:none;border:0;padding:0;margin-left:8px;color:inherit;tex
 @media (max-width:640px){.roster{grid-template-columns:repeat(2,minmax(0,1fr))}.sitrep{grid-template-columns:repeat(2,minmax(0,1fr))}.sitrep > div:nth-child(3){border-left:0}.sitrep > div:nth-child(n+3){border-top:1px solid var(--line)}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 </style>
+<link rel="stylesheet" href="ops-theme.css">
+<script src="ops-ui.js"></script>
 
 <div class="wrap">
   <div class="bar">
@@ -187,7 +189,7 @@ button.link{background:none;border:0;padding:0;margin-left:8px;color:inherit;tex
   </section>
 
   <section data-legacy aria-labelledby="rosterH" style="display:grid;gap:10px">
-    <h2 id="rosterH" class="eyebrow" style="font-family:var(--mono);font-size:11px">Agent roster</h2>
+    <h2 id="rosterH" class="eyebrow" style="font-family:var(--mono);font-size:11px">Unit roster</h2>
     <div class="roster" id="roster"></div>
   </section>
 
@@ -224,7 +226,7 @@ button.link{background:none;border:0;padding:0;margin-left:8px;color:inherit;tex
         <ol id="cList" role="tabpanel" tabindex="0"></ol>
       </section>
       <section aria-labelledby="cRosterH" class="croster-wrap">
-        <h2 id="cRosterH" class="eyebrow" style="font-family:var(--mono);font-size:11px">Agent roster · workload</h2>
+        <h2 id="cRosterH" class="eyebrow" style="font-family:var(--mono);font-size:11px">Unit roster · workload</h2>
         <div class="croster" id="cRoster"></div>
       </section>
     </div>
@@ -236,9 +238,9 @@ button.link{background:none;border:0;padding:0;margin-left:8px;color:inherit;tex
   </div>
 
   <section class="board" aria-label="Taskings" data-legacy>
-    <div class="panel lane"><header><h2>In progress</h2><span class="mono note" id="cProg"></span></header><ol id="lProg"><li class="empty">Loading taskings from Linear…</li></ol></div>
-    <div class="panel lane"><header><h2>Queued</h2><span class="mono note" id="cQueue"></span></header><ol id="lQueue"><li class="empty">Loading taskings from Linear…</li></ol></div>
-    <div class="panel lane"><header><h2>Accomplished</h2><span class="mono note" id="cDone"></span></header><ol id="lDone"><li class="empty">Loading taskings from Linear…</li></ol></div>
+    <div class="panel lane"><header><h2>In the field</h2><span class="mono note" id="cProg"></span></header><ol id="lProg"><li class="empty">Loading taskings from Linear…</li></ol></div>
+    <div class="panel lane"><header><h2>Staged</h2><span class="mono note" id="cQueue"></span></header><ol id="lQueue"><li class="empty">Loading taskings from Linear…</li></ol></div>
+    <div class="panel lane"><header><h2>Mission complete</h2><span class="mono note" id="cDone"></span></header><ol id="lDone"><li class="empty">Loading taskings from Linear…</li></ol></div>
   </section>
 
   <div class="foot" data-legacy><span id="fresh">Waiting for Linear…</span><span>Ownership: an AI's name in [brackets] at the start of a title, a label, or the assignee.</span></div>
