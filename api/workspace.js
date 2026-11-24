@@ -7,7 +7,7 @@ import { BudgetStop, ModelError, estimateUsd, isPaid, mergeTurns, modelStatus, r
 import { pluginStatus, readyTools, runTool, urlsIn } from "./_lib/workspace-plugins.js";
 import { mcpStatus, mcpTools } from "./_lib/workspace-mcp.js";
 import { STOP_MARK, harmCheck, logRefusal, refusalText, textOf } from "./_lib/workspace-rules.js";
-import { sharedFor, sourcesLine, stripSources, DERIVED_MARK } from "./_lib/workspace-shared.js";
+import { CHANGED, sharedFor, sourcesLine, stillShared, stripSources } from "./_lib/workspace-shared.js";
 import { CRITIQUE_MARK, SYNTHESIS_MARK, critiquePrompt, estimateRounds, roundtableState, synthesisPrompt } from "./_lib/workspace-roundtable.js";
 
 // Vercel: model replies can take a while.
@@ -241,19 +241,17 @@ const ACTIONS = Object.freeze({
     if (rule) return refusedRequest(rule, await refuse(store, thread.id, "request", rule));
     const sent = trimHistory(mergeTurns(history));
     // Background from the project's other shared threads (bounded; private threads are never read).
-    // One-shot shared context only on direct non-search model transports.
-    const shared = status.via === "direct" && ["claude", "chatgpt"].includes(model)
-      ? await sharedFor(store, thread, asked) : { text: "", sources: [] };
-    const derived = shared.sources.length > 0;
-    const derivedPrefix = derived ? DERIVED_MARK + "\n" : "";
+    const shared = await sharedFor(store, thread, asked);
 
     const over = await budgetCheck(store, env, deps, thread.id, isPaid(env, model));
     const first = over(estimateUsd(model, [...sent, { content: shared.text }], env));
     if (first) return error(402, first);
 
+    // Re-checked just before anything is sent: a thread made private meanwhile stops the answer (nothing saved).
+    if (!(await stillShared(store, thread, shared))) return error(409, CHANGED);
     const saved = content ? await store.addMessage(thread.id, { role: "user", content }) : null;
     // MCP servers are asked for their tools only for models that can use tools.
-    const tools = derived ? [] : [...readyTools(env), ...(model === "perplexity" ? [] : await mcpTools(env, deps.fetch))];
+    const tools = [...readyTools(env), ...(model === "perplexity" ? [] : await mcpTools(env, deps.fetch))];
     // Web access for this reply: pages the owner linked may be read; search results add more. Each web call is
     // checked against the caps first (web calls are always paid) and listed under the reply.
     const allowedUrls = new Set(urlsIn(asked));
@@ -263,7 +261,7 @@ const ACTIONS = Object.freeze({
       allowedUrls, charge: async (usd) => overWeb(soFar + usd),
       audit: (kind, target, usd) => webLog.push({ at: deps.now().toISOString(), kind, target: String(target).slice(0, 300), usd }),
     });
-    const record = (text, r) => reply(store, thread.id, model, (derivedPrefix + text + webAuditText(webLog)).slice(0, 32_000), r);
+    const record = (text, r) => reply(store, thread.id, model, (text + webAuditText(webLog)).slice(0, 32_000), r);
     let out;
     try {
       out = await runChat(env, model, sent, {
@@ -273,16 +271,9 @@ const ACTIONS = Object.freeze({
         // Every later round of tool use is checked again: the stop switch, and the caps counting what this reply
         // has already cost (web calls included).
         beforeCall: async (est, soFar) => {
-          if (derived) {
-            // Re-read at the outbound boundary. Any change, revocation or read failure
-            // denies the snapshot; no connector calls are available in this mode.
-            const fresh = await sharedFor(store, thread, asked);
-            if (fresh.unavailable || fresh.text !== shared.text ||
-                JSON.stringify(fresh.sources) !== JSON.stringify(shared.sources)) {
-              throw new BudgetStop("Shared context changed or could not be verified; no further model call was made.");
-            }
-          }
-          if (await stopReason(store)) throw new BudgetStop(`${STOP_MARK} The reply was cut short; no further steps ran.`);
+          if (soFar > 0 && await stopReason(store)) throw new BudgetStop(`${STOP_MARK} The reply was cut short; no further steps ran.`);
+          // Each later round re-sends the background, so a thread made private mid-answer stops it here.
+          if (soFar > 0 && !(await stillShared(store, thread, shared))) throw new BudgetStop("Stopped: a thread this answer drew on was just made private.");
           const why = soFar > 0 ? over(soFar + est) : null;
           if (why) throw new BudgetStop("Stopped before finishing: " + why.charAt(0).toLowerCase() + why.slice(1));
         },
@@ -293,7 +284,7 @@ const ACTIONS = Object.freeze({
       if (e.usage?.costUsd > 0) await record(`(The AI provider failed partway through this reply: ${e.message})`, e.usage);
       return { status: 502, body: { error: `${e.message} Your message was saved; try again for a reply.`, saved } };
     }
-    const message = await gatedReply(store, thread.id, model, out.text, out, derivedPrefix, sourcesLine(shared.sources) + webAuditText(webLog));
+    const message = await gatedReply(store, thread.id, model, out.text, out, "", sourcesLine(shared.sources) + webAuditText(webLog));
     return { saved, message };
   },
   // Side-by-side answers: one message goes to 2-3 AIs at once and each answer is saved with its AI. Plugins stay
@@ -433,8 +424,7 @@ async function askSeveral(store, args, env) {
   const history = [...before, { role: "user", content }];
   const sent = trimHistory(mergeTurns(history));
   const lead = models.includes(thread.model) ? thread.model : models[0];
-  // Cross-thread context is single-tasker only. Never distribute it to a roundtable.
-  const shared = { text: "", sources: [] };
+  const shared = await sharedFor(store, thread, content);
   return { thread, content, models, sent, shared, lead, paid: models.filter((m) => isPaid(env, m)) };
 }
 
@@ -449,6 +439,7 @@ async function planCheck(store, env, deps, p) {
 async function runRound1(store, env, deps, { thread, content, models, sent, shared }) {
   const rule = harmCheck(content);
   if (rule) return refusedRequest(rule, await refuse(store, thread.id, "request", rule));
+  if (!(await stillShared(store, thread, shared))) return error(409, CHANGED);
   const saved = await store.addMessage(thread.id, { role: "user", content });
   const notes = (await store.listNotes(thread.project_id)).map((n) => n.content);
   const results = await Promise.all(models.map((m) => runChat(env, m, sent, { f: deps.fetch, notes, shared: shared.text })

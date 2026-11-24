@@ -4,6 +4,9 @@
 // Enforcement is server-side and in two layers: the database query only returns threads whose `private` column is
 // exactly false (store.sharedContext), and every row is checked again here. A thread whose flag is missing, null or
 // anything but false counts as private, and if the query fails nothing is shared at all (fail closed).
+import { REFUSAL_MARK, STOP_MARK } from "./workspace-rules.js";
+
+const isNotice = (m) => m.role === "assistant" && (m.content.startsWith(REFUSAL_MARK) || m.content.startsWith(STOP_MARK));
 
 // Bounds, so pulling in other threads keeps the prompt (and the cost) small.
 export const MAX_SHARED_THREADS = 4;      // threads quoted into one answer
@@ -18,11 +21,8 @@ export const MESSAGES_PER_THREAD = 8;     // newest messages read from each
 export const SOURCES_LABEL = "Drew on other threads: ";
 const SOURCES_LINE = /\n*Drew on other threads: [^\n]*/g;
 export const stripSources = (s) => String(s).replace(SOURCES_LINE, "");
-// This server-added label is a conservative quarantine marker, not a permission grant.
-export const DERIVED_MARK = "[Cross-thread context: owner-only result]";
-export const isCrossThreadDerived = (m) => m?.role === "assistant" &&
-  typeof m.content === "string" &&
-  (m.content.startsWith(DERIVED_MARK) || m.content.includes(SOURCES_LABEL));
+const SYNTHESIS = "[Roundtable final answer]";
+const FAILED = "(The AI provider failed";
 
 const oneLine = (s, n) => {
   const t = String(s).replace(/\s+/g, " ").trim();
@@ -34,15 +34,20 @@ const words = (s) => new Set((String(s).toLowerCase().match(/[a-z0-9][a-z0-9'-]{
 /** True only for a thread that is certainly shared. Anything else (true, null, missing, odd values) is private. */
 export const isShared = (t) => Boolean(t) && t.private === false;
 
-// Only owner-authored messages from explicitly shared threads are eligible.
-// Model outputs are never promoted into cross-thread context automatically.
+// What one thread contributes: its latest roundtable conclusion if it has one, otherwise its newest messages.
 function excerpt(messages) {
-  const picked = messages.filter(m => m.role === "user" && typeof m.content === "string")
-    .sort((a, b) => (a.created_at < b.created_at ? 1 : -1)).slice(0, 4);
+  const usable = messages
+    .filter((m) => (m.role === "user" || m.role === "assistant") && typeof m.content === "string")
+    .filter((m) => !isNotice(m) && !m.content.startsWith(FAILED))
+    .sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+  const synth = usable.find((m) => m.role === "assistant" && m.content.startsWith(SYNTHESIS));
+  const picked = synth ? [synth] : usable.slice(0, 4);
   const lines = [];
   let chars = 0;
   for (const m of picked) {
-    const line = "Owner: " + oneLine(m.content, MAX_MESSAGE_CHARS);
+    const who = m.role === "user" ? "Owner" : "AI";
+    const body = oneLine(stripSources(m.content.replace(/^\[Roundtable[^\]\n]*\]\n?/, "")), synth ? MAX_THREAD_CHARS - 40 : MAX_MESSAGE_CHARS);
+    const line = `${synth ? "Conclusion" : who}: ${body}`;
     if (chars + line.length > MAX_THREAD_CHARS) break;
     chars += line.length;
     lines.unshift(line);
@@ -71,7 +76,7 @@ export function buildShared(rows, { projectId, threadId, question }) {
   // Relevant threads first (most shared words with the question), then the most recently active.
   candidates.sort((a, b) => b.score - a.score || (a.t.updated_at < b.t.updated_at ? 1 : -1));
   const matched = candidates.filter((c) => c.score > 0);
-  const chosen = matched.slice(0, MAX_SHARED_THREADS);
+  const chosen = (matched.length ? matched : candidates.slice(0, 2)).slice(0, MAX_SHARED_THREADS);
   const parts = [], sources = [];
   let chars = 0;
   for (const c of chosen) {
@@ -99,6 +104,22 @@ export async function sharedFor(store, thread, question) {
     return { text: "", sources: [], unavailable: true };
   }
 }
+
+/**
+ * Re-checked just before a request goes to an AI: true while every thread the background was built from is still
+ * shared. A thread made private in between, or any read failure, means false, and nothing is sent (fail closed).
+ */
+export async function stillShared(store, thread, shared) {
+  if (!shared.sources.length) return true;
+  try {
+    const rows = await store.sharedContext(thread.project_id, thread.id);
+    const ok = new Set(rows.filter((t) => isShared(t) && t.project_id === thread.project_id).map((t) => t.id));
+    return shared.sources.every((s) => ok.has(s.id));
+  } catch {
+    return false;
+  }
+}
+export const CHANGED = "A thread this answer was going to draw on was just made private, so nothing was sent to any AI. Try again.";
 
 /** The line written under an answer that drew on other threads, or "". */
 export const sourcesLine = (sources) =>

@@ -194,7 +194,7 @@
     b.disabled = p !== true && p !== false;
     b.dataset.state = p === false ? "shared" : "private";
     b.textContent = p === false ? "Shared in this project" : p === true ? "Private" : "Private (setup needed)";
-    b.title = p === false ? "Direct single-AI chats in this project may draw on owner messages here. Click to make it private."
+    b.title = p === false ? "Other threads' AIs in this project can draw on this thread. Click to make it private."
       : p === true ? "No other thread's AI can see this thread. Click to share it with this project again."
       : "Sharing between threads needs a one-time database update; until then no thread is shared.";
     b.setAttribute("aria-label", b.textContent + ". " + b.title);

@@ -4,7 +4,7 @@
 
 // USD per million tokens plus any flat per-request fee. Same values and sources as DEFAULT_RATES in src/budget.ts.
 import { REFUSAL_MARK, STOP_MARK } from "./workspace-rules.js";
-import { stripSources, isCrossThreadDerived } from "./workspace-shared.js";
+import { stripSources } from "./workspace-shared.js";
 
 export const RATES = Object.freeze({
   claude: { inputPerM: 2, outputPerM: 10, freeTier: false },
@@ -80,7 +80,7 @@ export const isNotice = (m) => m.role === "assistant" && (m.content.startsWith(R
 // AIs answered one message (side-by-side answers), each answer is labelled with the AI that gave it.
 export function mergeTurns(all) {
   // Rules-gate refusals and stop notes are for the owner's eyes; they are never sent back to a model.
-  const messages = all.filter((m) => !isNotice(m) && !isCrossThreadDerived(m));
+  const messages = all.filter((m) => !isNotice(m));
   const out = [];
   for (let i = 0; i < messages.length; i++) {
     const m = messages[i];
