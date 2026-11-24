@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { handle as eveHandle } from "../api/eve.js";
 // @ts-ignore plain-JS module served by Vercel
-import { lifecycleOf } from "../api/lib/command-lifecycle.js";
+import { lifecycleOf } from "../api/_lib/command-lifecycle.js";
 import { Budget, DEFAULT_RATES, type Rate } from "../src/budget.ts";
 import { loadConfig, type AgentKey } from "../src/config.ts";
 import type { Issue, StateType, TaskStore } from "../src/linear.ts";

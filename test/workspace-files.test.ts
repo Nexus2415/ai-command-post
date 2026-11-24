@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { handle } from "../api/workspace.js";
-import { createMemoryStore } from "../api/lib/workspace-store.js";
+import { createMemoryStore } from "../api/_lib/workspace-store.js";
 
 // Phase 2 step 3: text files attached to messages. Fake fetch only; no real model is ever called.
 const base = {

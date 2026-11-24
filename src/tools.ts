@@ -64,6 +64,12 @@ const PROTECTED: RegExp[] = [
   /(^|\/)(npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?)$/i,
   /(^|\/)\.husky(\/|$)/i,
   /(^|\/)\.vercel(\/|$)/i,
+  // Instruction files that coding agents read as their rules: an agent PR must not rewrite its own (or another AI's) rules.
+  // Rule files and rule/hook directories (Windsurf hooks.json can launch local commands).
+  /(^|\/)(AGENTS|CLAUDE|GEMINI)(\.local)?\.md$/i,
+  /(^|\/)\.(cursorrules|windsurfrules|clinerules|roorules|goosehints)(\/|$)/i,
+  /(^|\/)\.(agents|claude|codex|cursor|cline|windsurf|devin|gemini|continue|roo|kiro|amazonq|junie)(\/|$)/i,
+  /(^|\/)\.aider[^/]*$/i,
 ];
 
 /** A plain relative path: no empty, ".", ".." or dot/space-terminated segments (".." would climb out of the API path). */
@@ -86,7 +92,7 @@ export function prBranch(v: unknown): string {
 
 export function prPath(v: unknown): string {
   const p = plainPath(v, "File");
-  if (PROTECTED.some((re) => re.test(p))) throw new Error(`File path "${p}" is protected: agents may not change CI, ownership, git, install-time or secret files`);
+  if (PROTECTED.some((re) => re.test(p))) throw new Error(`File path "${p}" is protected: agents may not change CI, ownership, git, install-time, secret or agent-instruction files`);
   return p;
 }
 
@@ -207,6 +213,8 @@ const HANDLERS: Record<string, (input: Record<string, unknown>, env: ToolEnv) =>
   },
   async "firecrawl.search"(input, env) {
     const query = str(input, "query");
+    // Firecrawl calls spend account credits, so a dry run never makes one.
+    if (env.dryRun) return `DRY RUN: would search the web for "${query}"`;
     const j = await firecrawl(env, "/v2/search", { query, limit: Math.min(Number(input["limit"] ?? 5), 10) });
     const web = j.data?.web ?? j.data ?? [];
     return (Array.isArray(web) ? web : []).map((r: any) => `- ${r.title ?? ""} ${r.url}\n  ${r.description ?? ""}`).join("\n") || "No results";
@@ -214,6 +222,7 @@ const HANDLERS: Record<string, (input: Record<string, unknown>, env: ToolEnv) =>
   async "firecrawl.scrape"(input, env) {
     const url = str(input, "url");
     if (!/^https:\/\//.test(url)) throw new Error("Only https URLs may be scraped");
+    if (env.dryRun) return `DRY RUN: would fetch ${url}`;
     const j = await firecrawl(env, "/v2/scrape", { url, formats: ["markdown"], onlyMainContent: true });
     return j.data?.markdown ?? "";
   },

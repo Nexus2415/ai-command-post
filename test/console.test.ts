@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { handle } from "../api/console.js";
-import { TEAM_ID, PROJECT_ID, laneOf, ownerOf, overviewOf, safeLinearUrl } from "../api/lib/console-state.js";
+import { TEAM_ID, PROJECT_ID, laneOf, ownerOf, overviewOf, safeLinearUrl } from "../api/_lib/console-state.js";
 
 const env = { ACP_SITE_PASSWORD: "pw", LINEAR_API_KEY: "lin" };
 const req = (body: any = { action: "overview" }, headers = {}) => ({
@@ -43,10 +43,9 @@ test("console rejects malformed, large, wrong-method, write and scope-changing r
   assert.equal(calls.length, 0);
 });
 
-test("overview fixes scope, filters upstream leakage, labels workload honestly and is read-only", async () => {
+test("overview fixes scope, labels workload honestly and is read-only", async () => {
   const { f, calls } = mock({ data: { issues: {
-    nodes: [item(), item("ARN-49", "unstarted", { title: "[Claude] UI" }),
-      item("ARN-80", "started", { project: { id: "foreign" } })],
+    nodes: [item(), item("ARN-49", "unstarted", { title: "[Claude] UI" })],
     pageInfo: { hasNextPage: true },
   } } });
   const out = await handle(req(), env, f, () => new Date("2026-10-08T15:00:00Z"));
@@ -63,6 +62,53 @@ test("overview fixes scope, filters upstream leakage, labels workload honestly a
   assert.match(calls[0].query, /^query /);
   assert.equal(calls[0].url, "https://api.linear.app/graphql");
   assert.equal(JSON.stringify(body).includes("lin\""), false);
+});
+
+test("overview refuses the whole board when upstream returns any row outside the fixed team/project", async () => {
+  const foreignProject = item("ARN-80", "started", { project: { id: "foreign" } });
+  const foreignTeam = item("ARN-81", "started", { team: { id: "foreign" } });
+  const noProject = item("ARN-82", "started", { project: null });
+  const noTeam = item("ARN-83", "started", { team: undefined });
+  const emptyIds = item("ARN-84", "started", { team: {}, project: {} });
+  const cases = [
+    [foreignProject], [foreignTeam], [noProject], [noTeam], [emptyIds],
+    [item(), foreignProject], [item(), item("ARN-49", "unstarted"), noTeam], [noProject, item()],
+    [item(), null], [item(), "ARN-85"],
+  ];
+  for (const nodes of cases) {
+    const { f } = mock({ data: { issues: { nodes, pageInfo: { hasNextPage: false } } } });
+    const out = await handle(req(), env, f, () => new Date("2026-10-08T15:00:00Z"));
+    assert.equal(out.status, 502, JSON.stringify(nodes));
+    const body: any = out.body;
+    assert.equal(body.issues, undefined);
+    assert.equal(body.lanes, undefined);
+    assert.equal(typeof body.error, "string");
+    assert.equal(JSON.stringify(body).includes("foreign"), false);
+    assert.equal(JSON.stringify(body).includes("ARN-8"), false);
+  }
+  // Control: an all-in-scope board (including an empty one) is still served.
+  for (const nodes of [[item(), item("ARN-49", "unstarted")], []]) {
+    const { f } = mock({ data: { issues: { nodes, pageInfo: { hasNextPage: false } } } });
+    const out = await handle(req(), env, f, () => new Date("2026-10-08T15:00:00Z"));
+    assert.equal(out.status, 200);
+    assert.equal((out.body as any).issues.length, nodes.length);
+  }
+});
+
+test("overview completeness must be a stated boolean: anything else is a failed read, never a complete board", async () => {
+  for (const pageInfo of [{}, { hasNextPage: null }, { hasNextPage: 0 }, { hasNextPage: "" }, { hasNextPage: "false" },
+    { hasNextPage: "true" }, { hasNextPage: [] }, null, undefined]) {
+    const { f } = mock({ data: { issues: { nodes: [item()], pageInfo } } });
+    const out: any = await handle(req(), env, f);
+    assert.equal(out.status, 502, JSON.stringify(pageInfo));
+    assert.equal(out.body.issues, undefined);
+  }
+  for (const hasNextPage of [true, false]) {
+    const { f } = mock({ data: { issues: { nodes: [item()], pageInfo: { hasNextPage } } } });
+    const out: any = await handle(req(), env, f);
+    assert.equal(out.status, 200);
+    assert.equal(out.body.hasNextPage, hasNextPage);
+  }
 });
 
 test("terminal canceled and duplicate work never enters the completed lane", () => {
@@ -111,7 +157,7 @@ test("thread preserves comment text without claiming agent identity or unsafe UR
   const { f } = mock({ data: { issue: {
     ...item(), description: "Test only", comments: {
       nodes: [{ id: "c", body: "<script>do not render as HTML</script>", user: { name: "Darius Williams" },
-        url: "javascript:alert(1)", createdAt: "t", updatedAt: "t" }], pageInfo: { hasPreviousPage: true },
+        url: "javascript:alert(1)", createdAt: "2026-10-08T14:00:00Z", updatedAt: "2026-10-08T14:00:00Z" }], pageInfo: { hasPreviousPage: true },
     },
   } } });
   const result: any = await handle(req({ action: "thread", identifier: "ARN-54" }), env, f);
@@ -120,6 +166,22 @@ test("thread preserves comment text without claiming agent identity or unsafe UR
   assert.equal(result.body.comments[0].url, null);
   assert.equal(result.body.hasPreviousPage, true);
   assert.equal(result.body.comments[0].body, "<script>do not render as HTML</script>");
+});
+
+test("thread comment completeness must be a stated boolean: anything else is a failed read", async () => {
+  for (const pageInfo of [{}, { hasPreviousPage: null }, { hasPreviousPage: 0 }, { hasPreviousPage: "" },
+    { hasPreviousPage: "false" }, { hasPreviousPage: "true" }, { hasPreviousPage: [] }, null, undefined]) {
+    const { f } = mock({ data: { issue: { ...item(), comments: { nodes: [], pageInfo } } } });
+    const out: any = await handle(req({ action: "thread", identifier: "ARN-54" }), env, f);
+    assert.equal(out.status, 502, JSON.stringify(pageInfo));
+    assert.equal(out.body.comments, undefined);
+  }
+  for (const hasPreviousPage of [true, false]) {
+    const { f } = mock({ data: { issue: { ...item(), comments: { nodes: [], pageInfo: { hasPreviousPage } } } } });
+    const out: any = await handle(req({ action: "thread", identifier: "ARN-54" }), env, f);
+    assert.equal(out.status, 200);
+    assert.equal(out.body.hasPreviousPage, hasPreviousPage);
+  }
 });
 
 test("URL sanitizer rejects lookalikes, credentials, and non-HTTPS links", () => {
@@ -153,7 +215,7 @@ test("upstream errors and malformed replies are sanitized; no false empty succes
 });
 
 test("Codex is a separate owner from ChatGPT, and questions are marked as questions", async () => {
-  const { ownerOf, projectIssue, overviewOf } = await import("../api/lib/console-state.js");
+  const { ownerOf, projectIssue, overviewOf } = await import("../api/_lib/console-state.js");
   assert.equal(ownerOf("[Codex] fix CI"), "codex");
   assert.equal(ownerOf("  [codex] review"), "codex");
   assert.equal(ownerOf("[ChatGPT] plan"), "chatgpt");
@@ -170,7 +232,7 @@ test("Codex is a separate owner from ChatGPT, and questions are marked as questi
 });
 
 test("ARN-54: Codex metadata survives non-agent prefixes; agent prefixes and other metadata still win", async () => {
-  const { ownerOf } = await import("../api/lib/console-state.js");
+  const { ownerOf } = await import("../api/_lib/console-state.js");
   const L = (...n: string[]) => ({ nodes: n.map((name) => ({ name })) });
   // Codex label or assignee under a non-agent prefix ([Question]) is Codex, never ChatGPT via "openai".
   assert.equal(ownerOf({ title: "[Question] What is blocked?", labels: L("codex") }), "codex");
@@ -189,7 +251,7 @@ test("ARN-54: Codex metadata survives non-agent prefixes; agent prefixes and oth
 });
 
 test("ARN-54: an owner question is never an agent's nextTask", async () => {
-  const { overviewOf } = await import("../api/lib/console-state.js");
+  const { overviewOf } = await import("../api/_lib/console-state.js");
   const q = { id: "q", identifier: "ARN-1", title: "[Question] what?", priority: 1, state: { name: "Todo", type: "unstarted" }, labels: { nodes: [{ name: "codex" }] } };
   const t = { id: "t", identifier: "ARN-2", title: "[Codex] fix", priority: 3, state: { name: "Todo", type: "unstarted" }, labels: { nodes: [] } };
   const codex = overviewOf([q, t], "now").agents.find((a: any) => a.key === "codex")!;

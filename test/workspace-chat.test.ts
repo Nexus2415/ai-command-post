@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { handle } from "../api/workspace.js";
-import { createMemoryStore } from "../api/lib/workspace-store.js";
-import { RATES, SUSPENDED_MODELS, MAX_HISTORY_CHARS, trimHistory } from "../api/lib/workspace-models.js";
+import { createMemoryStore } from "../api/_lib/workspace-store.js";
+import { RATES, SUSPENDED_MODELS, MAX_HISTORY_CHARS, trimHistory } from "../api/_lib/workspace-models.js";
 import { DEFAULT_RATES } from "../src/budget.ts";
 import { SUSPENDED_AGENTS } from "../src/config.ts";
 

@@ -1,11 +1,12 @@
 // Minimal Linear GraphQL client. Linear is the shared task queue: commands, sub-tasks, handoffs and evidence all live there.
-import { PROJECT_ID } from "../api/lib/console-state.js";
-import { STATUS_TITLE } from "../api/lib/engine-status.js";
+import { PROJECT_ID } from "../api/_lib/console-state.js";
+import { STATUS_TITLE } from "../api/_lib/engine-status.js";
 import { LEDGER_TITLE, ledgerFromContent } from "./budget.ts";
 
 type Fetch = typeof fetch;
 
 export type StateType = "triage" | "backlog" | "unstarted" | "started" | "completed" | "canceled" | "duplicate";
+const STATE_TYPES: readonly string[] = ["triage", "backlog", "unstarted", "started", "completed", "canceled", "duplicate"];
 
 export interface Issue {
   id: string;
@@ -20,6 +21,11 @@ export interface Issue {
   assignee: string | null;
   parentId: string | null;
   childIds: string[];
+  /**
+   * Set when Linear's sub-task list for this issue wasn't provably complete (no page signal, more pages, or an
+   * unreadable child). The engine then neither plans the command again nor marks it completed from the children it saw.
+   */
+  childrenIncomplete?: true;
   createdAt: string;
 }
 
@@ -46,16 +52,34 @@ interface TeamInfo {
   states: { id: string; type: StateType; position: number }[];
 }
 
+/** Document pages findDoc reads (50 each) before giving up on an incomplete list. */
+const DOC_PAGES = 4;
 const ISSUE_FIELDS = `
   id identifier title description url priority createdAt
   state { type name }
   labels { nodes { name } }
   assignee { name }
   parent { id }
-  children { nodes { id } }
+  children(first:250) { nodes { id } pageInfo { hasNextPage } }
 `;
 
+/**
+ * A Linear mutation counts as done only when its payload says success: true. false, a missing flag or a missing
+ * payload is an unconfirmed write: it throws (never retried here), so callers stop rather than act as if it landed.
+ */
+function confirmWrite(payload: any, what: string): void {
+  if (payload?.success !== true) throw new Error(`Linear did not confirm ${what}; treating the write as unconfirmed`);
+}
+
 function toIssue(n: any): Issue {
+  const kids = n.children;
+  const readable: string[] = Array.isArray(kids?.nodes)
+    ? kids.nodes.filter((c: any) => typeof c?.id === "string" && c.id !== "").map((c: any) => c.id)
+    : [];
+  const unique = [...new Set(readable)];
+  // Complete only when every child has an id, no id repeats, and the list says it has no more pages. A repeated
+  // child would let one finished sub-task count twice, so it marks the list incomplete rather than being deduped.
+  const complete = Array.isArray(kids?.nodes) && unique.length === kids.nodes.length && kids.pageInfo?.hasNextPage === false;
   return {
     id: n.id,
     identifier: n.identifier,
@@ -68,7 +92,8 @@ function toIssue(n: any): Issue {
     labels: (n.labels?.nodes ?? []).map((l: any) => l.name),
     assignee: n.assignee?.name ?? null,
     parentId: n.parent?.id ?? null,
-    childIds: (n.children?.nodes ?? []).map((c: any) => c.id),
+    childIds: unique,
+    ...(complete ? {} : { childrenIncomplete: true as const }),
     createdAt: n.createdAt,
   };
 }
@@ -112,35 +137,108 @@ export class LinearStore implements TaskStore {
 
   async listOpenAndRecent(teamKey: string): Promise<Issue[]> {
     const since = new Date(Date.now() - 14 * 864e5).toISOString();
-    const d = await this.gql(
-      `query($key:String!,$since:DateTimeOrDuration!){
-        issues(first:250, orderBy:updatedAt, filter:{ team:{ key:{ eq:$key } }, or:[
-          { state:{ type:{ in:["triage","backlog","unstarted","started"] } } },
-          { completedAt:{ gte:$since } },
-          { canceledAt:{ gte:$since } } ] }){ nodes { ${ISSUE_FIELDS} } } }`,
-      { key: teamKey, since },
-    );
-    return d.issues.nodes.map(toIssue);
+    // Page through the whole queue: a task past the first page is still open work, and a command's sub-tasks must
+    // all be visible before it can be completed. Only an explicit hasNextPage === false ends the list; anything less
+    // throws, so the engine never acts on a queue it only partly read.
+    const out: Issue[] = [];
+    const seen = new Set<string>();
+    // Every continuation cursor must be new: a cursor seen before means the pages loop back on themselves, so a
+    // later "no more pages" can't prove the queue was read in full.
+    const cursors = new Set<string>();
+    let after: string | null = null;
+    for (let page = 0; page < 8; page++) {
+      const d: any = await this.gql(
+        `query($key:String!,$since:DateTimeOrDuration!,$after:String){
+          issues(first:250, after:$after, orderBy:updatedAt, filter:{ team:{ key:{ eq:$key } }, or:[
+            { state:{ type:{ in:["triage","backlog","unstarted","started"] } } },
+            { completedAt:{ gte:$since } },
+            { canceledAt:{ gte:$since } } ] }){ nodes { ${ISSUE_FIELDS} } pageInfo { hasNextPage endCursor } } }`,
+        { key: teamKey, since, after },
+      );
+      const c = d?.issues;
+      if (!Array.isArray(c?.nodes) || typeof c.pageInfo?.hasNextPage !== "boolean" || !c.nodes.every((n: any) => n && typeof n === "object")) {
+        throw new Error(`team ${teamKey} returned an unreadable issue page; refusing to act on a partial queue`);
+      }
+      for (const n of c.nodes) {
+        // Each task must be identifiable and appear once. A repeated id (on one page or across pages) means the
+        // snapshot is inconsistent, and acting on it could plan one command twice; refuse rather than pick a copy.
+        if (typeof n.id !== "string" || !n.id || typeof n.identifier !== "string" || !n.identifier) {
+          throw new Error(`team ${teamKey} returned an issue without a readable id; refusing to act on an inconsistent queue`);
+        }
+        // A task whose state can't be read would silently fall out of every open/started/done filter while the rest
+        // of the queue is acted on; refuse the whole queue instead.
+        if (typeof n.state?.type !== "string" || !STATE_TYPES.includes(n.state.type)) {
+          throw new Error(`team ${teamKey} returned issue ${n.identifier} without a readable state; refusing to act on an inconsistent queue`);
+        }
+        // The parent link decides whether a task is a sub-task (and must wait for its command) or a root task. Only an
+        // explicit null is a root; a missing or id-less parent would silently turn a sub-task into a root task.
+        const p = n.parent;
+        if (p !== null && !(p && typeof p === "object" && typeof p.id === "string" && p.id)) {
+          throw new Error(`team ${teamKey} returned issue ${n.identifier} without a readable parent link; refusing to act on an inconsistent queue`);
+        }
+        if (seen.has(n.id)) {
+          throw new Error(`team ${teamKey} returned issue ${n.identifier} more than once; refusing to act on an inconsistent queue`);
+        }
+        seen.add(n.id);
+        out.push(toIssue(n));
+      }
+      if (!c.pageInfo.hasNextPage) return out;
+      const next = c.pageInfo.endCursor;
+      if (typeof next !== "string" || !next || cursors.has(next)) {
+        throw new Error(`team ${teamKey} returned no usable cursor for its next issue page; refusing to act on a partial queue`);
+      }
+      cursors.add(next);
+      after = next;
+    }
+    throw new Error(`team ${teamKey} has more open and recent issues than ACP will page through; refusing to act on a partial queue`);
   }
 
   async getLabels(issueId: string) {
-    const d = await this.gql(`query($id:String!){ issue(id:$id){ labels { nodes { name } } } }`, { id: issueId });
-    return (d.issue.labels?.nodes ?? []).map((l: any) => l.name as string);
+    const d = await this.gql(
+      `query($id:String!){ issue(id:$id){ labels(first:250) { nodes { name } pageInfo { hasNextPage } } } }`,
+      { id: issueId },
+    );
+    // Executor labels (executor:manual, executor:eve) are claims. Only an explicit, complete label list proves there
+    // are none: a missing issue or label list, non-array nodes, an unreadable name, or a list with more pages throws
+    // instead of reading as "no labels", which would turn a foreign claim into a free task.
+    const l = d?.issue?.labels;
+    if (!Array.isArray(l?.nodes) || l.pageInfo?.hasNextPage !== false || !l.nodes.every((n: any) => typeof n?.name === "string")) {
+      throw new Error(`issue ${issueId} returned an unreadable label list; refusing to guess its executor`);
+    }
+    return l.nodes.map((n: { name: string }) => n.name);
   }
 
   async getComments(issueId: string) {
     // Page through every comment: claim ownership depends on the earliest claim, which may not be on page one.
     const out: { body: string; createdAt: string }[] = [];
+    // Any repeated continuation cursor (not just the last one) means the pages loop, so the list isn't proven whole.
+    const cursors = new Set<string>();
     let after: string | null = null;
     for (let page = 0; page < 50; page++) {
       const d: any = await this.gql(
         `query($id:String!,$after:String){ issue(id:$id){ comments(first:100, after:$after){ nodes { body createdAt } pageInfo { hasNextPage endCursor } } } }`,
         { id: issueId, after },
       );
-      const c = d.issue.comments;
+      const c = d.issue?.comments;
+      // Only an explicit hasNextPage === false ends the list; a missing or malformed page signal is not "complete",
+      // since an earlier claim could sit on a page that was never read.
+      if (!Array.isArray(c?.nodes) || typeof c.pageInfo?.hasNextPage !== "boolean") {
+        throw new Error(`issue ${issueId} returned an unreadable comment page; refusing to guess the earliest claim`);
+      }
+      // A comment without a readable body or timestamp could hide a claim or reorder who claimed first.
+      for (const n of c.nodes) {
+        if (typeof n?.body !== "string" || typeof n.createdAt !== "string" || Number.isNaN(Date.parse(n.createdAt))) {
+          throw new Error(`issue ${issueId} returned an unreadable comment; refusing to guess the earliest claim`);
+        }
+      }
       out.push(...c.nodes);
-      if (!c.pageInfo?.hasNextPage) return out;
-      after = c.pageInfo.endCursor;
+      if (!c.pageInfo.hasNextPage) return out;
+      const next = c.pageInfo.endCursor;
+      if (typeof next !== "string" || !next || cursors.has(next)) {
+        throw new Error(`issue ${issueId} returned no usable cursor for its next comment page; refusing to guess the earliest claim`);
+      }
+      cursors.add(next);
+      after = next;
     }
     throw new Error(`issue ${issueId} has more comments than ACP will page through; refusing to guess the earliest claim`);
   }
@@ -159,21 +257,28 @@ export class LinearStore implements TaskStore {
         },
       },
     );
-    return toIssue(d.issueCreate.issue);
+    confirmWrite(d?.issueCreate, "the new issue");
+    const issue = d.issueCreate.issue;
+    if (!issue || typeof issue.id !== "string" || !issue.id) throw new Error("Linear did not return the new issue; treating the create as unconfirmed");
+    return toIssue(issue);
   }
 
   async comment(issueId: string, body: string) {
-    await this.gql(`mutation($input:CommentCreateInput!){ commentCreate(input:$input){ success } }`, { input: { issueId, body } });
+    const d = await this.gql(`mutation($input:CommentCreateInput!){ commentCreate(input:$input){ success } }`, { input: { issueId, body } });
+    // A claim, plan or result comment that Linear didn't confirm must not be treated as written: the engine would
+    // otherwise run a task with no persisted claim, or report work it never recorded.
+    confirmWrite(d?.commentCreate, `the comment on ${issueId}`);
   }
 
   async setState(issueId: string, teamKey: string, type: StateType) {
     const t = await this.team(teamKey);
     const state = t.states.filter((s) => s.type === type).sort((a, b) => a.position - b.position)[0];
     if (!state) throw new Error(`No ${type} state in team ${teamKey}`);
-    await this.gql(`mutation($id:String!,$input:IssueUpdateInput!){ issueUpdate(id:$id,input:$input){ success } }`, {
+    const d = await this.gql(`mutation($id:String!,$input:IssueUpdateInput!){ issueUpdate(id:$id,input:$input){ success } }`, {
       id: issueId,
       input: { stateId: state.id },
     });
+    confirmWrite(d?.issueUpdate, `the ${type} state on ${issueId}`);
   }
 
   publishStatus(content: string) {
@@ -190,11 +295,46 @@ export class LinearStore implements TaskStore {
     return this.upsertDoc(LEDGER_TITLE, content);
   }
 
-  /** The engine's own document with this title in the fixed project (the oldest, if someone duplicated it). */
+  /**
+   * The engine's own document with this title in the fixed project (the oldest, if someone duplicated it). Follows
+   * document pages up to DOC_PAGES and answers only from the whole list: a malformed page, a missing cursor or a list
+   * still incomplete at the cap throws. So a ledger on an unread page reads as unreadable (paid calls blocked), is
+   * never mistaken for absent and duplicated by a create, and "oldest" is never chosen from part of the list.
+   */
   private async findDoc(title: string): Promise<{ id: string; content?: string } | null> {
-    const d = await this.gql(`query($p:String!){ project(id:$p){ documents(first:50){ nodes { id title content createdAt } } } }`, { p: PROJECT_ID });
-    const docs = (d.project?.documents?.nodes ?? []).filter((n: { title?: string }) => n.title === title);
-    docs.sort((a: { createdAt?: string }, b: { createdAt?: string }) => String(a.createdAt ?? "").localeCompare(String(b.createdAt ?? "")));
+    // Forget any id cached from an earlier lookup first: if this one fails, no later write may reuse it.
+    this.docIds.delete(title);
+    const docs: { id: string; title?: string; content?: string; createdAt?: string }[] = [];
+    let after: string | null = null;
+    let more: unknown = true;
+    const seen = new Set<string>();
+    for (let page = 0; page < DOC_PAGES && more === true; page++) {
+      const d: { project?: { documents?: { nodes?: unknown; pageInfo?: { hasNextPage?: unknown; endCursor?: string | null } } } } = await this.gql(
+        `query($p:String!,$after:String){ project(id:$p){ documents(first:50, after:$after){ nodes { id title content createdAt } pageInfo { hasNextPage endCursor } } } }`,
+        { p: PROJECT_ID, after },
+      );
+      const list = d.project?.documents;
+      if (!list || !Array.isArray(list.nodes)) throw new Error("Linear returned an unreadable document list");
+      // Every entry must be readable, not just the matches: an entry whose title can't be read might be this
+      // document, so skipping it could read "absent" and make upsertDoc create a duplicate. A match without an id
+      // can't be updated either.
+      const nodes = list.nodes as { id?: unknown; title?: unknown }[];
+      for (const n of nodes) {
+        if (!n || typeof n !== "object" || typeof n.title !== "string") throw new Error(`Linear returned a document without a readable title, so "${title}" may be unseen`);
+        if (typeof n.id !== "string" || !n.id.trim()) throw new Error(n.title === title ? `Linear returned "${title}" without an id` : `Linear returned a document without an id, so the list can't be trusted`);
+      }
+      docs.push(...(nodes.filter((n) => n.title === title) as typeof docs));
+      more = list.pageInfo?.hasNextPage;
+      after = list.pageInfo?.endCursor ?? null;
+      if (more === true && (typeof after !== "string" || !after || seen.has(after))) break;
+      if (typeof after === "string") seen.add(after);
+    }
+    if (more !== false) throw new Error(`the project's document list could not be read in full, so "${title}" may exist unseen`);
+    // Duplicates are ordered by creation time, so each must carry a real one: a missing or invalid date would
+    // otherwise sort first and pick the wrong copy to read or update.
+    const created = (d: { createdAt?: unknown }) => (typeof d.createdAt === "string" ? Date.parse(d.createdAt) : NaN);
+    if (docs.length > 1 && docs.some((d) => !Number.isFinite(created(d)))) throw new Error(`Linear returned duplicate "${title}" documents without valid creation dates`);
+    docs.sort((a, b) => created(a) - created(b));
     if (docs[0]) this.docIds.set(title, docs[0].id);
     return docs[0] ?? null;
   }

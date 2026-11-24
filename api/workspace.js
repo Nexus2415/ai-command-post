@@ -1,11 +1,11 @@
 // Workspace API (Phase 1): projects, threads and messages behind the site password.
 // Clients can only post their own "user" messages; AI replies are written here, by the chat action, after the
 // budget checks.
-import { hasSitePassword, isSameOrigin } from "./lib/site-auth.js";
-import { MODELS, StoreError, createSupabaseStore, isId, workspaceConfigured } from "./lib/workspace-store.js";
-import { BudgetStop, ModelError, estimateUsd, isPaid, mergeTurns, modelStatus, runChat, trimHistory } from "./lib/workspace-models.js";
-import { pluginStatus, readyTools, runTool } from "./lib/workspace-plugins.js";
-import { mcpStatus, mcpTools } from "./lib/workspace-mcp.js";
+import { hasSitePassword, isSameOrigin } from "./_lib/site-auth.js";
+import { MODELS, StoreError, createSupabaseStore, isId, workspaceConfigured } from "./_lib/workspace-store.js";
+import { BudgetStop, ModelError, estimateUsd, isPaid, mergeTurns, modelStatus, runChat, trimHistory } from "./_lib/workspace-models.js";
+import { pluginStatus, readyTools, runTool } from "./_lib/workspace-plugins.js";
+import { mcpStatus, mcpTools } from "./_lib/workspace-mcp.js";
 
 // Vercel: model replies can take a while.
 export const config = { maxDuration: 120 };

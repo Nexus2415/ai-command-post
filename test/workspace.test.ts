@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { handle } from "../api/workspace.js";
-import { createMemoryStore, createSupabaseStore, workspaceConfigured } from "../api/lib/workspace-store.js";
+import { createMemoryStore, createSupabaseStore, workspaceConfigured } from "../api/_lib/workspace-store.js";
 
 // Phase 1 workspace storage. Fakes only: the memory store and a fake fetch for the REST adapter.
 const env = {

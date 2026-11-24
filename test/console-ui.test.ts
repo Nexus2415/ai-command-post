@@ -21,6 +21,15 @@ test("console shows canceled as its own lane, never folded into done", () => {
   assert.deepEqual({ ...core.laneCounts(null) }, { done: 0, active: 0, queued: 0, blocked: 0, review: 0, canceled: 0 });
 });
 
+test("tab counts always match the issue list, even if a reply's lanes disagree with it", () => {
+  const zero = { done: 0, active: 0, queued: 0, blocked: 0, review: 0, canceled: 0 };
+  // Missing lanes but a real issue: Active still counts it.
+  assert.deepEqual({ ...core.laneCounts({ issues: [{ id: "ARN-9", lane: "active" }], lanes: {} }) }, { ...zero, active: 1 });
+  // A phantom lane ID with no matching issue counts nothing.
+  assert.deepEqual({ ...core.laneCounts({ issues: [], lanes: { done: ["ARN-GHOST"] } }) }, zero);
+  for (const k of core.TABS) assert.equal(core.laneCounts(overview)[k], core.laneIssues(overview, k).length);
+});
+
 test("owner question labels distinguish issue creation from execution; Codex is named", () => {
   assert.equal(core.ownerLabel({ title: "[Question] status?", owner: null }), "Owner question · no execution");
   assert.equal(core.ownerLabel({ title: "Do it", owner: null }), "Unclaimed");

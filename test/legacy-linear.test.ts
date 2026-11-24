@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { handle } from "../api/linear.js";
-import { TEAM_ID, PROJECT_ID } from "../api/lib/console-state.js";
+import { TEAM_ID, PROJECT_ID } from "../api/_lib/console-state.js";
 
 // ARN-47: the legacy adapter is read-only and fixed to the owner-console scope.
 // All command creation goes through /api/intake. No external calls in these tests.

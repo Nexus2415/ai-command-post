@@ -2,9 +2,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { handle } from "../api/console.js";
-import { TEAM_ID, PROJECT_ID } from "../api/lib/console-state.js";
+import { TEAM_ID, PROJECT_ID } from "../api/_lib/console-state.js";
 // @ts-ignore plain-JS module served by Vercel
-import { lifecycleOf } from "../api/lib/command-lifecycle.js";
+import { lifecycleOf } from "../api/_lib/command-lifecycle.js";
 import { COMMAND_MARKER, RESULT_MARKER, RECONCILED_MARKER, EXECUTOR_MARKER } from "../src/orchestrator.ts";
 
 // Synthetic fixtures only (ARN-71). Nothing here reaches Linear, a model provider or Eve.
@@ -22,7 +22,7 @@ const life = (issue: any, comments: any[] = [], children: any = [], complete: an
   lifecycleOf({ ...issue, labels: issue.labels.nodes.map((l: any) => l.name) }, comments, children, complete);
 
 test("JS markers match the engine's markers", () => {
-  const src = readFileSync("api/lib/command-lifecycle.js", "utf8");
+  const src = readFileSync("api/_lib/command-lifecycle.js", "utf8");
   for (const m of [COMMAND_MARKER, RESULT_MARKER, RECONCILED_MARKER]) assert.ok(src.includes(JSON.stringify(m)), m);
   assert.ok(src.includes("^" + EXECUTOR_MARKER), EXECUTOR_MARKER);
 });
@@ -56,6 +56,21 @@ test("completed needs both a terminal state and a recorded result", () => {
   // A later blocked result contradicts an earlier done result.
   assert.equal(life(cmd(done), [c("a", `${RESULT_MARKER} (Gemini, done)\n\nx`, "2026-10-09T10:00:00Z"),
     c("b", `${RESULT_MARKER} (Gemini, blocked)\n\ny`, "2026-10-09T11:00:00Z")]).stage, "unknown");
+});
+
+test("a done and a blocked result stamped at the same instant are a contradiction, whatever their ids or input order", () => {
+  const done = { name: "Done", type: "completed" };
+  const summary = (id: string, t: string) => c(id, `${RECONCILED_MARKER}\n\nok`, t);
+  const blocked = (id: string, t: string) => c(id, `${RESULT_MARKER} (Gemini, blocked)\n\nno key`, t);
+  for (const [d, b] of [[summary("a", "2026-10-09T10:00:00Z"), blocked("b", "2026-10-09T10:00:00Z")],
+    [summary("b", "2026-10-09T10:00:00Z"), blocked("a", "2026-10-09T10:00:00Z")],
+    [summary("a", "2026-10-09T10:00:00Z"), blocked("b", "2026-10-09T12:00:00+02:00")],
+    [c("a", `${RESULT_MARKER} (Gemini, done)\n\nx`, "2026-10-09T10:00:00Z"), blocked("b", "2026-10-09T10:00:00.000Z")]]) {
+    assert.equal(life(cmd(done), [d, b]).stage, "unknown");
+    assert.equal(life(cmd(done), [b, d]).stage, "unknown");
+  }
+  // Strictly earlier blocked, then done: completed.
+  assert.equal(life(cmd(done), [blocked("b", "2026-10-09T09:59:59Z"), summary("a", "2026-10-09T10:00:00Z")]).stage, "completed");
 });
 
 test("blocked shows the recorded reason; canceled is never done; contradictions are unknown", () => {
@@ -97,7 +112,7 @@ test("thread endpoint returns the lifecycle with one read-only Linear query and 
 });
 
 test("lifecycle code has no write, model or Eve path", () => {
-  const src = readFileSync("api/lib/command-lifecycle.js", "utf8");
+  const src = readFileSync("api/_lib/command-lifecycle.js", "utf8");
   assert.doesNotMatch(src, /fetch\(|mutation|^import\s|\beve\b|anthropic|openai|generativelanguage/im);
 });
 
@@ -107,8 +122,25 @@ test("a Done command with an open, missing or unreadable sub-task is unknown, no
   assert.equal(life(cmd(done), res, [{ identifier: "ARN-901", state: { type: "started" } }]).stage, "unknown");
   assert.equal(life(cmd(done), res, [{ identifier: "ARN-901", state: null }]).stage, "unknown");
   assert.equal(life(cmd(done), res, null).stage, "unknown");
-  assert.equal(life(cmd(done), res, [{ identifier: "ARN-901", state: { type: "completed" } },
-    { identifier: "ARN-902", state: { type: "canceled" } }]).stage, "completed");
+  assert.equal(life(cmd(done), res, [{ identifier: "ARN-901", state: { type: "completed" } }]).stage, "completed");
+});
+
+test("a Done command with a canceled or duplicate sub-task is unknown, never completed", () => {
+  const done = { name: "Done", type: "completed" };
+  const res = [c("s", `${RECONCILED_MARKER}\n\nAnswer: 50.`)];
+  const kid = (n: number, type: string) => ({ identifier: "ARN-" + n, state: { type } });
+  for (const kids of [
+    [kid(901, "completed"), kid(902, "canceled")],
+    [kid(901, "canceled"), kid(902, "canceled")],
+    [kid(901, "duplicate")],
+    [kid(901, "completed"), kid(902, "duplicate")],
+  ]) {
+    const l = life(cmd(done), res, kids);
+    assert.equal(l.stage, "unknown");
+    assert.match(l.detail, /canceled, not done/);
+  }
+  assert.equal(life(cmd(done), res, [kid(901, "completed"), kid(902, "completed")]).stage, "completed");
+  assert.equal(life(cmd(done), res, []).stage, "completed");
 });
 
 test("completed needs complete evidence: more than 50 sub-tasks or truncated comments fail closed", () => {
@@ -119,6 +151,30 @@ test("completed needs complete evidence: more than 50 sub-tasks or truncated com
   assert.equal(life(cmd(done), res, fifty, { childrenComplete: false, commentsComplete: true }).stage, "unknown");
   assert.equal(life(cmd(done), res, fifty, { childrenComplete: true, commentsComplete: false }).stage, "unknown");
   assert.equal(life(cmd(done), res, fifty, {}).stage, "unknown");
+});
+
+test("thread endpoint refuses comments without an id, text or real time, so a bad time can't sort done after blocked", async () => {
+  const blocked = c("b", `${RESULT_MARKER} (Gemini, blocked)\n\nno key`, "2026-10-09T11:00:00Z");
+  const run = async (nodes: any[]) => {
+    const f = (async () => new Response(JSON.stringify({ data: { issue: {
+      ...cmd({ name: "Done", type: "completed" }),
+      children: { nodes: [], pageInfo: { hasNextPage: false } },
+      comments: { nodes, pageInfo: { hasPreviousPage: false } },
+    } } }), { status: 200 })) as typeof fetch;
+    return handle({ method: "POST", headers: { "x-acp-password": "pw" }, body: { action: "thread", identifier: "ARN-900" } }, env, f) as any;
+  };
+  const summary = (createdAt: any) => ({ id: "s", body: `${RECONCILED_MARKER}\n\nok`, createdAt });
+  for (const bad of [summary(undefined), summary(null), summary("not a date"), summary(""), summary(1760000000000),
+    { ...summary("2026-10-09T10:00:00Z"), id: "" }, { ...summary("2026-10-09T10:00:00Z"), id: undefined },
+    { ...summary("2026-10-09T10:00:00Z"), body: null }, null]) {
+    const r = await run([bad, blocked]);
+    assert.equal(r.status, 502, JSON.stringify(bad));
+    assert.equal(r.body.lifecycle, undefined);
+  }
+  // Valid times: a done summary followed by a later blocked result is unknown; alone it is completed.
+  assert.equal((await run([summary("2026-10-09T10:00:00Z"), blocked])).body.lifecycle.stage, "unknown");
+  assert.equal((await run([summary("2026-10-09T12:00:00Z"), blocked])).body.lifecycle.stage, "completed");
+  assert.equal((await run([summary("2026-10-09T11:00:00Z"), blocked])).body.lifecycle.stage, "unknown");
 });
 
 test("thread endpoint passes pagination through: a 51st child page makes a Done command unknown", async () => {

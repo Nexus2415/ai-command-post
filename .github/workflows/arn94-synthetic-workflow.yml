@@ -7,7 +7,8 @@ permissions:
   contents: read
 jobs:
   native-workflow:
-    runs-on: ubuntu-latest
+    # ubuntu-latest moved to 26.04, which has no PostgreSQL 16 server; 24.04 ships it.
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4

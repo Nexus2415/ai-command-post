@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { handle } from "../api/workspace.js";
-import { createMemoryStore } from "../api/lib/workspace-store.js";
-import { OPENROUTER_FEE, estimateUsd, modelStatus } from "../api/lib/workspace-models.js";
+import { createMemoryStore } from "../api/_lib/workspace-store.js";
+import { OPENROUTER_FEE, estimateUsd, modelStatus } from "../api/_lib/workspace-models.js";
 
 // Phase 2 step 1: one OpenRouter key for every workspace AI. Fake fetch only; OpenRouter is never called.
 const base = {
