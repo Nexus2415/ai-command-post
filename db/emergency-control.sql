@@ -29,16 +29,22 @@ create or replace function emergency_control.contain(p_mode text,p_reason text)
 returns table(decision text,generation bigint)
 language plpgsql security definer set search_path=pg_catalog as $$
 declare v emergency_control.latch%rowtype;
+  v_mode text;
 begin
   if p_mode is null or p_mode not in ('AEGIS','BLACKOUT') or p_reason is null or char_length(p_reason) not between 1 and 200 then
     return query select 'invalid'::text,null::bigint; return;
   end if;
   select * into v from emergency_control.latch where id=1 for update;
   if not found then return query select 'unavailable'::text,null::bigint; return; end if;
-  if v.mode='BLACKOUT' or v.mode=p_mode then return query select 'already_contained'::text,v.generation; return; end if;
-  if v.generation=9007199254740991 then return query select 'generation_exhausted'::text,v.generation; return; end if;
-  update emergency_control.latch l set mode=p_mode,generation=v.generation+1 where id=1;
-  insert into emergency_control.events(generation,prior_mode,mode,reason) values(v.generation+1,v.mode,p_mode,p_reason);
+  -- Even a repeated containment request invalidates an outstanding recovery decision.
+  v_mode := case when v.mode='BLACKOUT' then 'BLACKOUT' else p_mode end;
+  if v.generation=9007199254740991 then
+    -- At exhaustion the latch remains permanently contained; never downgrade BLACKOUT.
+    update emergency_control.latch l set mode='BLACKOUT' where id=1;
+    return query select 'generation_exhausted_contained'::text,v.generation; return;
+  end if;
+  update emergency_control.latch l set mode=v_mode,generation=v.generation+1 where id=1;
+  insert into emergency_control.events(generation,prior_mode,mode,reason) values(v.generation+1,v.mode,v_mode,p_reason);
   return query select 'contained'::text,v.generation+1;
 end $$;
 -- Only the separate owner role has this RPC. Expected generation prevents stale recovery.
@@ -55,7 +61,7 @@ begin
   if not found then return query select 'unavailable'::text,null::bigint; return; end if;
   if v.generation<>p_generation then return query select 'stale'::text,v.generation; return; end if;
   if v.mode='RUN' then return query select 'already_running'::text,v.generation; return; end if;
-  if v.generation=9007199254740991 then return query select 'generation_exhausted'::text,v.generation; return; end if;
+  if v.generation>=9007199254740989 then return query select 'generation_exhausted'::text,v.generation; return; end if;
   update emergency_control.latch l set mode='RUN',generation=v.generation+1 where id=1;
   insert into emergency_control.events(generation,prior_mode,mode,reason) values(v.generation+1,v.mode,'RUN',trim(p_evidence));
   return query select 'recovered'::text,v.generation+1;
