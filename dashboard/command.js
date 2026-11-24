@@ -1,20 +1,21 @@
 // AI Command Post — command tree view: an orchestrator node with a branch to each AI and its tasks.
 // Read-only: it calls POST /api/console (overview) and nothing else. No intake, no thread writes, no model calls.
 // All Linear text is rendered with textContent; no HTML is ever built from data.
-// Agent status is derived from Linear workload only. It never claims an agent is connected.
+// Agent status is derived from Linear workload only. It never claims an agent is connected or that a worker is live.
 (function (root) {
   "use strict";
   const AGENTS = [
     { key: "chatgpt", name: "ChatGPT", role: "Coordinates, plans and breaks ties", glyph: "M4 6h16M4 12h10M4 18h7" },
     { key: "claude", name: "Claude", role: "Writes code and architecture", glyph: "M9 7l-5 5 5 5M15 7l5 5-5 5" },
     { key: "perplexity", name: "Perplexity", role: "Research and independent review", glyph: "M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM16 16l5 5" },
-    { key: "gemini", name: "Gemini", role: "Second-opinion review", glyph: "M12 3l2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5z" },
+    { key: "gemini", name: "Gemini", role: "Second-opinion review", suspended: true, glyph: "M12 3l2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5z" },
     { key: "codex", name: "Codex", role: "Code review on pull requests", glyph: "M5 5h14v14H5zM9 9h6M9 13h6M9 17h3" },
     { key: "none", name: "Unclaimed", role: "Open work with no AI owner yet", glyph: "M12 4v8M12 16v.01M4 20h16L12 4z" },
   ];
   const OPEN = ["active", "queued", "blocked", "review"];
   const PILL = {
-    running: "Running", blocked: "Blocked", review: "In review", queued: "Queued", complete: "Complete", idle: "Idle",
+    running: "In progress", blocked: "Blocked", review: "In review", queued: "Queued", complete: "Complete", idle: "Idle",
+    suspended: "Suspended",
   };
   const ID_RE = /^ARN-[1-9]\d{0,8}$/;
 
@@ -29,7 +30,11 @@
     const total = s.active + s.queued + s.blocked + s.review + s.done;
     s.total = total;
     s.percent = total ? Math.round((s.done / total) * 100) : 0;
-    s.status = s.blocked ? "blocked" : s.active ? "running" : s.review ? "review" : s.queued ? "queued" : s.done ? "complete" : "idle";
+    s.open = s.active + s.queued + s.blocked + s.review;
+    // Gemini is turned off by the owner (SUSPENDED_AGENTS in src/config.ts); old Linear ownership never makes it look active.
+    const agent = AGENTS.find(a => a.key === key);
+    s.status = agent && agent.suspended ? "suspended" :
+      s.blocked ? "blocked" : s.active ? "running" : s.review ? "review" : s.queued ? "queued" : s.done ? "complete" : "idle";
     s.tasks = mine.filter(i => OPEN.includes(i.lane)).sort(byUrgency);
     return s;
   }
@@ -39,6 +44,10 @@
   function byUrgency(a, b) {
     return (LANE_RANK[a.lane] ?? 9) - (LANE_RANK[b.lane] ?? 9) || prio(a.priority) - prio(b.priority) ||
       (Date.parse(b.updatedAt || 0) || 0) - (Date.parse(a.updatedAt || 0) || 0);
+  }
+  // AIs that Linear shows with open tasks. Done-only and suspended AIs are not counted; this is workload, not live workers.
+  function aisWithOpenTasks(overview) {
+    return AGENTS.filter(a => a.key !== "none" && !a.suspended && agentStats(overview, a.key).open > 0).length;
   }
   function totals(overview) {
     const all = list(overview).filter(i => i.kind !== "question");
@@ -66,7 +75,7 @@
     const msg = body && typeof body.error === "string" ? body.error : "";
     return msg || "Request failed (HTTP " + status + ").";
   }
-  const api = { AGENTS, PILL, agentStats, totals, queue, activity, laneStatus, safeUrl, agentName, errorMessage, isIssueId: s => ID_RE.test(String(s)) };
+  const api = { AGENTS, PILL, agentStats, aisWithOpenTasks, totals, queue, activity, laneStatus, safeUrl, agentName, errorMessage, isIssueId: s => ID_RE.test(String(s)) };
   root.ACPCommandCore = api;
   if (typeof document === "undefined") return;
 
@@ -119,11 +128,10 @@
 
   function renderStatus() {
     const t = totals(overview);
-    const busy = AGENTS.filter(a => a.key !== "none" && agentStats(overview, a.key).total > 0).length;
     ring($("gRing"), overview ? (t.counted ? ((t.active + t.review) / t.counted) * 100 : 0) : 0, "Share of open work being worked now");
-    $("gAgents").textContent = overview ? busy : "—";
+    $("gAgents").textContent = overview ? aisWithOpenTasks(overview) : "—";
     const rows = $("gRows"); rows.replaceChildren();
-    [["running", "Running", t.active], ["review", "In review", t.review], ["queued", "Queued", t.queued], ["blocked", "Blocked", t.blocked], ["complete", "Complete", t.done]]
+    [["running", "In progress", t.active], ["review", "In review", t.review], ["queued", "Queued", t.queued], ["blocked", "Blocked", t.blocked], ["complete", "Complete", t.done]]
       .forEach(([s, label, v]) => { const li = el("li", "s-" + s); li.append(el("span", "dot"), el("span", null, label), el("b", "mono", overview ? v : "—")); rows.appendChild(li); });
     // Task flow bars: one bar per lane, scaled to the largest lane.
     const flow = $("gFlow"); flow.replaceChildren();
