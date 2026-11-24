@@ -1,0 +1,44 @@
+name: ARN-137 Emergency Synthetic
+on:
+  pull_request:
+    paths:
+      - 'src/emergency.ts'
+      - 'db/emergency-control.sql'
+      - 'test/emergency*'
+      - '.github/workflows/emergency-synthetic.yml'
+permissions:
+  contents: read
+jobs:
+  latch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: synthetic-only
+          POSTGRES_DB: emergency_control_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: synthetic-only
+      PGDATABASE: emergency_control_test
+      PGCONNECT_TIMEOUT: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Native disposable latch and role validation
+        run: |
+          unset PGHOSTADDR PGSERVICE PGSERVICEFILE PGOPTIONS
+          test "$PGHOST" = 127.0.0.1
+          test "$PGDATABASE" = emergency_control_test
+          psql -X -v ON_ERROR_STOP=1 -c 'create role emergency_reader; create role emergency_containment; create role emergency_owner;'
+          psql -X -v ON_ERROR_STOP=1 -f db/emergency-control.sql
+          psql -X -v ON_ERROR_STOP=1 -f test/emergency-contract.sql
