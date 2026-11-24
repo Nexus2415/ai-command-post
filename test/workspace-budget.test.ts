@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createWorkspaceBudgetPort, executeReserved } from "../api/_lib/workspace-budget.js";
+import { handleProduction, handle } from "../api/workspace.js";
+import { createMemoryStore } from "../api/_lib/workspace-store.js";
 
 const plan = { requestId: "00000000-0000-4000-8000-000000000001",
   threadId: "00000000-0000-4000-8000-000000000002", maximumMicros: 60,
@@ -79,4 +81,47 @@ test("RPC adapter binds identity and integer bounds; rejects malformed responses
     const bad = createWorkspaceBudgetPort(env, (async () => new Response(JSON.stringify(body))) as typeof fetch);
     await assert.rejects(bad.reserve(plan));
   }
+});
+
+test("production HTTP gate rejects model execution regardless of positive caps or request-body overrides", async () => {
+  const env = {
+    ACP_SITE_PASSWORD: "synthetic-password", ACP_WORKSPACE_DB_URL: "https://synthetic.invalid",
+    ACP_WORKSPACE_DB_KEY: "synthetic", OPENAI_API_KEY: "synthetic",
+    ANTHROPIC_API_KEY: "synthetic", ACP_WORKSPACE_MONTHLY_BUDGET_USD: "100",
+    ACP_WORKSPACE_THREAD_BUDGET_USD: "100",
+  };
+  const store = createMemoryStore();
+  const p = await store.createProject("Synthetic");
+  const t = await store.createThread(p.id, "Synthetic", "chatgpt");
+  let calls = 0;
+  const f = (async () => { calls++; throw new Error("unexpected network"); }) as typeof fetch;
+  const headers = { "x-acp-password": env.ACP_SITE_PASSWORD, origin: "https://acp.example", host: "acp.example" };
+  const req = (action: string, args: object = {}) => ({
+    method: "POST", headers, body: { action, args, blockProviderExecution: false, verified: true },
+  });
+  for (const [action,args] of [
+    ["chat",{threadId:t.id,content:"synthetic"}],
+    ["chat",{threadId:t.id}],
+    ["compare",{threadId:t.id,content:"synthetic",models:["chatgpt","claude"]}],
+    ["roundtable",{threadId:t.id,step:"start",content:"synthetic"}],
+    ["roundtable",{threadId:t.id,step:"critique"}],
+    ["roundtable",{threadId:t.id,step:"synthesize"}],
+    ["roundtable_estimate",{threadId:t.id,content:"synthetic"}],
+  ] as const) {
+    const out = await handleProduction(req(action,args),env,()=>store,{fetch:f});
+    assert.equal(out.status,402,action);
+    assert.match((out.body as any).error,/atomic budget admission/);
+  }
+  assert.equal(calls,0);
+  assert.equal((await store.listMessages(t.id)).length,0);
+  const status = await handleProduction(req("models",{threadId:t.id}),env,()=>store,{fetch:f});
+  assert.equal(status.status,200);
+  assert.equal((status.body as any).models.chatgpt.ready,false);
+  assert.match((status.body as any).models.chatgpt.reason,/atomic budget admission/);
+  const read = await handleProduction(req("get_thread",{threadId:t.id}),env,()=>store,{fetch:f});
+  assert.equal(read.status,200);
+  assert.equal(calls,0);
+  // Default handler is also fail closed when no synthetic store is injected.
+  const def = await handle(req("chat",{threadId:t.id,content:"synthetic"}),env);
+  assert.equal(def.status,402);
 });
