@@ -122,6 +122,12 @@ const reply = (store, threadId, model, text, r) => store.addMessage(threadId, {
   input_tokens: r.inputTokens, output_tokens: r.outputTokens, cost_usd: Math.round(r.costUsd * 1e6) / 1e6,
 });
 
+// Until an approved tariff and authenticated settlement path is wired, the deployed HTTP entry point
+// permits only explicitly reviewed non-provider actions. New actions are denied by default.
+const NON_PROVIDER_ACTIONS = new Set(["list_projects", "create_project", "list_threads", "create_thread",
+  "get_thread", "add_message", "list_notes", "add_note", "delete_note", "control", "set_control", "models"]);
+const BUDGET_BLOCK = "AI execution is blocked: verified price bounds and atomic budget admission are not active.";
+
 const ACTIONS = Object.freeze({
   async list_projects(store) {
     return { projects: await store.listProjects() };
@@ -194,7 +200,8 @@ const ACTIONS = Object.freeze({
     const spent = await store.spend(threadId, monthStart(deps.now()));
     const models = Object.fromEntries(MODELS.map((m) => {
       const s = modelStatus(env, m);
-      return [m, { ready: s.ready, reason: s.reason, via: s.via ?? null }];
+      return [m, { ready: !deps.blockProviderExecution && s.ready,
+        reason: deps.blockProviderExecution && s.ready ? BUDGET_BLOCK : s.reason, via: s.via ?? null }];
     }));
     const why = await stopReason(store);
     return {
@@ -433,9 +440,17 @@ async function runRound1(store, env, deps, { thread, content, models, sent }) {
   return { saved, messages, failed };
 }
 
-// Pure request handler, so tests can drive it with a memory store.
-export async function handle(req, env, makeStore = createSupabaseStore, deps = {}) {
-  const d = { fetch: deps.fetch ?? fetch, now: deps.now ?? (() => new Date()) };
+// The deployed entry point always enforces the provider deny-by-default gate.
+// The legacy pure handler remains available solely for injected memory-store/fake-fetch tests.
+export function handleProduction(req, env, makeStore = createSupabaseStore, deps = {}) {
+  return handleRequest(req, env, makeStore, deps, true);
+}
+export function handle(req, env, makeStore = createSupabaseStore, deps = {}) {
+  const syntheticHarness = makeStore !== createSupabaseStore && typeof deps.fetch === "function";
+  return handleRequest(req, env, makeStore, deps, !syntheticHarness);
+}
+async function handleRequest(req, env, makeStore, deps, blockProviderExecution) {
+  const d = { fetch: deps.fetch ?? fetch, now: deps.now ?? (() => new Date()), blockProviderExecution };
   if (!env.ACP_SITE_PASSWORD) return error(503, "The website isn't configured yet.");
   if (!hasSitePassword(req, env)) return error(401, "Wrong password");
   if (req.method !== "POST") return error(405, "POST only");
@@ -455,6 +470,7 @@ export async function handle(req, env, makeStore = createSupabaseStore, deps = {
   const args = body.args ?? {};
   if (!args || typeof args !== "object" || Array.isArray(args)) return error(400, "Invalid arguments.");
 
+  if (blockProviderExecution && !NON_PROVIDER_ACTIONS.has(body.action)) return error(402, BUDGET_BLOCK);
   try {
     const out = await ACTIONS[body.action](makeStore(env, d.fetch), args, env, d);
     return "status" in out ? out : { status: 200, body: out };
@@ -470,6 +486,6 @@ export default async function handler(req, res) {
   res.setHeader("Cache-Control", "private, no-store");
   res.setHeader("Vary", "Origin");
   res.setHeader("X-Content-Type-Options", "nosniff");
-  const out = await handle(req, process.env);
+  const out = await handleProduction(req, process.env);
   res.status(out.status).json(out.body);
 }

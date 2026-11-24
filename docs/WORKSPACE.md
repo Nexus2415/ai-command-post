@@ -1,5 +1,7 @@
 # Workspace (Phase 1)
 
+> **ARN-136 safety boundary (draft source, not a deployment):** The deployed HTTP entry point refuses model replies, retries, comparisons and roundtables until verified provider price bounds and atomic admission are wired end-to-end. Stored projects, threads, notes and messages remain available. Model status reports the refusal even if provider keys and a positive cap are configured. No setting or browser request can authorize the legacy estimate-only execution path. The reservation SQL in `db/workspace-budget.sql` and the execution seam in `api/_lib/workspace-budget.js` are not production-ready on their own; do not apply the schema or enable spending without separate owner authorization and independent review. Instructions below describe the historical Phase 1 design, not authorization to activate it.
+
 The Command Post is growing from an engine control panel into a workspace: projects, threads with any AI model, plugins every model can use, and spend caps. The plan is in the project files (`ai-command-post/PHASE1-WORKSPACE-PLAN.md`).
 
 ## Step 1: storage (this change)

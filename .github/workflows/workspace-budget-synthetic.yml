@@ -1,0 +1,45 @@
+name: ARN-136 Workspace Budget Synthetic
+on:
+  pull_request:
+    paths:
+      - 'db/workspace-budget.sql'
+      - 'test/workspace-budget*'
+      - '.github/workflows/workspace-budget-synthetic.yml'
+permissions:
+  contents: read
+jobs:
+  budget:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: synthetic-only
+          POSTGRES_DB: workspace_budget_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: synthetic-only
+      PGDATABASE: workspace_budget_test
+      PGCONNECT_TIMEOUT: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install disposable schema and test sequential contract
+        run: |
+          test "$PGHOST" = 127.0.0.1
+          test "$PGDATABASE" = workspace_budget_test
+          psql -X -v ON_ERROR_STOP=1 -c 'create role anon; create role authenticated; create role service_role;'
+          psql -X -v ON_ERROR_STOP=1 -f db/workspace.sql
+          psql -X -v ON_ERROR_STOP=1 -f db/workspace-budget.sql
+          psql -X -v ON_ERROR_STOP=1 -f test/workspace-budget-contract.sql
+      - name: Real concurrent reservation assertions
+        run: bash test/workspace-budget-concurrency.sh
