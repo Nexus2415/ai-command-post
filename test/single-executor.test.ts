@@ -438,3 +438,46 @@ test("a command claimed by a racing executor just before ACP's claim is neither 
   assert.equal(store.issues.filter((i) => i.parentId === cmd.id).length, 0, "no sub-issues");
   assert.ok(r.waiting.some((w) => w.includes("claimed the command first")));
 });
+
+test("a command claimed first by a different ACP agent in a race: the losing lead backs off", async () => {
+  const store = new RacingStore("acp:claude");
+  const cmd = store.add({ title: "Do the thing", description: COMMAND_MARKER });
+  const seen: ChatMessage[][] = [];
+  const r = await tick(deps(store, { chatgpt: scripted(["{}"], seen) }, { ACP_DEFAULT_LEAD: "chatgpt" }));
+  assert.equal(seen.length, 0, "lead never called");
+  assert.equal(store.issues.filter((i) => i.parentId === cmd.id).length, 0, "no sub-issues");
+  assert.ok(r.waiting.some((w) => w.includes("claimed the command first")));
+});
+
+// A store whose first read after ACP's claim misses it (a lagging comment read): ownership is unconfirmed.
+class LaggingStore extends MemoryStore {
+  private hideNext = new Set<string>();
+  override async comment(id: string, body: string) {
+    await super.comment(id, body);
+    if (body.startsWith(EXECUTOR_MARKER)) this.hideNext.add(id);
+  }
+  override async getComments(id: string) {
+    if (this.hideNext.delete(id)) return [];
+    return super.getComments(id);
+  }
+}
+
+test("a command whose claim does not show on the read-back is neither planned nor split", async () => {
+  const store = new LaggingStore();
+  const cmd = store.add({ title: "Do the thing", description: COMMAND_MARKER });
+  const seen: ChatMessage[][] = [];
+  const r = await tick(deps(store, { chatgpt: scripted(["{}"], seen) }, { ACP_DEFAULT_LEAD: "chatgpt" }));
+  assert.equal(seen.length, 0, "lead never called");
+  assert.equal(store.issues.filter((i) => i.parentId === cmd.id).length, 0, "no sub-issues");
+  assert.ok(r.waiting.some((w) => w.includes("could not confirm its claim on the command")));
+});
+
+test("a task whose claim does not show on the read-back is not started or run", async () => {
+  const store = new LaggingStore();
+  store.add({ title: "[ChatGPT] check docs" });
+  const seen: ChatMessage[][] = [];
+  const r = await tick(deps(store, { chatgpt: scripted([done], seen) }));
+  assert.equal(seen.length, 0, "model never called");
+  assert.equal(store.issues[0]!.stateType, "unstarted", "state untouched");
+  assert.ok(r.waiting.some((w) => w.includes("could not confirm its claim")));
+});
