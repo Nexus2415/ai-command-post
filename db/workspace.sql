@@ -65,3 +65,15 @@ language sql stable set search_path = public as $$
   from ws_messages
 $$;
 revoke all on function ws_spend(uuid, timestamptz) from public, anon, authenticated;
+
+-- The "Stop everything" switch (one row). The website treats a missing row, or any error reading it, as STOPPED,
+-- so nothing AI-related runs until this table exists. Running this file sets it to running once; after that only
+-- the switch on the website changes it.
+create table if not exists ws_control (
+  id smallint primary key check (id = 1),
+  stopped boolean not null default true,
+  updated_at timestamptz not null default now()
+);
+insert into ws_control (id, stopped) values (1, false) on conflict (id) do nothing;
+alter table ws_control enable row level security;
+revoke all on ws_control from anon, authenticated;

@@ -3,6 +3,8 @@
 // the rates and suspensions identical to the engine's.
 
 // USD per million tokens plus any flat per-request fee. Same values and sources as DEFAULT_RATES in src/budget.ts.
+import { REFUSAL_MARK, STOP_MARK } from "./workspace-rules.js";
+
 export const RATES = Object.freeze({
   claude: { inputPerM: 2, outputPerM: 10, freeTier: false },
   chatgpt: { inputPerM: 0.25, outputPerM: 2, freeTier: false },
@@ -71,10 +73,13 @@ export function estimateUsd(model, history, env = {}) {
 }
 
 const NAMES = { claude: "Claude", chatgpt: "ChatGPT", gemini: "Gemini", perplexity: "Perplexity" };
+export const isNotice = (m) => m.role === "assistant" && (m.content.startsWith(REFUSAL_MARK) || m.content.startsWith(STOP_MARK));
 
 // Stored messages as turns that alternate: back-to-back messages with the same role are joined, and when several
 // AIs answered one message (side-by-side answers), each answer is labelled with the AI that gave it.
-export function mergeTurns(messages) {
+export function mergeTurns(all) {
+  // Rules-gate refusals and stop notes are for the owner's eyes; they are never sent back to a model.
+  const messages = all.filter((m) => !isNotice(m));
   const out = [];
   for (let i = 0; i < messages.length; i++) {
     const m = messages[i];

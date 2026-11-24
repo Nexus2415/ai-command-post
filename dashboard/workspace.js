@@ -21,12 +21,20 @@
 
   // The password lives in memory for this tab only; it is never written to browser storage (ARN-53).
   let password = "";
+  // Requests still waiting. "Stop everything" cancels them all at once on this page; the server stops the rest.
+  const inflight = new Set();
+  let halted = false;
 
   async function post(action, args, retry) {
     let r;
+    const ctl = new AbortController();
+    inflight.add(ctl);
     try {
-      r = await fetch("/api/workspace", { method: "POST", headers: { "content-type": "application/json", "x-acp-password": password }, body: JSON.stringify({ action, args: args || {} }) });
-    } catch (e) { throw new Error("Network error: couldn't reach the server."); }
+      r = await fetch("/api/workspace", { method: "POST", signal: ctl.signal, headers: { "content-type": "application/json", "x-acp-password": password }, body: JSON.stringify({ action, args: args || {} }) });
+    } catch (e) {
+      if (ctl.signal.aborted) throw new Error("Stopped. Nothing further will run until AI is turned back on.");
+      throw new Error("Network error: couldn't reach the server.");
+    } finally { inflight.delete(ctl); }
     const j = await r.json().catch(() => ({}));
     if (r.status === 401 && retry !== false) {
       const pw = window.prompt("Password for AI Command Post");
@@ -70,6 +78,7 @@
     }
     const on = Object.values(status.plugins || {}).filter((x) => x.ready).map((x) => x.title);
     $("plugins").textContent = "Plugins: " + (on.length ? on.join(", ") : "none connected yet");
+    if (status.control) stopSwitch.show(status.control);
     const b = status.budget;
     $("budget").textContent = "This month " + money(b.monthSpent) + " of " + money(b.month) +
       (b.threadSpent == null ? "" : " · This thread " + money(b.threadSpent) + " of " + money(b.thread));
@@ -266,7 +275,7 @@
       $("cText").value = ""; files = []; showFiles();
       say(failed.map((f) => (MODEL_NAMES[f.model] || f.model) + " didn't answer: " + f.error).join(" "), failed.length ? "err" : "");
       await openThread(threadId);
-    } finally { $("cSend").disabled = false; }
+    } finally { $("cSend").disabled = halted; }
   }));
   $("cRetry").addEventListener("click", guard(async () => {
     say("Waiting for the reply…");
@@ -311,8 +320,19 @@
   }
   $("cDiscuss").addEventListener("click", guard(async () => {
     $("cDiscuss").disabled = true;
-    try { await finishRoundtable(null, 0, ""); } finally { $("cDiscuss").disabled = false; }
+    try { await finishRoundtable(null, 0, ""); } finally { $("cDiscuss").disabled = halted; }
   }));
+  // The Stop everything switch. Stopping cancels this page's waiting requests (a roundtable stops between rounds)
+  // and disables sending; the server refuses all AI work until it is turned back on.
+  function setHalted(s) {
+    halted = Boolean(s.stopped);
+    // Runs before the stop request is sent, so only the page's earlier requests are cancelled.
+    if (halted && s.local) for (const c of [...inflight]) c.abort();
+    $("cSend").disabled = halted;
+    $("cRetry").disabled = halted;
+    $("cDiscuss").disabled = halted;
+  }
+  const stopSwitch = window.ACPStopSwitch.mount($("stopSwitch"), { post, onChange: setHalted });
   function currentModel() { return $("cModel").dataset.model || null; }
   $("cText").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) $("cForm").requestSubmit(); });
 
