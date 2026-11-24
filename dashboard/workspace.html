@@ -89,6 +89,13 @@ details.file pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:300px;ov
 .dot{width:7px;height:7px;border-radius:50%;background:var(--ag,var(--a-none));flex:none}
 [data-model="claude"]{--ag:var(--a-claude)} [data-model="chatgpt"]{--ag:var(--a-chatgpt)}
 [data-model="gemini"]{--ag:var(--a-gemini)} [data-model="perplexity"]{--ag:var(--a-perplexity)}
+.stopwrap{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.stopbtn{border:2px solid var(--bad);background:var(--bad);color:#fff;border-radius:6px;padding:8px 16px;font:700 14px/1 var(--body);letter-spacing:.04em;text-transform:uppercase;cursor:pointer;min-height:40px}
+.stopbtn:hover{filter:brightness(1.1)}
+.stopbtn:disabled{opacity:.6;cursor:default}
+.resumebtn{border:1px solid var(--good);background:var(--panel);color:var(--good);border-radius:6px;padding:6px 12px;font-weight:600;cursor:pointer;min-height:36px}
+.stopwrap[data-stopped="true"]{background:var(--bad-soft);color:var(--bad);border:1px solid var(--bad);border-radius:8px;padding:6px 10px;flex-basis:100%}
+.stopstate{font-size:13px;font-weight:600}
 @media (max-width:900px){.ws{grid-template-columns:minmax(0,1fr)}.m{max-width:100%}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 </style>
@@ -96,6 +103,7 @@ details.file pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:300px;ov
 <div class="wrap">
   <div class="bar">
     <h1>Workspace</h1>
+    <div class="stopwrap" id="stopSwitch"></div>
     <span class="grow"></span>
     <span class="note mono" id="plugins"></span>
     <span class="note mono" id="budget" aria-live="polite"></span>
@@ -139,4 +147,5 @@ details.file pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:300px;ov
     </section>
   </div>
 </div>
+<script src="stop-switch.js"></script>
 <script src="workspace.js"></script>

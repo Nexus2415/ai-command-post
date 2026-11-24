@@ -134,6 +134,13 @@ textarea{width:100%;min-height:84px;resize:vertical;border:1px solid var(--line)
 .lifecycle.stage-completed{border-color:var(--good)}
 .lifecycle.stage-blocked,.lifecycle.stage-unknown{border-color:var(--warn)}
 button.link{background:none;border:0;padding:0;margin-left:8px;color:inherit;text-decoration:underline;cursor:pointer;font:inherit}
+.stopwrap{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.stopbtn{border:2px solid var(--bad);background:var(--bad);color:#fff;border-radius:6px;padding:8px 16px;font:700 14px/1 var(--body);letter-spacing:.04em;text-transform:uppercase;cursor:pointer;min-height:40px}
+.stopbtn:hover{filter:brightness(1.1)}
+.stopbtn:disabled{opacity:.6;cursor:default}
+.resumebtn{border:1px solid var(--good);background:var(--panel);color:var(--good);border-radius:6px;padding:6px 12px;font-weight:600;cursor:pointer;min-height:36px}
+.stopwrap[data-stopped="true"]{background:var(--bad-soft);color:var(--bad);border:1px solid var(--bad);border-radius:8px;padding:6px 10px;flex-basis:100%}
+.stopstate{font-size:13px;font-weight:600}
 @media (max-width:1000px){.cmain{grid-template-columns:minmax(0,1fr)}.roster{grid-template-columns:repeat(3,minmax(0,1fr))}.board{grid-template-columns:minmax(0,1fr)}.console{grid-template-columns:minmax(0,1fr)}.console .right{border-left:0;border-top:1px solid var(--line);border-radius:0 0 8px 8px}}
 @media (max-width:640px){.roster{grid-template-columns:repeat(2,minmax(0,1fr))}.sitrep{grid-template-columns:repeat(2,minmax(0,1fr))}.sitrep > div:nth-child(3){border-left:0}.sitrep > div:nth-child(n+3){border-top:1px solid var(--line)}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
@@ -145,6 +152,7 @@ button.link{background:none;border:0;padding:0;margin-left:8px;color:inherit;tex
     <span id="engineChip" data-legacy class="chip ok"><span class="dot"></span>Engine live</span>
     <a class="chip" href="/workspace.html">Open workspace</a>
     <a class="chip" href="/command.html">Command tree</a>
+    <div class="stopwrap" id="stopSwitch"></div>
     <span class="grow"></span>
     <label class="eyebrow" for="teamSel" data-legacy>Workspace</label>
     <select id="teamSel" data-legacy class="sel" aria-label="Linear team"><option>Loading…</option></select>
@@ -244,6 +252,8 @@ button.link{background:none;border:0;padding:0;margin-left:8px;color:inherit;tex
   <div class="foot" data-legacy><span id="fresh">Waiting for Linear…</span><span>Ownership: an AI's name in [brackets] at the start of a title, a label, or the assignee.</span></div>
 </div>
 
+<script src="stop-switch.js"></script>
+<script>if(window.ACPStopSwitch)window.ACPStopSwitch.mount(document.getElementById("stopSwitch"));</script>
 <script src="console.js"></script>
 <script>
 (function(){
