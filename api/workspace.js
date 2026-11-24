@@ -6,6 +6,7 @@ import { MODELS, StoreError, createSupabaseStore, isId, workspaceConfigured } fr
 import { BudgetStop, ModelError, estimateUsd, isPaid, mergeTurns, modelStatus, runChat, trimHistory } from "./_lib/workspace-models.js";
 import { pluginStatus, readyTools, runTool, urlsIn } from "./_lib/workspace-plugins.js";
 import { mcpStatus, mcpTools } from "./_lib/workspace-mcp.js";
+import { STOP_MARK, harmCheck, logRefusal, refusalText, textOf } from "./_lib/workspace-rules.js";
 import { CRITIQUE_MARK, SYNTHESIS_MARK, critiquePrompt, estimateRounds, roundtableState, synthesisPrompt } from "./_lib/workspace-roundtable.js";
 
 // Vercel: model replies can take a while.
@@ -61,6 +62,53 @@ async function budgetCheck(store, env, deps, threadId, paid) {
     : spent.threadUsd + est > cap.thread ? `This would go over this thread's budget (${usd(spent.threadUsd)} of ${usd(cap.thread)} used). Start a new thread to continue.`
     : null;
 }
+// The "Stop everything" switch. Returns why AI work may not run, or null. It fails closed: if the switch can't be
+// read (storage down, table missing, anything odd), the answer is "stopped".
+const STOPPED = "Everything is stopped: the owner pressed Stop everything. Nothing AI-related runs until it is turned back on.";
+const UNREADABLE = "Everything is stopped: the Stop everything switch can't be read right now, so nothing AI-related runs (fail-safe).";
+async function stopReason(store) {
+  try {
+    const c = await store.getControl();
+    return c && c.stopped === false ? null : c ? STOPPED : UNREADABLE;
+  } catch {
+    return UNREADABLE;
+  }
+}
+const stopped = (why) => error(423, why);
+
+// Rules gate: a refused request, tool call or reply is logged and written into the thread, so the owner sees what
+// was refused and why. `r` carries the cost when a model call already happened (a withheld reply still cost money).
+async function refuse(store, threadId, where, rule, model = null, r = null, suffix = "") {
+  logRefusal(where, rule);
+  return store.addMessage(threadId, {
+    role: "assistant", content: (refusalText(where, rule) + suffix).slice(0, 32_000), model,
+    ...(r ? { input_tokens: r.inputTokens, output_tokens: r.outputTokens, cost_usd: Math.round(r.costUsd * 1e6) / 1e6 } : {}),
+  });
+}
+// A model's reply, saved — unless the rules gate refuses it, in which case the refusal is saved instead (with the
+// cost, which was spent either way). `suffix` (the web audit) is kept either way.
+async function gatedReply(store, threadId, model, text, r, prefix = "", suffix = "") {
+  const rule = harmCheck(text);
+  if (rule) return refuse(store, threadId, "reply", rule, model, r, suffix);
+  return reply(store, threadId, model, `${prefix}${text}`.slice(0, 32_000 - suffix.length) + suffix, r);
+}
+// Tools as the model sees them, wrapped so every call first passes the stop switch and the rules gate.
+function gatedRunTool(store, threadId, run) {
+  return async (name, args, soFar) => {
+    const why = await stopReason(store);
+    if (why) return { ok: false, text: "Stopped by the owner. Do not call any more tools; answer with what you have." };
+    const rule = harmCheck(textOf(args).join("\n"));
+    if (rule) {
+      await refuse(store, threadId, String(name).slice(0, 80), rule);
+      return { ok: false, text: `Refused by the workspace's rules: ${rule.reason}. Do not try this again.` };
+    }
+    return run(name, args, soFar);
+  };
+}
+const refusedRequest = (rule, message) => ({
+  status: 422, body: { error: `Refused by the rules gate: ${rule.reason}. Nothing was sent to any AI. The reason is saved in the thread.`, refused: message },
+});
+
 // The audit list of web calls made during one reply, written under it in the thread.
 function webAuditText(log) {
   if (!log.length) return "";
@@ -127,6 +175,19 @@ const ACTIONS = Object.freeze({
     if (!isId(args.noteId)) return error(400, "Unknown note.");
     return (await store.deleteNote(args.noteId)) ? { deleted: true } : error(404, "Unknown note.");
   },
+  // The "Stop everything" switch. Reading it never fails: an unreadable switch reports stopped.
+  async control(store) {
+    const why = await stopReason(store);
+    return { stopped: Boolean(why), reason: why };
+  },
+  // Only the owner, behind the site password, can flip it. No AI has a tool for this.
+  async set_control(store, args) {
+    if (typeof args.stopped !== "boolean") return error(400, "Say stopped: true or false.");
+    await store.setControl(args.stopped);
+    console.warn(JSON.stringify({ event: args.stopped ? "stop_everything" : "resume_everything" }));
+    const why = await stopReason(store);
+    return { stopped: Boolean(why), reason: why };
+  },
   // Which models can answer, and the budget so far.
   async models(store, args, env, deps) {
     const threadId = isId(args.threadId) ? args.threadId : null;
@@ -135,8 +196,10 @@ const ACTIONS = Object.freeze({
       const s = modelStatus(env, m);
       return [m, { ready: s.ready, reason: s.reason, via: s.via ?? null }];
     }));
+    const why = await stopReason(store);
     return {
       models, plugins: { ...pluginStatus(env), ...mcpStatus(env) },
+      control: { stopped: Boolean(why), reason: why },
       budget: { ...caps(env), monthSpent: spent.monthUsd, threadSpent: threadId ? spent.threadUsd : null },
     };
   },
@@ -148,6 +211,8 @@ const ACTIONS = Object.freeze({
     if (bad) return error(400, bad);
     const thread = await store.getThread(args.threadId);
     if (!thread) return error(404, "Unknown thread.");
+    const halt = await stopReason(store);
+    if (halt) return stopped(halt);
     const model = thread.model;
     const status = modelStatus(env, model);
     if (!status.ready) return error(409, `This thread's AI isn't available: ${status.reason}`);
@@ -156,6 +221,11 @@ const ACTIONS = Object.freeze({
     const history = mergeTurns(stored);
     if (content) history.push({ role: "user", content });
     else if (stored.at(-1)?.role !== "user") return error(400, "There is no message waiting for a reply.");
+    // Rules gate on the owner's message (a retry re-checks the saved one). A refused message is not saved, so it
+    // never reaches any AI later as history either.
+    const asked = content ?? stored.at(-1).content;
+    const rule = harmCheck(asked);
+    if (rule) return refusedRequest(rule, await refuse(store, thread.id, "request", rule));
     const sent = trimHistory(mergeTurns(history));
 
     const over = await budgetCheck(store, env, deps, thread.id, isPaid(env, model));
@@ -167,7 +237,7 @@ const ACTIONS = Object.freeze({
     const tools = [...readyTools(env), ...(model === "perplexity" ? [] : await mcpTools(env, deps.fetch))];
     // Web access for this reply: pages the owner linked may be read; search results add more. Each web call is
     // checked against the caps first (web calls are always paid) and listed under the reply.
-    const allowedUrls = new Set(urlsIn(content ?? stored.at(-1)?.content ?? ""));
+    const allowedUrls = new Set(urlsIn(asked));
     const overWeb = await budgetCheck(store, env, deps, thread.id, true);
     const webLog = [];
     const webCtx = (soFar) => ({
@@ -180,9 +250,11 @@ const ACTIONS = Object.freeze({
       out = await runChat(env, model, sent, {
         f: deps.fetch, tools,
         notes: (await store.listNotes(thread.project_id)).map((n) => n.content),
-        runTool: (name, a, soFar = 0) => runTool(env, tools, name, a, deps.fetch, webCtx(soFar)),
-        // Every later round of tool use is checked again, counting what this reply has already cost.
+        runTool: gatedRunTool(store, thread.id, (name, a, soFar = 0) => runTool(env, tools, name, a, deps.fetch, webCtx(soFar))),
+        // Every later round of tool use is checked again: the stop switch, and the caps counting what this reply
+        // has already cost (web calls included).
         beforeCall: async (est, soFar) => {
+          if (soFar > 0 && await stopReason(store)) throw new BudgetStop(`${STOP_MARK} The reply was cut short; no further steps ran.`);
           const why = soFar > 0 ? over(soFar + est) : null;
           if (why) throw new BudgetStop("Stopped before finishing: " + why.charAt(0).toLowerCase() + why.slice(1));
         },
@@ -193,7 +265,7 @@ const ACTIONS = Object.freeze({
       if (e.usage?.costUsd > 0) await record(`(The AI provider failed partway through this reply: ${e.message})`, e.usage);
       return { status: 502, body: { error: `${e.message} Your message was saved; try again for a reply.`, saved } };
     }
-    const message = await record(out.text, out);
+    const message = await gatedReply(store, thread.id, model, out.text, out, "", webAuditText(webLog));
     return { saved, message };
   },
   // Side-by-side answers: one message goes to 2-3 AIs at once and each answer is saved with its AI. Plugins stay
@@ -224,12 +296,15 @@ const ACTIONS = Object.freeze({
       const { estimate, why } = await planCheck(store, env, deps, p);
       if (why) return error(402, `A full roundtable could cost up to ${usd(estimate.total)}. ${why}`);
       const out = await runRound1(store, env, deps, p);
+      if ("status" in out) return out;
       return { ...out, estimate, lead: p.lead, roundtableUsd: sumCost(out.messages) };
     }
     if (args.step !== "critique" && args.step !== "synthesize") return error(400, "Unknown roundtable step.");
     if (!isId(args.threadId)) return error(400, "Unknown thread.");
     const thread = await store.getThread(args.threadId);
     if (!thread) return error(404, "Unknown thread.");
+    const halt = await stopReason(store);
+    if (halt) return stopped(halt);
     const state = roundtableState(await store.listMessages(thread.id));
     if (!state || !state.answers.length) return error(409, "There is no side-by-side answer to discuss yet.");
     if (state.synthesis) return error(409, "This roundtable is already finished. Ask a new question to start another.");
@@ -255,7 +330,7 @@ const ACTIONS = Object.freeze({
         .then((r) => ({ m, r }), (e) => { if (e instanceof ModelError) return { m, e }; throw e; })));
       const messages = [], failed = [];
       for (const { m, r, e } of results) {
-        if (r) { messages.push(await reply(store, thread.id, m, `${CRITIQUE_MARK}\n${r.text}`.slice(0, 32_000), r)); continue; }
+        if (r) { messages.push(await gatedReply(store, thread.id, m, r.text, r, `${CRITIQUE_MARK}\n`)); continue; }
         await failedReply(m, e);
         failed.push({ model: m, error: e.message });
       }
@@ -273,6 +348,8 @@ const ACTIONS = Object.freeze({
     const failed = [];
     let failedUsd = 0;
     for (const m of order) {
+      const halted = await stopReason(store);
+      if (halted) return { status: 423, body: { error: halted, failed } };
       const why = over(failedUsd + (isPaid(env, m) ? estimateUsd(m, [{ content: prompt }], env) : 0));
       if (why) return { status: 402, body: { error: why, failed } };
       let r;
@@ -284,7 +361,7 @@ const ACTIONS = Object.freeze({
         continue;
       }
       const footer = whoTookPart(args.models, state, m, failed);
-      const message = await reply(store, thread.id, m, `${SYNTHESIS_MARK}\n${r.text}\n\n${footer}`.slice(0, 32_000), r);
+      const message = await gatedReply(store, thread.id, m, `${r.text}\n\n${footer}`, r, `${SYNTHESIS_MARK}\n`);
       return { message, failed, lead: m, roundtableUsd: sumCost([...state.answers, ...state.critiques, message]) };
     }
     return { status: 502, body: { error: "No AI could write the conclusion. The first answers and critiques are saved.", failed } };
@@ -318,6 +395,8 @@ async function askSeveral(store, args, env) {
   }
   const thread = await store.getThread(args.threadId);
   if (!thread) return error(404, "Unknown thread.");
+  const halt = await stopReason(store);
+  if (halt) return stopped(halt);
   for (const m of models) {
     const status = modelStatus(env, m);
     if (!status.ready) return error(409, `${NAMES[m]} isn't available: ${status.reason}`);
@@ -338,13 +417,15 @@ async function planCheck(store, env, deps, p) {
 }
 
 async function runRound1(store, env, deps, { thread, content, models, sent }) {
+  const rule = harmCheck(content);
+  if (rule) return refusedRequest(rule, await refuse(store, thread.id, "request", rule));
   const saved = await store.addMessage(thread.id, { role: "user", content });
   const notes = (await store.listNotes(thread.project_id)).map((n) => n.content);
   const results = await Promise.all(models.map((m) => runChat(env, m, sent, { f: deps.fetch, notes })
     .then((r) => ({ m, r }), (e) => { if (e instanceof ModelError) return { m, e }; throw e; })));
   const messages = [], failed = [];
   for (const { m, r, e } of results) {
-    if (r) { messages.push(await reply(store, thread.id, m, r.text, r)); continue; }
+    if (r) { messages.push(await gatedReply(store, thread.id, m, r.text, r)); continue; }
     // Calls made before the failure still cost money, so they are recorded.
     if (e.usage?.costUsd > 0) await reply(store, thread.id, m, `(The AI provider failed partway through this reply: ${e.message})`, e.usage);
     failed.push({ model: m, error: e.message });

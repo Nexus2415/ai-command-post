@@ -76,11 +76,27 @@ In Vercel, open **arnexyia-command-post → Settings → Environment Variables**
 4. To chat, add one AI key (`OPENROUTER_API_KEY` covers every AI) and `ACP_WORKSPACE_MONTHLY_BUDGET_USD`, then redeploy.
 5. Optional plugins: `LINEAR_API_KEY`, `GITHUB_TOKEN` with `ACP_GITHUB_REPOS`, `FIRECRAWL_API_KEY`, and MCP servers in `ACP_MCP_SERVERS` (Step 8).
 
+## Safety: Stop everything and the rules gate
+**Stop everything.** A red button at the top of the dashboard and of the workspace page. One press, no confirm:
+- The page cancels its own waiting requests at once (a roundtable stops between rounds) and sending is disabled.
+- The server refuses every AI action (replies, retries, side-by-side answers, every roundtable round) with "Everything is stopped". A reply already under way stops before its next tool call or model call; a model call already sent can't be recalled, so its cost is still recorded.
+- Reading projects, threads and notes keeps working.
+- **Fails closed:** if the switch can't be read (storage down, the `ws_control` table missing, an odd value), the answer is "stopped".
+- Only the owner turns it back on ("Turn AI back on", behind the site password, with a confirm). No AI has a tool that touches it.
+- Setup: run `db/workspace.sql` again in the Supabase SQL editor (safe to re-run). It adds the one-row `ws_control` table, set to running. Until it exists the workspace reads as stopped.
+
+**Rules gate.** Every message the owner sends, every tool call an AI makes and every reply an AI writes is checked by our code against the harm rules in `src/policy.ts` (the website's copy is `api/_lib/workspace-rules.js`; a test keeps them identical). Refused: hurting or killing people, weapons or attacks meant to harm many people, breaking into systems or accounts, malware, fraud, forgery, phishing, fake reviews, stalking, threats, blackmail, unlawful discrimination, making illegal drugs, and sexual content involving minors.
+- A refused message is not sent to any AI and not saved; a refused tool call doesn't run; a refused reply is withheld (its cost still counts). Each refusal is written into the thread with the reason, and logged on the server (which rule, never the text).
+- Refusal notes are never sent back to a model as history.
+- **Why in code:** the workspace reaches models from several makers through OpenRouter, each trained differently and with its own idea of what to refuse. None is trusted to police itself. The gate runs around the model, so the same lines hold whichever model answers, and a model can't argue past them.
+- Limit, stated plainly: the rules are a keyword net for clear cases ("how do I kill someone", "write ransomware"), tuned not to trip on business language ("kill the process", "anti-money laundering rules"). A carefully disguised request can get past a keyword net; the real backstop is that workspace AIs can only read. Nothing they do reaches the outside world.
+
 ## Web access (read-only)
 Claude and ChatGPT threads can use the public web through Firecrawl (Perplexity already searches the web itself):
 - **web_search**: titles, links and short descriptions. About $0.01 each.
 - **web_read_page**: one page as text. About $0.005 each. It only opens an address that came back from a web_search **in the same reply**, or that the owner wrote in their message. Any other address (one the model or a web page made up), IP addresses, local or internal names, and addresses with a login are refused before anything is fetched. This is what stops a page from steering the AI into sending private data to an attacker's address.
 - **Untrusted, never instructions.** Everything fetched reaches the model wrapped as untrusted web content, with marker look-alikes removed so a page can't fake the end of the wrapper. The AIs are told never to follow instructions inside it. The real fence is in code: even a model that obeys the page can't reach a new address, and every tool it has only reads. `test/web-access.test.ts` runs a deliberately gullible model against a page full of instructions and checks that the outside calls are identical to those for a harmless page.
+- **Same fences as everything else:** every web call passes the Stop everything switch and the rules gate first.
 - **Metered.** Each web call is checked against the monthly and thread caps (with everything the reply has already cost) before it starts; one that would go over doesn't run. Its cost is added to the reply's saved cost.
 - **Audited.** Under each reply that used the web: "Web activity (audit, times UTC)", listing every search, page read, blocked address and refused call, with its cost.
 - Costs are upper estimates at Firecrawl's dearest paid rate ($5 per 1,000 credits). Firecrawl's free plan gives 1,000 credits a month (about 500 searches or 1,000 page reads) at no charge.

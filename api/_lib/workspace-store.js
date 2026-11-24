@@ -9,6 +9,7 @@ export const isId = (v) => typeof v === "string" && UUID.test(v);
 const PROJECT_COLS = "id,name,created_at";
 const THREAD_COLS = "id,project_id,title,model,created_at,updated_at";
 const NOTE_COLS = "id,project_id,content,created_at";
+const CONTROL_COLS = "stopped,updated_at";
 const MESSAGE_COLS = "id,thread_id,role,content,model,input_tokens,output_tokens,cost_usd,created_at";
 
 export class StoreError extends Error {}
@@ -22,12 +23,12 @@ export function workspaceConfigured(env) {
 export function createSupabaseStore(env, f = fetch) {
   const base = new URL("/rest/v1/", env.ACP_WORKSPACE_DB_URL).href;
   const key = String(env.ACP_WORKSPACE_DB_KEY).trim();
-  async function call(method, path, body) {
+  async function call(method, path, body, prefer) {
     const res = await f(base + path, {
       method,
       headers: {
         apikey: key, authorization: `Bearer ${key}`, "content-type": "application/json",
-        ...(method === "POST" || method === "DELETE" ? { prefer: "return=representation" } : {}),
+        ...(prefer ? { prefer } : method === "POST" || method === "DELETE" ? { prefer: "return=representation" } : {}),
       },
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: AbortSignal.timeout(15_000),
@@ -64,12 +65,19 @@ export function createSupabaseStore(env, f = fetch) {
       const row = one(await call("POST", "rpc/ws_spend", { p_thread: threadId, p_since: since }));
       return { monthUsd: Number(row.month_usd) || 0, threadUsd: Number(row.thread_usd) || 0 };
     },
+    // The "Stop everything" switch: one row. A missing row reads as stopped (fail closed).
+    getControl: async () => (await call("GET", `ws_control?select=${CONTROL_COLS}&id=eq.1`))[0] ?? null,
+    setControl: async (stopped) => one(await call("POST", `ws_control?select=${CONTROL_COLS}`,
+      { id: 1, stopped, updated_at: new Date().toISOString() }, "resolution=merge-duplicates,return=representation")),
   };
 }
 
 // In-memory store with the same behaviour, for tests and local runs.
-export function createMemoryStore() {
+// `control` sets the stop switch: false (running, the default), true (stopped), or "unreadable" to fail the read.
+/** @param {{ control?: boolean | "unreadable" }} [opts] */
+export function createMemoryStore({ control = false } = {}) {
   const projects = [], threads = [], messages = [], notes = [];
+  let ctl = control;
   let clock = Date.parse("2026-10-21T00:00:00Z");
   const now = () => new Date(clock++).toISOString();
   const byNewest = (k) => (a, b) => (a[k] < b[k] ? 1 : -1);
@@ -115,5 +123,12 @@ export function createMemoryStore() {
       monthUsd: messages.filter((m) => m.created_at >= since).reduce((n, m) => n + m.cost_usd, 0),
       threadUsd: messages.filter((m) => m.thread_id === threadId).reduce((n, m) => n + m.cost_usd, 0),
     }),
+    getControl: async () => {
+      if (ctl === "unreadable") throw new StoreError("Workspace storage returned 404");
+      return { stopped: ctl, updated_at: now() };
+    },
+    setControl: async (stopped) => { ctl = stopped; return { stopped, updated_at: now() }; },
+    // Tests: flip the switch from "another tab" while a request is running.
+    _setControl: (v) => { ctl = v; },
   };
 }

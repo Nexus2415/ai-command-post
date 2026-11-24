@@ -162,3 +162,18 @@ test("address rules and the untrusted wrapper", () => {
   assert.equal(w.split("<<<UNTRUSTED WEB CONTENT").length, 2);
   assert.doesNotMatch(w.slice(w.indexOf(">>>\n") + 4, w.lastIndexOf("\n<<<END")), />>>/);
 });
+
+test("web calls pass the Stop switch and rules gate too, and a withheld reply keeps its web audit", async () => {
+  const store = createMemoryStore();
+  let n = 0;
+  const f = (async (u: any) => {
+    if (String(u).includes("firecrawl")) return json({ data: { web: [] } });
+    return n++ === 0 ? toolUse("t", "web_search", { query: "fertiliser prices" }) : say("Step 1: to make a bomb, ...");
+  }) as typeof fetch;
+  const call = (action: string, args: object = {}) => handle({ method: "POST", headers, body: { action, args } }, base, () => store, { fetch: f, now });
+  const t = await thread(call);
+  const out = (await call("chat", { threadId: t.id, content: "Fertiliser prices?" })).body as any;
+  assert.match(out.message.content, /^\[Rules gate: refused\]/);
+  assert.doesNotMatch(out.message.content, /Step 1/);
+  assert.match(out.message.content, /Web activity \(audit[^\n]*\n- 12:00:00 search: "fertiliser prices" \(\$0\.010\)/);
+});
