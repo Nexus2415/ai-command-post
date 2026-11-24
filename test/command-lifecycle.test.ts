@@ -107,8 +107,25 @@ test("a Done command with an open, missing or unreadable sub-task is unknown, no
   assert.equal(life(cmd(done), res, [{ identifier: "ARN-901", state: { type: "started" } }]).stage, "unknown");
   assert.equal(life(cmd(done), res, [{ identifier: "ARN-901", state: null }]).stage, "unknown");
   assert.equal(life(cmd(done), res, null).stage, "unknown");
-  assert.equal(life(cmd(done), res, [{ identifier: "ARN-901", state: { type: "completed" } },
-    { identifier: "ARN-902", state: { type: "canceled" } }]).stage, "completed");
+  assert.equal(life(cmd(done), res, [{ identifier: "ARN-901", state: { type: "completed" } }]).stage, "completed");
+});
+
+test("a Done command with a canceled or duplicate sub-task is unknown, never completed", () => {
+  const done = { name: "Done", type: "completed" };
+  const res = [c("s", `${RECONCILED_MARKER}\n\nAnswer: 50.`)];
+  const kid = (n: number, type: string) => ({ identifier: "ARN-" + n, state: { type } });
+  for (const kids of [
+    [kid(901, "completed"), kid(902, "canceled")],
+    [kid(901, "canceled"), kid(902, "canceled")],
+    [kid(901, "duplicate")],
+    [kid(901, "completed"), kid(902, "duplicate")],
+  ]) {
+    const l = life(cmd(done), res, kids);
+    assert.equal(l.stage, "unknown");
+    assert.match(l.detail, /canceled, not done/);
+  }
+  assert.equal(life(cmd(done), res, [kid(901, "completed"), kid(902, "completed")]).stage, "completed");
+  assert.equal(life(cmd(done), res, []).stage, "completed");
 });
 
 test("completed needs complete evidence: more than 50 sub-tasks or truncated comments fail closed", () => {
