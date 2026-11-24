@@ -42,6 +42,16 @@ In Vercel, open **arnexyia-command-post → Settings → Environment Variables**
 ## Step 6: side-by-side answers
 - Under the message box, tick up to two other ready AIs ("Also ask, side by side"). The message then goes to the thread's AI and those AIs at once, and their answers show in columns.
 - The budget check covers every chosen AI's worst case together, before any call. Plugins stay off for side-by-side answers, so nothing can spend past that check.
+
+## Step 6b: roundtable mode (the AIs debate and agree)
+- Tick the other AIs as for side-by-side answers, then tick "Roundtable". Three rounds run, one after the other:
+  1. Each AI answers on its own (the same as side-by-side).
+  2. Each AI reads the others' answers, labelled Answer A, B… with no names, says where it agrees and disagrees, and revises its own answer.
+  3. The thread's own AI (the lead) reads everything and writes one conclusion: recommendation, main disagreement, risks, next step, in plain language.
+- Before anything runs, the page shows the worst-case cost of all three rounds and asks to confirm. If that worst case would go over the thread or monthly budget, the roundtable doesn't start. Each round is checked again before it runs.
+- If an AI fails, the others carry on; the conclusion lists who dropped out. If the lead fails, another AI that answered writes the conclusion.
+- Every round is saved in the thread like any other reply, so later messages in the thread see the conclusion. A side-by-side answer can be turned into a roundtable later with "Discuss these answers"; a roundtable that stopped part way shows "Finish roundtable".
+- Typical cost with Claude, ChatGPT and Perplexity: about $0.03–0.06 per roundtable; worst case about $0.15.
 - If one AI fails, the other answers are kept and the page says which AI didn't answer.
 - Later messages in the thread send the earlier answers back to the AI labelled by who gave them, so it can build on all of them.
 
