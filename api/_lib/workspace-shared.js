@@ -4,9 +4,6 @@
 // Enforcement is server-side and in two layers: the database query only returns threads whose `private` column is
 // exactly false (store.sharedContext), and every row is checked again here. A thread whose flag is missing, null or
 // anything but false counts as private, and if the query fails nothing is shared at all (fail closed).
-import { REFUSAL_MARK, STOP_MARK } from "./workspace-rules.js";
-
-const isNotice = (m) => m.role === "assistant" && (m.content.startsWith(REFUSAL_MARK) || m.content.startsWith(STOP_MARK));
 
 // Bounds, so pulling in other threads keeps the prompt (and the cost) small.
 export const MAX_SHARED_THREADS = 4;      // threads quoted into one answer
@@ -21,8 +18,11 @@ export const MESSAGES_PER_THREAD = 8;     // newest messages read from each
 export const SOURCES_LABEL = "Drew on other threads: ";
 const SOURCES_LINE = /\n*Drew on other threads: [^\n]*/g;
 export const stripSources = (s) => String(s).replace(SOURCES_LINE, "");
-const SYNTHESIS = "[Roundtable final answer]";
-const FAILED = "(The AI provider failed";
+// This server-added label is a conservative quarantine marker, not a permission grant.
+export const DERIVED_MARK = "[Cross-thread context: owner-only result]";
+export const isCrossThreadDerived = (m) => m?.role === "assistant" &&
+  typeof m.content === "string" &&
+  (m.content.startsWith(DERIVED_MARK) || m.content.includes(SOURCES_LABEL));
 
 const oneLine = (s, n) => {
   const t = String(s).replace(/\s+/g, " ").trim();
@@ -34,20 +34,15 @@ const words = (s) => new Set((String(s).toLowerCase().match(/[a-z0-9][a-z0-9'-]{
 /** True only for a thread that is certainly shared. Anything else (true, null, missing, odd values) is private. */
 export const isShared = (t) => Boolean(t) && t.private === false;
 
-// What one thread contributes: its latest roundtable conclusion if it has one, otherwise its newest messages.
+// Only owner-authored messages from explicitly shared threads are eligible.
+// Model outputs are never promoted into cross-thread context automatically.
 function excerpt(messages) {
-  const usable = messages
-    .filter((m) => (m.role === "user" || m.role === "assistant") && typeof m.content === "string")
-    .filter((m) => !isNotice(m) && !m.content.startsWith(FAILED))
-    .sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
-  const synth = usable.find((m) => m.role === "assistant" && m.content.startsWith(SYNTHESIS));
-  const picked = synth ? [synth] : usable.slice(0, 4);
+  const picked = messages.filter(m => m.role === "user" && typeof m.content === "string")
+    .sort((a, b) => (a.created_at < b.created_at ? 1 : -1)).slice(0, 4);
   const lines = [];
   let chars = 0;
   for (const m of picked) {
-    const who = m.role === "user" ? "Owner" : "AI";
-    const body = oneLine(stripSources(m.content.replace(/^\[Roundtable[^\]\n]*\]\n?/, "")), synth ? MAX_THREAD_CHARS - 40 : MAX_MESSAGE_CHARS);
-    const line = `${synth ? "Conclusion" : who}: ${body}`;
+    const line = "Owner: " + oneLine(m.content, MAX_MESSAGE_CHARS);
     if (chars + line.length > MAX_THREAD_CHARS) break;
     chars += line.length;
     lines.unshift(line);
@@ -76,7 +71,7 @@ export function buildShared(rows, { projectId, threadId, question }) {
   // Relevant threads first (most shared words with the question), then the most recently active.
   candidates.sort((a, b) => b.score - a.score || (a.t.updated_at < b.t.updated_at ? 1 : -1));
   const matched = candidates.filter((c) => c.score > 0);
-  const chosen = (matched.length ? matched : candidates.slice(0, 2)).slice(0, MAX_SHARED_THREADS);
+  const chosen = matched.slice(0, MAX_SHARED_THREADS);
   const parts = [], sources = [];
   let chars = 0;
   for (const c of chosen) {
