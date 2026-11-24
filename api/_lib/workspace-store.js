@@ -111,7 +111,7 @@ export function createMemoryStore({ control = false, shared = null } = {}) {
     getThread: async (id) => threads.find((t) => t.id === id) ?? null,
     createThread: async (projectId, title, model) => {
       const at = now();
-      const t = { id: randomUUID(), project_id: projectId, title, model, created_at: at, updated_at: at, private: false };
+      const t = { id: randomUUID(), project_id: projectId, title, model, created_at: at, updated_at: at, private: true };
       threads.push(t);
       return t;
     },
