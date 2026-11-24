@@ -4,7 +4,7 @@
 import { hasSitePassword, isSameOrigin } from "./_lib/site-auth.js";
 import { MODELS, StoreError, createSupabaseStore, isId, workspaceConfigured } from "./_lib/workspace-store.js";
 import { BudgetStop, ModelError, estimateUsd, isPaid, mergeTurns, modelStatus, runChat, trimHistory } from "./_lib/workspace-models.js";
-import { pluginStatus, readyTools, runTool } from "./_lib/workspace-plugins.js";
+import { pluginStatus, readyTools, runTool, urlsIn } from "./_lib/workspace-plugins.js";
 import { mcpStatus, mcpTools } from "./_lib/workspace-mcp.js";
 import { CRITIQUE_MARK, SYNTHESIS_MARK, critiquePrompt, estimateRounds, roundtableState, synthesisPrompt } from "./_lib/workspace-roundtable.js";
 
@@ -61,6 +61,14 @@ async function budgetCheck(store, env, deps, threadId, paid) {
     : spent.threadUsd + est > cap.thread ? `This would go over this thread's budget (${usd(spent.threadUsd)} of ${usd(cap.thread)} used). Start a new thread to continue.`
     : null;
 }
+// The audit list of web calls made during one reply, written under it in the thread.
+function webAuditText(log) {
+  if (!log.length) return "";
+  const total = log.reduce((n, e) => n + e.usd, 0);
+  return `\n\nWeb activity (audit, times UTC, total $${total.toFixed(3)}):\n` +
+    log.map((e) => `- ${e.at.slice(11, 19)} ${e.kind}: ${e.target}${e.usd ? ` ($${e.usd.toFixed(3)})` : ""}`).join("\n");
+}
+
 const reply = (store, threadId, model, text, r) => store.addMessage(threadId, {
   role: "assistant", content: text, model,
   input_tokens: r.inputTokens, output_tokens: r.outputTokens, cost_usd: Math.round(r.costUsd * 1e6) / 1e6,
@@ -157,13 +165,22 @@ const ACTIONS = Object.freeze({
     const saved = content ? await store.addMessage(thread.id, { role: "user", content }) : null;
     // MCP servers are asked for their tools only for models that can use tools.
     const tools = [...readyTools(env), ...(model === "perplexity" ? [] : await mcpTools(env, deps.fetch))];
-    const record = (text, r) => reply(store, thread.id, model, text, r);
+    // Web access for this reply: pages the owner linked may be read; search results add more. Each web call is
+    // checked against the caps first (web calls are always paid) and listed under the reply.
+    const allowedUrls = new Set(urlsIn(content ?? stored.at(-1)?.content ?? ""));
+    const overWeb = await budgetCheck(store, env, deps, thread.id, true);
+    const webLog = [];
+    const webCtx = (soFar) => ({
+      allowedUrls, charge: async (usd) => overWeb(soFar + usd),
+      audit: (kind, target, usd) => webLog.push({ at: deps.now().toISOString(), kind, target: String(target).slice(0, 300), usd }),
+    });
+    const record = (text, r) => reply(store, thread.id, model, (text + webAuditText(webLog)).slice(0, 32_000), r);
     let out;
     try {
       out = await runChat(env, model, sent, {
         f: deps.fetch, tools,
         notes: (await store.listNotes(thread.project_id)).map((n) => n.content),
-        runTool: (name, a) => runTool(env, tools, name, a, deps.fetch),
+        runTool: (name, a, soFar = 0) => runTool(env, tools, name, a, deps.fetch, webCtx(soFar)),
         // Every later round of tool use is checked again, counting what this reply has already cost.
         beforeCall: async (est, soFar) => {
           const why = soFar > 0 ? over(soFar + est) : null;

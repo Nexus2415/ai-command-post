@@ -21,13 +21,13 @@ const base = {
 const headers = { "x-acp-password": base.ACP_SITE_PASSWORD, origin: "https://acp.example", host: "acp.example" };
 const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status });
 
-test("every plugin only reads, and there is no fetch-any-URL tool", () => {
+test("every plugin only reads; the one page reader is fenced (see test/web-access.test.ts)", () => {
   const names = Object.values(PLUGINS).flatMap((p: any) => p.tools.map((t: any) => t.name));
-  assert.deepEqual(names, ["linear_search_issues", "github_read_file", "github_search", "web_search"]);
-  for (const n of names) assert.doesNotMatch(n, /scrape|fetch|write|create|update|delete|comment|open|merge/);
+  assert.deepEqual(names, ["linear_search_issues", "github_read_file", "github_search", "web_search", "web_read_page"]);
+  for (const n of names) assert.doesNotMatch(n, /scrape|fetch|write|create|update|delete|comment|open|merge|send|post|submit/);
   assert.deepEqual(Object.values(pluginStatus({})).map((p: any) => p.ready), [false, false, false]);
-  assert.equal(readyTools(base).length, 4);
-  assert.equal(readyTools({ ...base, ACP_GITHUB_REPOS: "" }).length, 2, "GitHub needs an allowed repo list");
+  assert.equal(readyTools(base).length, 5);
+  assert.equal(readyTools({ ...base, ACP_GITHUB_REPOS: "" }).length, 3, "GitHub needs an allowed repo list");
 });
 
 test("GitHub tools refuse repos off the allowed list and odd paths without calling GitHub", async () => {
@@ -46,7 +46,7 @@ test("GitHub tools refuse repos off the allowed list and odd paths without calli
 test("tool failures go back to the model as short text, never the service's own error", async () => {
   const f = (async () => json({ message: "Bad credentials ghp_secret" }, 401)) as typeof fetch;
   const r = await runTool(base, readyTools(base), "github_search", { repo: "Nexus2415/opsdesk-harmony", query: "x" }, f);
-  assert.deepEqual(r, { ok: false, text: "GitHub returned an error (401)." });
+  assert.deepEqual(r, { ok: false, text: "GitHub returned an error (401).", usd: 0 });
 });
 
 test("Linear search stays inside the Arnexyia board scope", async () => {
@@ -88,11 +88,12 @@ test("Claude can call a plugin, read the result and answer; every round's cost i
   });
   const t = await newThread(call, "claude");
   const out = (await call("chat", { threadId: t.id, content: "Find FSM tools" })).body as any;
-  assert.equal(out.message.content, "Here are the tools.\n\nTools used: web_search");
+  assert.equal(out.message.content, "Here are the tools.\n\nTools used: web_search\n\n" +
+    "Web activity (audit, times UTC, total $0.010):\n- 12:00:00 search: \"fsm tools\" ($0.010)");
   assert.equal(out.message.input_tokens, 400);
-  assert.equal(out.message.cost_usd, (400 * 2 + 70 * 10) / 1e6);
+  assert.equal(out.message.cost_usd, (400 * 2 + 70 * 10) / 1e6 + 0.01, "the web search's cost is part of the reply's");
   const [first, , second] = calls;
-  assert.equal(first!.body.tools.length, 4);
+  assert.equal(first!.body.tools.length, 5);
   assert.equal(second!.body.messages.at(-1).content[0].type, "tool_result");
   assert.equal(second!.body.messages.at(-1).content[0].tool_use_id, "tu1");
   assert.match(second!.body.messages.at(-1).content[0].content, /FSM tools https:\/\/ex\.com/);

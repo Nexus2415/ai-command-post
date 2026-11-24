@@ -33,7 +33,7 @@ In Vercel, open **arnexyia-command-post → Settings → Environment Variables**
 - First plugins, all read-only: **Linear** (search tasks on the Arnexyia Launch Operations board), **GitHub** (read files, search issues and PRs in `ACP_GITHUB_REPOS` only), **Web search** (Firecrawl).
 - A plugin switches on when its key is set in Vercel (`LINEAR_API_KEY`, `GITHUB_TOKEN` with `ACP_GITHUB_REPOS`, `FIRECRAWL_API_KEY`). The page lists which are on.
 - One reply may use tools for up to 3 rounds. The budget is checked again before each round, counting what the reply has already cost; when a cap is reached the reply stops and says so. Everything spent is recorded.
-- There is deliberately no "open any web page" tool. A page could instruct the AI to send private data it had read to an address the page chose. Writes stay with the engine, behind its safety policy.
+- There is deliberately no "open any web page" tool. A page could instruct the AI to send private data it had read to an address the page chose. The page reader below only opens addresses from a search or from the owner. Writes stay with the engine, behind its safety policy.
 
 ## Step 5: project memory
 - Each project has up to 20 short notes (2,000 characters each). Every AI in the project reads them at the start of each reply, up to 8,000 characters, newest kept first.
@@ -75,3 +75,14 @@ In Vercel, open **arnexyia-command-post → Settings → Environment Variables**
 3. In Vercel, add `ACP_WORKSPACE_DB_URL` and `ACP_WORKSPACE_DB_KEY`.
 4. To chat, add one AI key (`OPENROUTER_API_KEY` covers every AI) and `ACP_WORKSPACE_MONTHLY_BUDGET_USD`, then redeploy.
 5. Optional plugins: `LINEAR_API_KEY`, `GITHUB_TOKEN` with `ACP_GITHUB_REPOS`, `FIRECRAWL_API_KEY`, and MCP servers in `ACP_MCP_SERVERS` (Step 8).
+
+## Web access (read-only)
+Claude and ChatGPT threads can use the public web through Firecrawl (Perplexity already searches the web itself):
+- **web_search**: titles, links and short descriptions. About $0.01 each.
+- **web_read_page**: one page as text. About $0.005 each. It only opens an address that came back from a web_search **in the same reply**, or that the owner wrote in their message. Any other address (one the model or a web page made up), IP addresses, local or internal names, and addresses with a login are refused before anything is fetched. This is what stops a page from steering the AI into sending private data to an attacker's address.
+- **Untrusted, never instructions.** Everything fetched reaches the model wrapped as untrusted web content, with marker look-alikes removed so a page can't fake the end of the wrapper. The AIs are told never to follow instructions inside it. The real fence is in code: even a model that obeys the page can't reach a new address, and every tool it has only reads. `test/web-access.test.ts` runs a deliberately gullible model against a page full of instructions and checks that the outside calls are identical to those for a harmless page.
+- **Metered.** Each web call is checked against the monthly and thread caps (with everything the reply has already cost) before it starts; one that would go over doesn't run. Its cost is added to the reply's saved cost.
+- **Audited.** Under each reply that used the web: "Web activity (audit, times UTC)", listing every search, page read, blocked address and refused call, with its cost.
+- Costs are upper estimates at Firecrawl's dearest paid rate ($5 per 1,000 credits). Firecrawl's free plan gives 1,000 credits a month (about 500 searches or 1,000 page reads) at no charge.
+- **Owner setup:** add `FIRECRAWL_API_KEY` in Vercel (Production), then redeploy. Without it, web tools stay off.
+- Not included, on purpose: anything that acts outward (sending email, posting, buying, filling forms, writing to other systems). That needs an approval gate and the owner's decision first.
