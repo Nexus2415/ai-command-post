@@ -1,7 +1,7 @@
 // Roundtable mode: the AIs of a side-by-side answer read each other's answers, critique them, and a lead AI writes
 // one synthesis for the owner. Pure helpers here; api/workspace.js runs the rounds, one request per round, so each
 // stays inside the function's time limit and each is budget-checked on its own.
-import { stripSources } from "./workspace-shared.js";
+import { stripSources, isCrossThreadDerived } from "./workspace-shared.js";
 import { MAX_OUTPUT_TOKENS, costUsd, OPENROUTER_FEE, modelStatus, isNotice } from "./workspace-models.js";
 
 // Stored rounds are ordinary assistant messages. Rounds 2 and 3 start with these markers so the thread, the
@@ -23,7 +23,7 @@ const cut = (s, n) => (s.length > n ? s.slice(0, n) + "\n[…cut for length]" : 
 const fee = (env, m) => (modelStatus(env, m).via === "openrouter" ? OPENROUTER_FEE : 1);
 
 export const kindOf = (m) => m.role !== "assistant" ? "user"
-  : isNotice(m) ? "notice"
+  : isNotice(m) || isCrossThreadDerived(m) ? "notice"
   : m.content.startsWith(SYNTHESIS_MARK) ? "synthesis"
   : m.content.startsWith(CRITIQUE_MARK) ? "critique"
   : m.content.startsWith(FAILED_PREFIX) ? "failed" : "answer";
