@@ -106,6 +106,8 @@ details.file pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:300px;ov
 .lede{color:var(--muted);margin:0}
 .fence{border-left:3px solid var(--good);background:var(--good-soft);padding:8px 12px;border-radius:6px;font-size:13px}
 .fence ul{margin:4px 0 0;padding-left:18px}
+.catgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px}
+.catgrid .conn .cat{font:500 11px var(--mono);text-transform:uppercase;color:var(--muted)}
 .conn{border:1px solid var(--line);border-radius:8px;padding:10px 12px;display:grid;gap:6px;background:var(--panel-2)}
 .conn[data-on="false"]{opacity:.7}
 .conn .top{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
@@ -141,6 +143,12 @@ details.file pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:300px;ov
     <strong>Look-up only, for now.</strong> Everything added here can only read. The builder refuses any tool that sends, posts, buys, deletes or changes something, and anything aimed at a private or internal address. Each use is checked by the workspace's rules, counted against your spend caps, and stopped by Stop everything. Keys are never typed here: they live in Vercel variables.
   </div>
 
+  <section class="panel card" aria-labelledby="catH">
+    <h2 id="catH">Catalog: ready-made tools</h2>
+    <p class="note">Free, read-only look-ups that need no key. Tap Review, check what it can reach, then confirm. Each lookup counts about 0.1¢ against the spend caps.</p>
+    <div id="catList" class="catgrid"><p class="empty">Loading…</p></div>
+    <div id="catOut"></div>
+  </section>
   <section class="panel card" aria-labelledby="onH">
     <h2 id="onH">Connected now</h2>
     <div id="connList"><p class="empty">Loading…</p></div>

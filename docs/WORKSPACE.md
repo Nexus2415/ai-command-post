@@ -147,3 +147,8 @@ Claude and ChatGPT threads can use the public web through Firecrawl (Perplexity 
 - The **⚡ Smart** button next to the answer modes is on by default. With it on, a short, plain question (under 280 characters, no files, no words like analyze, plan, draft, review, contract, why) goes to the same vendor's light model: Claude Haiku ($0.10/$0.50 per million tokens) instead of Claude Sonnet ($2/$10), or GPT-5 nano instead of GPT-5 mini. The choice is made on the server for free, with no extra AI call; anything in doubt gets the full model.
 - A light answer ends with a small "⚡ Light model" note. Turn Smart off and ask again for the full model. Discussion mode always uses the full models; Perplexity has no light model.
 - Light models can be changed with `ACP_OPENROUTER_MODEL_CLAUDE_LIGHT` / `ACP_OPENROUTER_MODEL_CHATGPT_LIGHT` (same-vendor only) or `ACP_MODEL_CLAUDE_LIGHT` / `ACP_MODEL_CHATGPT_LIGHT` with direct keys. Costs use the light rates in `api/_lib/workspace-models.js` (or OpenRouter's reported cost, whichever is higher).
+
+## Plugin catalog
+- The Tools page now opens with **Catalog: ready-made tools**: weather, currency rates, Wikipedia, Hacker News, GitHub projects and npm packages. All free, read-only, no key.
+- **Review** shows the same plain-language summary as a tool you build yourself; **Confirm and turn on** adds it for every project. The server uses its own copy of the entry (`api/_lib/workspace-catalog.js`), so only the project scope comes from the page. Once added it is an ordinary look-up tool: switchable, metered (~0.1¢ a call), stopped by Stop everything.
+- Adding an entry: free, no key, GET with `?name=value` inputs, and it must pass `test/workspace-catalog.test.ts`.
