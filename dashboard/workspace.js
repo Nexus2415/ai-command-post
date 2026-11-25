@@ -8,6 +8,9 @@
   let projectId = null, threadId = null, busy = false, status = null, files = [], lastState = null, threadPrivate = null;
   // Images and PDFs uploaded to the open thread for the next message (ids from upload_file), up to 3.
   let uploads = [];
+  // While an answer is on its way: the label of the working indicator under your message (null when idle), and the
+  // newest message of yours the server has saved, so a failed send knows whether your text still needs restoring.
+  let working = null, lastUserSaved = "";
   // The owner's choice of extra AIs for a discussion (null: the default, one more).
   let picks = null;
   // Same markers as api/_lib/workspace-roundtable.js.
@@ -246,6 +249,10 @@
     // Unwrap rows holding a single plain answer, so one-AI replies look like a normal chat.
     for (const r of list.querySelectorAll(".cmp")) if (r.children.length === 1 && (r.dataset.kind !== "critique") && !r.closest("details")) r.replaceWith(r.firstElementChild);
     lastState = roundState(messages);
+    const mine = messages.filter((m) => m.role === "user");
+    const last = mine[mine.length - 1];
+    lastUserSaved = last ? String(last.id || last.created_at || "") + "|" + mine.length : "";
+    if (working) list.append(thinkingRow(working));
     if (window.ACPFlow) window.ACPFlow.update(messages, thread);
     const sc = $("scroller"); sc.scrollTop = sc.scrollHeight;
     $("cForm").hidden = false;
@@ -501,43 +508,91 @@
       }
     } finally { $("cFile").value = ""; showFiles(); }
   }));
+  // Like a chat app: the moment you press Send the box empties, your message appears in the conversation with a
+  // "thinking" line under it, and the answer replaces that line when it arrives. If the message never reached the
+  // server, your text and files go back into the box with the reason, so nothing is lost.
+  function thinkingRow(label) {
+    const row = el("div", "m assistant thinking");
+    row.setAttribute("role", "status");
+    row.append(el("span", "dots"), el("span", null, label));
+    return row;
+  }
+  function showPending(text, names) {
+    const list = $("mList");
+    for (const n of list.querySelectorAll(":scope > .empty")) n.remove();
+    const box = el("div", "m user pending");
+    box.append(el("span", "who", "You"));
+    if (text.trim()) box.append(document.createTextNode(text));
+    if (names.length) box.append(el("div", "drew", "Attached: " + names.join(", ")));
+    list.append(box);
+    if (working) list.append(thinkingRow(working));
+    const sc = $("scroller"); sc.scrollTop = sc.scrollHeight;
+  }
+  function clearPending() { for (const n of $("mList").querySelectorAll(".pending,.thinking")) n.remove(); }
   $("cForm").addEventListener("submit", guard(async () => {
     const text = $("cText").value;
     if (!text.trim() && !files.length && !uploads.length) return;
-    const attachments = files.length ? files : undefined;
-    const picked = uploads.length ? uploads.map((u) => u.id) : undefined;
+    const sentFiles = files.slice(), sentUploads = uploads.slice();
+    const attachments = sentFiles.length ? sentFiles : undefined;
+    const picked = sentUploads.length ? sentUploads.map((u) => u.id) : undefined;
     $("cSend").disabled = true;
     const ms = status && currentModel() && status.models[currentModel()];
-    say(ms && ms.ready ? "Waiting for the reply…" : "");
+    const name = MODEL_NAMES[currentModel()] || "The AI";
+    const before = lastUserSaved;
+    // Empty the box straight away and show the message in the conversation.
+    $("cText").value = ""; grow(); files = []; uploads = []; showFiles();
+    working = ms && ms.ready ? name + " is thinking…" : null;
+    showPending(text, [...sentFiles, ...sentUploads].map((f) => f.name));
+    say("");
+    // Put the text and files back when the server never saved the message (it failed before, or was cancelled).
+    const restore = () => {
+      if (lastUserSaved !== before) return false;
+      clearPending();
+      if (!$("cText").value) { $("cText").value = text; grow(); }
+      files = sentFiles; uploads = sentUploads; showFiles();
+      return true;
+    };
     try {
       // With no AI ready the message is only saved; otherwise the server saves it and asks the thread's AI.
       const also = [...$("cCompare").querySelectorAll("input:checked")].map((i) => i.value);
       const how = mode();
-      let failed = [];
       if (ms && ms.ready && how === "discuss" && also.length) {
+        working = "The AIs are working on one answer…";
         const ran = await roundtable(text, attachments, [currentModel(), ...also], picked);
-        if (ran) { $("cText").value = ""; grow(); files = []; uploads = []; showFiles(); }
+        if (!ran) restore();
         return;
       }
-      if (ms && ms.ready) await post("chat", { threadId, content: text, attachments, files: picked, routing: smart() }).catch(async (e) => { await openThread(threadId); throw e; });
+      if (ms && ms.ready) await post("chat", { threadId, content: text, attachments, files: picked, routing: smart() });
       else await post("add_message", { threadId, content: text, attachments, files: picked });
-      uploads = [];
       if (ms && ms.ready && how === "check") {
-        $("cText").value = ""; grow(); files = []; showFiles();
+        working = "Checking the answer with a second AI…";
         await openThread(threadId);
         await checkAnswer();
         return;
       }
-      $("cText").value = ""; grow(); files = []; showFiles();
-      say(failed.map((f) => (MODEL_NAMES[f.model] || f.model) + " didn't answer: " + f.error).join(" "), failed.length ? "err" : "");
+      working = null;
       await openThread(threadId);
-    } finally { $("cSend").disabled = halted; }
+    } catch (e) {
+      working = null;
+      // Find out whether the message was saved (it usually is when only the AI's reply failed).
+      try { await openThread(threadId); } catch { /* the error below still shows */ }
+      if (restore()) throw new Error("Not sent: " + e.message.replace(/^Not sent: /, "") + " Your message is back in the box.");
+      throw e;
+    } finally {
+      working = null;
+      for (const n of $("mList").querySelectorAll(".thinking")) n.remove();
+      $("cSend").disabled = halted;
+    }
   }));
   $("cRetry").addEventListener("click", guard(async () => {
-    say("Waiting for the reply…");
-    await post("chat", { threadId, routing: smart() }).catch(async (e) => { await openThread(threadId); throw e; });
-    say("");
-    await openThread(threadId);
+    working = (MODEL_NAMES[currentModel()] || "The AI") + " is thinking…";
+    $("mList").append(thinkingRow(working));
+    const sc = $("scroller"); sc.scrollTop = sc.scrollHeight;
+    try {
+      await post("chat", { threadId, routing: smart() }).catch(async (e) => { working = null; await openThread(threadId); throw e; });
+      working = null;
+      await openThread(threadId);
+    } finally { working = null; for (const n of $("mList").querySelectorAll(".thinking")) n.remove(); }
   }));
   // Roundtable mode: round 1 (each AI answers), round 2 (each critiques the others and revises), round 3 (the
   // lead writes one conclusion). One request per round; the server checks the budget before each one.
