@@ -179,6 +179,7 @@
   }
 
   function closeThread() {
+    stopSpeaking();
     $("cH").textContent = "No thread open";
     $("cModel").hidden = true;
     $("cPrivacy").hidden = true;
@@ -190,7 +191,7 @@
   }
 
   async function openThread(id) {
-    if (id !== threadId) { uploads = []; showFiles(); }
+    if (id !== threadId) { stopSpeaking(); uploads = []; showFiles(); }
     threadId = id;
     const { thread, messages } = await post("get_thread", { threadId: id });
     $("welcome").hidden = true;
@@ -764,31 +765,66 @@
     $("cMic").classList.add("on"); $("cMic").setAttribute("aria-pressed", "true");
     say("Listening… tap the microphone again when you're done. Check the text, then send.", "warn");
   });
-  // Read aloud: the answer's own text (not the name line or notes under it), in short pieces so long answers aren't
-  // cut off by the browser. Tapping again, or another answer's button, stops it.
+  // Read aloud: keep one utterance alive, start from a user tap, and queue the next chunk only after the last ends.
+  // An idle cancel or queued batch can fail silently on some mobile browsers. Do not claim audio started until onstart.
   let speaking = null;
+  function stopSpeaking(message = "", isError = false) {
+    const session = speaking;
+    if (!session) return;
+    speaking = null; // Ignore callbacks from canceled utterances.
+    clearTimeout(session.timer);
+    session.button.setAttribute("aria-pressed", "false");
+    session.button.textContent = "▶ Listen";
+    if (session.synth.speaking || session.synth.pending || session.synth.paused) session.synth.cancel();
+    if (message) say(message, isError ? "err" : "");
+  }
   function speakButton(box) {
     const b = el("button", "speak", "▶ Listen"); b.type = "button";
     b.setAttribute("aria-label", "Read this answer aloud"); b.setAttribute("aria-pressed", "false");
     b.addEventListener("click", () => {
+      if (speaking?.button === b) { stopSpeaking(); return; }
+      stopSpeaking();
       const synth = window.speechSynthesis;
-      const was = speaking;
-      synth.cancel();
-      if (was) { was.setAttribute("aria-pressed", "false"); was.textContent = "▶ Listen"; speaking = null; }
-      if (was === b) return;
+      if (!synth || !window.SpeechSynthesisUtterance) { say("Read aloud is not available in this browser.", "err"); return; }
       const parts = [...box.childNodes].filter((n) => !(n.nodeType === 1 && (n.classList.contains("who") || n.classList.contains("drew") || n.classList.contains("attached"))))
         .map((n) => n.textContent).join(" ").replace(/\s+/g, " ").trim();
-      const chunks = parts.match(/[^.!?]{1,220}[.!?]*|[^.!?]+/g) || [];
-      chunks.forEach((c, i) => {
-        const u = new SpeechSynthesisUtterance(c.trim());
-        u.lang = navigator.language || "en-US";
-        if (i === chunks.length - 1) u.onend = u.onerror = () => { if (speaking === b) { b.setAttribute("aria-pressed", "false"); b.textContent = "▶ Listen"; speaking = null; } };
-        synth.speak(u);
-      });
-      speaking = b; b.setAttribute("aria-pressed", "true"); b.textContent = "■ Stop";
+      const chunks = (parts.match(/[^.!?]{1,220}[.!?]*|[^.!?]+|[.!?]+/g) || []).map(c => c.trim()).filter(Boolean);
+      if (!chunks.length) { say("There is no answer text to read aloud.", "err"); return; }
+      const session = { button: b, synth, utterance: null, timer: null, index: 0 };
+      speaking = session;
+      b.setAttribute("aria-pressed", "true"); b.textContent = "■ Stop";
+      const unavailable = () => {
+        if (speaking === session) stopSpeaking("Audio could not start. Check media volume and Bluetooth output, then try in Safari or another browser.", true);
+      };
+      const next = () => {
+        if (speaking !== session) return;
+        if (session.index >= chunks.length) { stopSpeaking(); return; }
+        try {
+          const u = new window.SpeechSynthesisUtterance(chunks[session.index++]);
+          session.utterance = u; // Keep the current utterance reachable until its callbacks finish.
+          const lang = navigator.language || "en-US";
+          u.lang = lang; u.volume = 1;
+          const voices = typeof synth.getVoices === "function" ? synth.getVoices() : [];
+          const local = voices.filter(v => v.localService === true);
+          const voice = local.find(v => v.lang.toLowerCase() === lang.toLowerCase()) ||
+            local.find(v => v.lang.split("-")[0].toLowerCase() === lang.split("-")[0].toLowerCase());
+          if (voice) u.voice = voice;
+          u.onstart = () => { if (speaking === session && session.utterance === u) clearTimeout(session.timer); };
+          u.onend = () => {
+            if (speaking !== session || session.utterance !== u) return;
+            clearTimeout(session.timer); next();
+          };
+          u.onerror = () => { if (speaking === session && session.utterance === u) unavailable(); };
+          session.timer = setTimeout(unavailable, 6000);
+          if (synth.paused) synth.resume();
+          synth.speak(u);
+        } catch { unavailable(); }
+      };
+      next(); // The first speech call stays inside the user's click.
     });
     return b;
   }
+  window.addEventListener("pagehide", () => stopSpeaking());
   syncMic();
 
   guard(async () => { await loadStatus(); await loadProjects(); })();
