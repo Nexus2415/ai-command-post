@@ -1,0 +1,104 @@
+/* NEXIA look (ARN-139, palette and phone bar from ChatGPT's PR #105, ported onto today's pages).
+   Presentation only: colours, a shared menu (a left rail on wide screens, a top bar on tablets, a bottom bar on
+   phones). No page behaviour changes. Loaded last on every page, so it wins over ops-theme.css and the page styles. */
+:root:root:root:root{
+  --bg:#07111c; --bg-2:#0b1929; --panel:#102033; --panel-2:#0b1828; --line:#29445b;
+  --fg:#e8f4ff; --muted:#a8bccc; --accent:#83e5ff; --accent-fg:#08202d; --accent-soft:#18394c;
+  --sand:#83e5ff; --olive:#18394c; --grid:rgba(99,194,234,.045);
+  --good:#62deb3; --good-soft:#13392e; --warn:#f3c873; --warn-soft:#382c19;
+  --bad:#ff827e; --bad-soft:#3d2028; --amber:#f3c873; --signal:#b42d37; --idle:#95a7b8;
+  --display:system-ui,-apple-system,"Segoe UI",sans-serif;
+  --body:system-ui,-apple-system,"Segoe UI",sans-serif;
+  --nx-rail:208px; --nx-phone-nav:calc(64px + env(safe-area-inset-bottom,0px));
+  color-scheme:dark;
+}
+html{background:var(--bg)}
+body{margin:0;color:var(--fg);background-color:var(--bg);
+  background-image:radial-gradient(ellipse at 48% 0%,#18374d 0%,transparent 52%),
+    linear-gradient(var(--grid) 1px,transparent 1px),linear-gradient(90deg,var(--grid) 1px,transparent 1px);
+  background-size:auto,32px 32px,32px 32px;background-attachment:fixed}
+h1,h2,h3{font-family:var(--display);font-weight:650;letter-spacing:.01em}
+.panel,.ops-beacon,.hud{border-radius:12px}
+.panel{background:linear-gradient(155deg,#12283c,var(--panel-2));box-shadow:0 12px 32px #0002}
+.panel::before,.panel::after{display:none}
+.btn,.seg button,.sel,.chip,textarea,input{border-radius:8px}
+.btn{font-family:var(--body);text-transform:none;letter-spacing:.01em}
+.btn.ghost{color:var(--accent);border-color:var(--line)}
+:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.stopbtn{border-radius:8px;font-family:var(--body);font-weight:750;letter-spacing:.025em;
+  background:#a92d38;color:#fff;border:2px solid #ffaca8;box-shadow:0 0 0 2px #f36c7166}
+.resumebtn{border-radius:8px}
+.welcome-h,.side-brand{font-family:var(--display);font-weight:650;letter-spacing:.02em}
+.side-brand{text-transform:none}
+
+/* The shared menu. */
+.nexia-nav{box-sizing:border-box;display:flex;align-items:center;gap:16px;padding:6px 16px;background:#081522;
+  border-bottom:1px solid var(--line);position:relative;z-index:51;min-width:0}
+.nexia-brand{display:flex;align-items:center;gap:10px;color:var(--fg);text-decoration:none;min-height:44px;flex:none}
+.nexia-brand strong{display:block;color:var(--accent);font:750 18px/1 var(--body);letter-spacing:.24em}
+.nexia-brand small{display:block;font-size:11px;color:var(--muted);margin-top:4px}
+.nexia-emblem{width:32px;height:32px;flex:none;filter:drop-shadow(0 0 9px #55c9ff55)}
+.nexia-links{display:flex;gap:6px;min-width:0}
+.nexia-links a{display:flex;align-items:center;gap:8px;min-height:44px;padding:6px 10px;border:1px solid transparent;border-radius:8px;
+  text-decoration:none;color:var(--muted);font-weight:600;font-size:13px}
+.nexia-links a:hover{background:#122a3c;color:var(--fg)}
+.nexia-links a[aria-current="page"]{color:var(--accent);background:#143247;border-color:#37637e}
+.nexia-links svg{width:18px;height:18px;flex:none;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.nexia-links a > span{display:grid;gap:2px;line-height:1.2}
+.nexia-links a small{font-size:10px;font-weight:400;color:var(--muted)}
+
+/* Chat page: the menu takes its own space, the conversation fills the rest (question box stays at the bottom). */
+body.nexia-chat{display:flex;flex-direction:column;height:100vh;height:100dvh;overflow:hidden}
+body.nexia-chat .wrap.app{flex:1 1 0;height:auto;min-height:0}
+body.nexia-chat .convo{height:100%}
+
+/* Wide screens: the menu is a rail on the left. */
+@media (min-width:1350px){
+  body:has(> .nexia-nav){padding-left:var(--nx-rail)}
+  .nexia-nav{position:fixed;inset:0 auto 0 0;width:var(--nx-rail);flex-direction:column;align-items:stretch;gap:18px;
+    border-bottom:0;border-right:1px solid var(--line);padding:22px 12px;overflow:auto}
+  .nexia-brand{padding:0 6px}
+  .nexia-emblem{width:38px;height:38px}
+  .nexia-links{flex-direction:column}
+  .nexia-links a{font-size:14px}
+  body.nexia-chat{box-sizing:border-box}
+}
+/* Tablets: a top bar; captions hidden to save room. */
+@media (min-width:701px) and (max-width:1349px){
+  .nexia-brand small,.nexia-links a small{display:none}
+}
+/* Phones: a bottom bar with four big buttons, like an app. */
+@media (max-width:700px){
+  body:has(> .nexia-nav){padding-bottom:var(--nx-phone-nav);background-attachment:scroll}
+  body.nexia-chat{box-sizing:border-box}
+  .nexia-nav{position:fixed;inset:auto 0 0 0;min-height:var(--nx-phone-nav);z-index:65;
+    padding:4px max(6px,env(safe-area-inset-right,0px)) calc(4px + env(safe-area-inset-bottom,0px)) max(6px,env(safe-area-inset-left,0px));
+    border-bottom:0;border-top:1px solid var(--line);box-shadow:0 -8px 24px #0004}
+  .nexia-brand{display:none}
+  .nexia-links{flex:1;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px}
+  .nexia-links a{min-height:56px;flex-direction:column;justify-content:center;gap:3px;padding:4px 2px;text-align:center}
+  .nexia-links svg{width:22px;height:22px}
+  .nexia-links a > span{font-size:0;gap:0}
+  .nexia-links a small{font-size:11px;font-weight:600;color:inherit}
+  .nexia-links a[aria-current="page"]{box-shadow:inset 0 2px 0 var(--accent)}
+  /* Chat: the question box sits just above the bottom bar, which already leaves room for the home indicator. */
+  body.nexia-chat .dock{padding-bottom:8px}
+  body.nexia-chat .side{bottom:var(--nx-phone-nav)}
+  body.nexia-chat .scrim{bottom:var(--nx-phone-nav)}
+  body.nexia-chat .more{max-height:calc(100dvh - var(--nx-phone-nav) - 80px);overflow:auto}
+}
+@media (prefers-reduced-motion:reduce){.nexia-emblem *{animation:none!important;transition:none!important}}
+/* Small phones (iPhone SE and similar): the answer-mode toggle gets its own line, so the question box fits the
+   screen instead of the whole page zooming out. */
+@media (max-width:380px){
+  .boxrow{flex-wrap:wrap;margin-left:0}
+  .modes{order:-1;flex:1 0 100%;display:grid;grid-template-columns:repeat(3,minmax(0,1fr))}
+  .modes span{justify-content:center;min-height:40px;width:100%}
+}
+/* Orchestrator page: the left rail takes 208px, so its 3-column board folds to one column a little sooner
+   (the page's own rule does this below 1280px of screen; with the rail that is below 1488px). */
+@media (min-width:1350px) and (max-width:1488px){
+  .page > .grid{grid-template-columns:minmax(0,1fr)}
+  .page > .grid > .rail{grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
+  .page > .grid > .center{order:-1}
+}
