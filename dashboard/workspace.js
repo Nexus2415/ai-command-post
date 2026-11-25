@@ -138,12 +138,15 @@
     $("cForm").hidden = true;
     $("aPanel").hidden = true;
     $("mList").replaceChildren();
+    $("welcome").hidden = false;
     if (window.ACPFlow) window.ACPFlow.clear();
   }
 
   async function openThread(id) {
     threadId = id;
     const { thread, messages } = await post("get_thread", { threadId: id });
+    $("welcome").hidden = true;
+    setDrawer(false);
     $("cH").textContent = thread.title;
     const chip = $("cModel"); chip.hidden = false; chip.dataset.model = thread.model;
     chip.lastElementChild.textContent = MODEL_NAMES[thread.model] || thread.model;
@@ -177,7 +180,7 @@
     for (const r of list.querySelectorAll(".cmp")) if (r.children.length === 1 && r.dataset.kind !== "critique") r.replaceWith(r.firstElementChild);
     lastState = roundState(messages);
     if (window.ACPFlow) window.ACPFlow.update(messages, thread);
-    list.scrollTop = list.scrollHeight;
+    const sc = $("scroller"); sc.scrollTop = sc.scrollHeight;
     $("cForm").hidden = false;
     const ms = status && status.models[thread.model];
     $("cNote").textContent = ms && !ms.ready ? (MODEL_NAMES[thread.model] || "This AI") + " can't reply yet: " + ms.reason
@@ -198,6 +201,8 @@
     }
     box.hidden = !others.length;
     $("cRoundRow").hidden = !others.length;
+    $("cOptsBtn").hidden = !others.length;
+    if (!others.length) setOpts(false);
     $("cRound").checked = false;
     // A side-by-side answer (or a roundtable that stopped part way) can be taken through the remaining rounds.
     $("cDiscuss").hidden = !(lastState && lastState.answers >= 2 && !lastState.done);
@@ -350,14 +355,14 @@
       let failed = [];
       if (ms && ms.ready && also.length && $("cRound").checked) {
         const ran = await roundtable(text, attachments, [currentModel(), ...also]);
-        if (ran) { $("cText").value = ""; files = []; showFiles(); }
+        if (ran) { $("cText").value = ""; grow(); files = []; showFiles(); }
         return;
       }
       if (ms && ms.ready && also.length) {
         failed = (await post("compare", { threadId, content: text, attachments, models: [currentModel(), ...also] })).failed || [];
       } else if (ms && ms.ready) await post("chat", { threadId, content: text, attachments }).catch(async (e) => { await openThread(threadId); throw e; });
       else await post("add_message", { threadId, content: text, attachments });
-      $("cText").value = ""; files = []; showFiles();
+      $("cText").value = ""; grow(); files = []; showFiles();
       say(failed.map((f) => (MODEL_NAMES[f.model] || f.model) + " didn't answer: " + f.error).join(" "), failed.length ? "err" : "");
       await openThread(threadId);
     } finally { $("cSend").disabled = halted; }
@@ -427,6 +432,38 @@
   }
   const stopSwitch = window.ACPStopSwitch.mount($("stopSwitch"), { post, onChange: setHalted });
   function currentModel() { return $("cModel").dataset.model || null; }
+  // ---- Layout: the list drawer (phones), the More menu, the "Ask more AIs" options and the growing question box.
+  const narrow = () => window.matchMedia("(max-width: 900px)").matches;
+  function setDrawer(open) {
+    const side = $("side");
+    side.classList.toggle("open", open);
+    $("scrim").hidden = !open;
+    $("menuBtn").setAttribute("aria-expanded", String(open));
+    if (open && narrow()) $("sideClose").focus();
+  }
+  $("menuBtn").addEventListener("click", () => setDrawer(!$("side").classList.contains("open")));
+  $("sideClose").addEventListener("click", () => { setDrawer(false); $("menuBtn").focus(); });
+  $("scrim").addEventListener("click", () => setDrawer(false));
+  $("welcomeOpen").addEventListener("click", () => {
+    if (narrow()) setDrawer(true);
+    const first = $("side").querySelector(".list button"); if (first) first.focus();
+  });
+  function setMore(open) { $("morePanel").hidden = !open; $("moreBtn").setAttribute("aria-expanded", String(open)); }
+  $("moreBtn").addEventListener("click", (e) => { e.stopPropagation(); setMore($("morePanel").hidden); });
+  document.addEventListener("click", (e) => { if (!$("morePanel").hidden && !$("morePanel").contains(e.target)) setMore(false); });
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    if (!$("morePanel").hidden) { setMore(false); $("moreBtn").focus(); }
+    else if ($("side").classList.contains("open") && narrow()) { setDrawer(false); $("menuBtn").focus(); }
+  });
+  function setOpts(open) { $("cOpts").hidden = !open; $("cOptsBtn").setAttribute("aria-expanded", String(open)); }
+  $("cOptsBtn").addEventListener("click", () => setOpts($("cOpts").hidden));
+  // The flow chart's Chat / Flow chart switch lives in the More menu, out of the reading path.
+  const moveToggle = () => { const t = document.querySelector(".bar .fv-toggle"); if (t) $("viewSlot").append(t); };
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", moveToggle); else moveToggle();
+  const grow = () => { const t = $("cText"); t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight, window.innerHeight * 0.4) + "px"; };
+  $("cText").addEventListener("input", grow);
+  new MutationObserver(grow).observe($("cForm"), { attributes: true, attributeFilter: ["hidden"] });
   $("cText").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) $("cForm").requestSubmit(); });
 
   guard(async () => { await loadStatus(); await loadProjects(); })();
