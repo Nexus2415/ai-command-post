@@ -1,0 +1,182 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tools and Connectors</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Tools and connectors: the same look as the workspace page. */
+:root{
+  --bg:#eef1f4; --panel:#ffffff; --panel-2:#f6f8fa; --line:#d5dbe2; --fg:#16202b; --muted:#5b6876;
+  --accent:#1d5c86; --accent-fg:#ffffff; --accent-soft:#dbe9f3;
+  --good:#2f7a4a; --good-soft:#dcefe3; --warn:#9a6a10; --warn-soft:#f6ebd2; --bad:#a43b32; --bad-soft:#f6dedb;
+  --a-claude:#b4552d; --a-chatgpt:#2a7a62; --a-gemini:#4a5fc1; --a-perplexity:#1f8293; --a-none:#7a8590;
+  --display:"Barlow Condensed","Arial Narrow",system-ui,sans-serif;
+  --body:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0f151c; --panel:#161e27; --panel-2:#1b2530; --line:#2a3644; --fg:#e3e9ef; --muted:#93a1b0;
+  --accent:#6eb2e0; --accent-fg:#0b1824; --accent-soft:#1c3446;
+  --good:#6cc28d; --good-soft:#18301f; --warn:#e2b25a; --warn-soft:#33280f; --bad:#ec8a80; --bad-soft:#3a1d1a;
+  --a-claude:#e08a62; --a-chatgpt:#5cc4a3; --a-gemini:#8e9cf0; --a-perplexity:#5cc3d3; --a-none:#8995a1;
+  color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0f151c; --panel:#161e27; --panel-2:#1b2530; --line:#2a3644; --fg:#e3e9ef; --muted:#93a1b0;
+  --accent:#6eb2e0; --accent-fg:#0b1824; --accent-soft:#1c3446;
+  --good:#6cc28d; --good-soft:#18301f; --warn:#e2b25a; --warn-soft:#33280f; --bad:#ec8a80; --bad-soft:#3a1d1a;
+  --a-claude:#e08a62; --a-chatgpt:#5cc4a3; --a-gemini:#8e9cf0; --a-perplexity:#5cc3d3; --a-none:#8995a1;
+  color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);font:14px/1.5 var(--body)}
+.wrap{max-width:1240px;margin:0 auto;padding-inline:16px;padding-block:16px 40px;display:grid;gap:16px}
+h1,h2,h3{font-family:var(--display);font-weight:600;letter-spacing:.02em;margin:0;text-wrap:balance}
+.eyebrow{font:500 11px/1 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+button,select,textarea{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.bar{display:flex;flex-wrap:wrap;align-items:center;gap:12px 20px;padding-block:4px}
+.bar h1{font-size:30px;line-height:1;text-transform:uppercase}
+.bar .grow{flex:1 1 auto}
+.bar a{color:var(--accent)}
+[hidden]{display:none!important}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px}
+.ws{display:grid;grid-template-columns:220px 260px minmax(0,1fr);gap:16px;min-height:70vh}
+.col{display:grid;grid-template-rows:auto minmax(0,1fr);min-width:0}
+.col > header{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 14px;border-bottom:1px solid var(--line)}
+.list{list-style:none;margin:0;padding:6px;display:grid;gap:2px;align-content:start;overflow:auto}
+.list button{width:100%;text-align:left;border:0;background:none;border-radius:6px;padding:8px 10px;cursor:pointer;display:grid;gap:2px}
+.list button:hover{background:var(--panel-2)}
+.list button[aria-current="true"]{background:var(--accent-soft)}
+.memory{display:grid;gap:6px;padding:12px 14px;border-top:1px solid var(--line);background:var(--panel-2)}
+.memory .list{padding:0}
+.list .nrow{display:flex;gap:8px;align-items:flex-start;padding:6px 4px;white-space:pre-wrap;overflow-wrap:anywhere}
+.list .nrow span{flex:1}
+.list .nrow button{width:auto;padding:2px 6px;font-size:12px;color:var(--bad)}
+.list .sub{font:500 11px var(--mono);color:var(--muted)}
+.empty{color:var(--muted);padding:10px;font-size:13px}
+.btn{border:1px solid var(--accent);background:var(--accent);color:var(--accent-fg);border-radius:6px;padding:6px 12px;cursor:pointer;font-weight:600}
+.btn.ghost{background:var(--panel);color:var(--accent)}
+.btn:disabled{opacity:.5;cursor:default}
+.sel,input,textarea{border:1px solid var(--line);background:var(--panel);border-radius:6px;padding:6px 8px;width:100%}
+form.new{display:grid;gap:8px;padding:10px 14px;border-bottom:1px solid var(--line);background:var(--panel-2)}
+.convo{display:grid;grid-template-rows:auto minmax(0,1fr) auto;min-width:0}
+.msgs{overflow:auto;padding:16px;display:grid;gap:12px;align-content:start}
+.m{max-width:80%;padding:10px 12px;border-radius:8px;white-space:pre-wrap;overflow-wrap:anywhere}
+.m.user{justify-self:end;background:var(--accent-soft)}
+.m.assistant{justify-self:start;background:var(--panel-2);border-left:3px solid var(--ag,var(--a-none))}
+.cmp{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+.cmp .m{max-width:none}
+.m.synth{max-width:none;justify-self:stretch;border:2px solid var(--accent);border-left-width:4px;background:var(--panel)}
+.round{font:500 11px var(--mono);color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:-6px}
+fieldset.row{border:0;margin:0;padding:0}
+fieldset.row legend{float:left;margin-right:4px}
+fieldset.row label{display:inline-flex;gap:4px;align-items:center;font-size:13px}
+fieldset.row input{width:auto}
+details.file{margin-top:6px;border:1px solid var(--line);border-radius:6px;padding:4px 8px;white-space:normal}
+details.file summary{cursor:pointer;font:500 12px var(--mono)}
+details.file pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:300px;overflow:auto;margin:6px 0 0;font:12px var(--mono)}
+#cFiles .chip button{margin-left:6px;border:0;background:none;color:var(--bad);cursor:pointer;font-size:12px}
+.m .who{display:block;font:500 11px var(--mono);color:var(--muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:.08em}
+.composer{display:grid;gap:8px;padding:12px 14px;border-top:1px solid var(--line)}
+.composer textarea{min-height:72px;resize:vertical}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.note{color:var(--muted);font-size:12px}
+.msg{padding:8px 12px;border-radius:6px;font-size:13px}
+.msg.err{background:var(--bad-soft);color:var(--bad)}
+.msg.warn{background:var(--warn-soft);color:var(--warn)}
+.chip{display:inline-flex;align-items:center;gap:6px;padding:2px 8px;border-radius:999px;font:500 11px/1.4 var(--mono);text-transform:uppercase;border:1px solid var(--line)}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--ag,var(--a-none));flex:none}
+[data-model="claude"]{--ag:var(--a-claude)} [data-model="chatgpt"]{--ag:var(--a-chatgpt)}
+[data-model="gemini"]{--ag:var(--a-gemini)} [data-model="perplexity"]{--ag:var(--a-perplexity)}
+.stopwrap{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.stopbtn{border:2px solid var(--bad);background:var(--bad);color:#fff;border-radius:6px;padding:8px 16px;font:700 14px/1 var(--body);letter-spacing:.04em;text-transform:uppercase;cursor:pointer;min-height:40px}
+.stopbtn:hover{filter:brightness(1.1)}
+.stopbtn:disabled{opacity:.6;cursor:default}
+.resumebtn{border:1px solid var(--good);background:var(--panel);color:var(--good);border-radius:6px;padding:6px 12px;font-weight:600;cursor:pointer;min-height:36px}
+.stopwrap[data-stopped="true"]{background:var(--bad-soft);color:var(--bad);border:1px solid var(--bad);border-radius:8px;padding:6px 10px;flex-basis:100%}
+.stopstate{font-size:13px;font-weight:600}
+@media (max-width:900px){.ws{grid-template-columns:minmax(0,1fr)}.m{max-width:100%}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+
+/* Tools page */
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr));gap:16px}
+.card{padding:14px 16px;display:grid;gap:10px;align-content:start}
+.card h2{font-size:22px;text-transform:uppercase}
+.lede{color:var(--muted);margin:0}
+.fence{border-left:3px solid var(--good);background:var(--good-soft);padding:8px 12px;border-radius:6px;font-size:13px}
+.fence ul{margin:4px 0 0;padding-left:18px}
+.conn{border:1px solid var(--line);border-radius:8px;padding:10px 12px;display:grid;gap:6px;background:var(--panel-2)}
+.conn[data-on="false"]{opacity:.7}
+.conn .top{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.conn .top strong{font-family:var(--mono)}
+.conn .top .grow{flex:1}
+.chip.on{color:var(--good);border-color:var(--good)} .chip.off{color:var(--muted)}
+.sum{margin:0;display:grid;grid-template-columns:minmax(110px,max-content) 1fr;gap:4px 12px;font-size:13px}
+.sum dt{font-weight:600;color:var(--muted)} .sum dd{margin:0;overflow-wrap:anywhere}
+.field{display:grid;gap:4px}
+.field .note{margin:0}
+.inrow{display:grid;grid-template-columns:1fr 110px auto auto;gap:6px;align-items:center}
+.inrow input[type=checkbox]{width:auto}
+.problems{margin:0;padding:8px 12px 8px 28px;background:var(--bad-soft);color:var(--bad);border-radius:6px;font-size:13px}
+.picks{display:grid;gap:6px}
+.picks label{display:flex;gap:8px;align-items:flex-start;font-size:13px}
+.picks input{width:auto;margin-top:3px}
+.picks .why{color:var(--bad);font-size:12px}
+.review{border:2px solid var(--accent);border-radius:8px;padding:10px 12px;display:grid;gap:8px;background:var(--panel)}
+@media (max-width:600px){.inrow{grid-template-columns:1fr 1fr}.sum{grid-template-columns:1fr}}
+</style>
+<link rel="stylesheet" href="ops-theme.css">
+<script src="ops-ui.js"></script>
+
+<div class="wrap">
+  <div class="bar">
+    <h1>Tools and connectors</h1>
+    <div class="stopwrap" id="stopSwitch"></div>
+    <span class="grow"></span>
+    <a href="/workspace.html">Back to Workspace</a>
+  </div>
+  <div id="pageMsg" class="msg" role="status" hidden></div>
+  <div class="fence">
+    <strong>Look-up only, for now.</strong> Everything added here can only read. The builder refuses any tool that sends, posts, buys, deletes or changes something, and anything aimed at a private or internal address. Each use is checked by the workspace's rules, counted against your spend caps, and stopped by Stop everything. Keys are never typed here: they live in Vercel variables.
+  </div>
+
+  <section class="panel card" aria-labelledby="onH">
+    <h2 id="onH">Connected now</h2>
+    <div id="connList"><p class="empty">Loading…</p></div>
+  </section>
+
+  <div class="grid2">
+    <section class="panel card" aria-labelledby="mcpH">
+      <h2 id="mcpH">Add a connector you already have</h2>
+      <p class="lede">An MCP server you use (Notion, a docs search, a database viewer…). Give its address, check what it offers, pick the tools.</p>
+      <form id="mForm" class="card" style="padding:0">
+        <div class="field"><label for="mName">Short name</label><input id="mName" maxlength="20" placeholder="docs" required><p class="note">2 to 20 lowercase letters or digits.</p></div>
+        <div class="field"><label for="mUrl">Server address</label><input id="mUrl" maxlength="500" placeholder="https://mcp.example-service.com/mcp" required></div>
+        <div class="field"><label for="mKey">Key's Vercel variable (if it needs one)</label><input id="mKey" maxlength="60" placeholder="ACP_MCP_TOKEN_DOCS" autocomplete="off"><p class="note">Only the variable's NAME. Put the key itself in Vercel, never here.</p></div>
+        <div class="field"><label for="mScope">Who can use it</label><select id="mScope" class="sel"></select></div>
+        <div class="row"><button class="btn ghost" type="button" id="mCheck">Check what it offers</button></div>
+        <div id="mPicks" class="picks" hidden></div>
+        <div id="mOut"></div>
+      </form>
+    </section>
+
+    <section class="panel card" aria-labelledby="hH">
+      <h2 id="hH">Build a new look-up tool</h2>
+      <p class="lede">For any web service with a simple address that answers questions. You say what goes in and what comes back; you review it in plain words before it turns on.</p>
+      <form id="hForm" class="card" style="padding:0">
+        <div class="field"><label for="hName">1. Short name</label><input id="hName" maxlength="20" placeholder="weather" required></div>
+        <div class="field"><label for="hDesc">2. What does it do?</label><input id="hDesc" maxlength="300" placeholder="Looks up the weather forecast for a city." required></div>
+        <div class="field"><label for="hUrl">3. Its address</label><input id="hUrl" maxlength="500" placeholder="https://api.example-weather.com/v1/forecast" required><p class="note">Must start with https://. Private and internal addresses are blocked.</p></div>
+        <div class="field"><span>4. What the AI fills in</span><div id="hInputs" class="picks"></div><div class="row"><button class="btn ghost" type="button" id="hAddInput">Add an input</button></div></div>
+        <div class="field"><label for="hRet">5. What comes back?</label><input id="hRet" maxlength="300" placeholder="Temperature and chance of rain." required></div>
+        <div class="field"><label for="hKey">6. Key's Vercel variable (if it needs one)</label><input id="hKey" maxlength="60" placeholder="ACP_TOOL_TOKEN_WEATHER" autocomplete="off"><p class="note">Only the variable's NAME. Put the key itself in Vercel, never here.</p></div>
+        <div class="field"><label for="hScope">7. Who can use it</label><select id="hScope" class="sel"></select></div>
+        <div class="row"><button class="btn" type="submit">Review it</button></div>
+        <div id="hOut"></div>
+      </form>
+    </section>
+  </div>
+</div>
+<script src="stop-switch.js"></script>
+<script src="tools.js"></script>
