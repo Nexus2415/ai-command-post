@@ -119,6 +119,7 @@
     $("cModel").hidden = true;
     $("cForm").hidden = true;
     $("mList").replaceChildren();
+    if (window.ACPFlow) window.ACPFlow.clear();
   }
 
   async function openThread(id) {
@@ -155,6 +156,7 @@
     // Unwrap rows holding a single plain answer, so one-AI replies look like a normal chat.
     for (const r of list.querySelectorAll(".cmp")) if (r.children.length === 1 && r.dataset.kind !== "critique") r.replaceWith(r.firstElementChild);
     lastState = roundState(messages);
+    if (window.ACPFlow) window.ACPFlow.update(messages, thread);
     list.scrollTop = list.scrollHeight;
     $("cForm").hidden = false;
     const ms = status && status.models[thread.model];
