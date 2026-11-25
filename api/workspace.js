@@ -11,6 +11,7 @@ import {
   summary, tokenReuseProblem,
 } from "./_lib/workspace-connectors.js";
 import { STOP_MARK, harmCheck, logRefusal, refusalText, textOf } from "./_lib/workspace-rules.js";
+import { CHANGED, inheritedSources, sharedFor, sourcesLine, stillShared, stripSources } from "./_lib/workspace-shared.js";
 import { CRITIQUE_MARK, SYNTHESIS_MARK, critiquePrompt, estimateRounds, roundtableState, synthesisPrompt } from "./_lib/workspace-roundtable.js";
 
 // Vercel: model replies can take a while.
@@ -199,6 +200,18 @@ const ACTIONS = Object.freeze({
     if (!(await store.getThread(args.threadId))) return error(404, "Unknown thread.");
     return { message: await store.addMessage(args.threadId, { role: "user", content }) };
   },
+  // Private threads: hidden from every other thread's AI until the owner makes them shared again.
+  async set_private(store, args) {
+    if (!isId(args.threadId)) return error(400, "Unknown thread.");
+    if (typeof args.private !== "boolean") return error(400, "Say private: true or false.");
+    if (!(await store.getThread(args.threadId))) return error(404, "Unknown thread.");
+    try {
+      return { thread: await store.setThreadPrivate(args.threadId, args.private) };
+    } catch (e) {
+      if (e instanceof StoreError) return error(503, "Private threads need a one-time database update first. Until then, no thread is shared with any other.");
+      throw e;
+    }
+  },
   async list_notes(store, args) {
     if (!isId(args.projectId)) return error(400, "Unknown project.");
     if (!(await store.getProject(args.projectId))) return error(404, "Unknown project.");
@@ -317,11 +330,15 @@ const ACTIONS = Object.freeze({
     const rule = harmCheck(asked);
     if (rule) return refusedRequest(rule, await refuse(store, thread.id, "request", rule));
     const sent = trimHistory(mergeTurns(history));
+    // Background from the project's other shared threads (bounded; private threads are never read).
+    const shared = await sharedFor(store, thread, asked);
 
     const over = await budgetCheck(store, env, deps, thread.id, isPaid(env, model));
-    const first = over(estimateUsd(model, sent, env));
+    const first = over(estimateUsd(model, [...sent, { content: shared.text }], env));
     if (first) return error(402, first);
 
+    // Re-checked just before anything is sent: a thread made private meanwhile stops the answer (nothing saved).
+    if (!(await stillShared(store, thread, shared))) return error(409, CHANGED);
     const saved = content ? await store.addMessage(thread.id, { role: "user", content }) : null;
     // MCP servers are asked for their tools only for models that can use tools.
     // Connectors and custom tools from the Tools page: switched on, confirmed, and for this project (or all).
@@ -342,13 +359,15 @@ const ACTIONS = Object.freeze({
     let out;
     try {
       out = await runChat(env, model, sent, {
-        f: deps.fetch, tools,
+        f: deps.fetch, tools, shared: shared.text,
         notes: (await store.listNotes(thread.project_id)).map((n) => n.content),
         runTool: gatedRunTool(store, thread.id, (name, a, soFar = 0) => runTool(env, tools, name, a, deps.fetch, webCtx(soFar))),
         // Every later round of tool use is checked again: the stop switch, and the caps counting what this reply
         // has already cost (web calls included).
         beforeCall: async (est, soFar) => {
           if (soFar > 0 && await stopReason(store)) throw new BudgetStop(`${STOP_MARK} The reply was cut short; no further steps ran.`);
+          // Each later round re-sends the background, so a thread made private mid-answer stops it here.
+          if (soFar > 0 && !(await stillShared(store, thread, shared))) throw new BudgetStop("Stopped: a thread this answer drew on was just made private.");
           const why = soFar > 0 ? over(soFar + est) : null;
           if (why) throw new BudgetStop("Stopped before finishing: " + why.charAt(0).toLowerCase() + why.slice(1));
         },
@@ -359,7 +378,7 @@ const ACTIONS = Object.freeze({
       if (e.usage?.costUsd > 0) await record(`(The AI provider failed partway through this reply: ${e.message})`, e.usage);
       return { status: 502, body: { error: `${e.message} Your message was saved; try again for a reply.`, saved } };
     }
-    const message = await gatedReply(store, thread.id, model, out.text, out, "", webAuditText(webLog));
+    const message = await gatedReply(store, thread.id, model, out.text, out, "", sourcesLine(shared.sources) + webAuditText(webLog));
     return { saved, message };
   },
   // Side-by-side answers: one message goes to 2-3 AIs at once and each answer is saved with its AI. Plugins stay
@@ -367,7 +386,7 @@ const ACTIONS = Object.freeze({
   async compare(store, args, env, deps) {
     const p = await askSeveral(store, args, env);
     if (p.status) return p;
-    const why = (await budgetCheck(store, env, deps, p.thread.id, p.paid.length > 0))(p.paid.reduce((n, m) => n + estimateUsd(m, p.sent, env), 0));
+    const why = (await budgetCheck(store, env, deps, p.thread.id, p.paid.length > 0))(p.paid.reduce((n, m) => n + estimateUsd(m, [...p.sent, { content: p.shared.text }], env), 0));
     if (why) return error(402, why);
     return runRound1(store, env, deps, p);
   },
@@ -416,7 +435,7 @@ const ACTIONS = Object.freeze({
       if (!todo.length) return error(409, "Round 2 has already run.");
       const prompts = todo.map((a) => ({
         m: a.model,
-        prompt: critiquePrompt(state.question.content, a.content, state.answers.filter((o) => o !== a).map((o) => o.content)),
+        prompt: critiquePrompt(state.question.content, stripSources(a.content), state.answers.filter((o) => o !== a).map((o) => stripSources(o.content))),
       }));
       const why = over(prompts.filter(({ m }) => isPaid(env, m)).reduce((n, { m, prompt }) => n + estimateUsd(m, [{ content: prompt }], env), 0));
       if (why) return error(402, why);
@@ -424,7 +443,8 @@ const ACTIONS = Object.freeze({
         .then((r) => ({ m, r }), (e) => { if (e instanceof ModelError) return { m, e }; throw e; })));
       const messages = [], failed = [];
       for (const { m, r, e } of results) {
-        if (r) { messages.push(await gatedReply(store, thread.id, m, r.text, r, `${CRITIQUE_MARK}\n`)); continue; }
+        // A critique built on answers that drew on other threads carries their "drew on" line too.
+        if (r) { messages.push(await gatedReply(store, thread.id, m, r.text, r, `${CRITIQUE_MARK}\n`, inheritedSources(state.answers))); continue; }
         await failedReply(m, e);
         failed.push({ model: m, error: e.message });
       }
@@ -455,7 +475,7 @@ const ACTIONS = Object.freeze({
         continue;
       }
       const footer = whoTookPart(args.models, state, m, failed);
-      const message = await gatedReply(store, thread.id, m, `${r.text}\n\n${footer}`, r, `${SYNTHESIS_MARK}\n`);
+      const message = await gatedReply(store, thread.id, m, `${r.text}\n\n${footer}`, r, `${SYNTHESIS_MARK}\n`, inheritedSources(state.answers));
       return { message, failed, lead: m, roundtableUsd: sumCost([...state.answers, ...state.critiques, message]) };
     }
     return { status: 502, body: { error: "No AI could write the conclusion. The first answers and critiques are saved.", failed } };
@@ -499,27 +519,29 @@ async function askSeveral(store, args, env) {
   const history = [...before, { role: "user", content }];
   const sent = trimHistory(mergeTurns(history));
   const lead = models.includes(thread.model) ? thread.model : models[0];
-  return { thread, content, models, sent, lead, paid: models.filter((m) => isPaid(env, m)) };
+  const shared = await sharedFor(store, thread, content);
+  return { thread, content, models, sent, shared, lead, paid: models.filter((m) => isPaid(env, m)) };
 }
 
 // The worst case for all three rounds of a roundtable, and why it would go over a cap (or null).
 async function planCheck(store, env, deps, p) {
-  const chars = p.sent.reduce((n, m) => n + m.content.length, 0);
+  const chars = p.sent.reduce((n, m) => n + m.content.length, 0) + p.shared.text.length;
   const estimate = estimateRounds(env, p.models, p.lead, chars - p.content.length, p.content.length, (m) => isPaid(env, m));
   const why = (await budgetCheck(store, env, deps, p.thread.id, p.paid.length > 0))(estimate.total);
   return { estimate, why };
 }
 
-async function runRound1(store, env, deps, { thread, content, models, sent }) {
+async function runRound1(store, env, deps, { thread, content, models, sent, shared }) {
   const rule = harmCheck(content);
   if (rule) return refusedRequest(rule, await refuse(store, thread.id, "request", rule));
+  if (!(await stillShared(store, thread, shared))) return error(409, CHANGED);
   const saved = await store.addMessage(thread.id, { role: "user", content });
   const notes = (await store.listNotes(thread.project_id)).map((n) => n.content);
-  const results = await Promise.all(models.map((m) => runChat(env, m, sent, { f: deps.fetch, notes })
+  const results = await Promise.all(models.map((m) => runChat(env, m, sent, { f: deps.fetch, notes, shared: shared.text })
     .then((r) => ({ m, r }), (e) => { if (e instanceof ModelError) return { m, e }; throw e; })));
   const messages = [], failed = [];
   for (const { m, r, e } of results) {
-    if (r) { messages.push(await gatedReply(store, thread.id, m, r.text, r)); continue; }
+    if (r) { messages.push(await gatedReply(store, thread.id, m, r.text, r, "", sourcesLine(shared.sources))); continue; }
     // Calls made before the failure still cost money, so they are recorded.
     if (e.usage?.costUsd > 0) await reply(store, thread.id, m, `(The AI provider failed partway through this reply: ${e.message})`, e.usage);
     failed.push({ model: m, error: e.message });

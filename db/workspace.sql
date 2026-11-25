@@ -18,6 +18,10 @@ create table if not exists ws_threads (
   updated_at timestamptz not null default now()
 );
 create index if not exists ws_threads_project_idx on ws_threads (project_id, updated_at desc);
+-- Private threads (2026-11-24): a private thread is never shown to another thread's AI. Existing threads start
+-- shared (false). The website only shares rows where this is exactly false, so before this column exists nothing
+-- is shared at all.
+alter table ws_threads add column if not exists private boolean not null default false;
 
 create table if not exists ws_messages (
   id uuid primary key default gen_random_uuid(),
