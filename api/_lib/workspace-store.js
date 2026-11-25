@@ -23,6 +23,8 @@ const note = (n) => ({
 const CONTROL_COLS = "stopped,updated_at";
 const CONNECTOR_COLS = "id,project_id,kind,name,spec,fingerprint,enabled,created_at";
 const MESSAGE_COLS = "id,thread_id,role,content,model,input_tokens,output_tokens,cost_usd,created_at";
+const FILE_INFO_COLS = "id,thread_id,name,mime,bytes,pages,created_at";
+const inList = (ids) => `in.(${ids.join(",")})`;
 const ACTION_COLS = "id,thread_id,kind,payload,fingerprint,status,proposed_by,result,result_url,created_at,expires_at,decided_at";
 
 export class StoreError extends Error {}
@@ -106,6 +108,11 @@ export function createSupabaseStore(env, f = fetch) {
     getControl: async () => (await call("GET", `ws_control?select=${CONTROL_COLS}&id=eq.1`))[0] ?? null,
     setControl: async (stopped) => one(await call("POST", `ws_control?select=${CONTROL_COLS}`,
       { id: 1, stopped, updated_at: new Date().toISOString() }, "resolution=merge-duplicates,return=representation")),
+    // Images and PDFs (api/_lib/workspace-files.js). Ids are checked by the caller; every read is bound to the thread.
+    addFile: async (f) => one(await call("POST", `ws_files?select=${FILE_INFO_COLS}`, f)),
+    countFiles: async (threadId) => (await call("GET", `ws_files?select=id&thread_id=eq.${threadId}&limit=1000`)).length,
+    fileInfo: (threadId, ids) => call("GET", `ws_files?select=${FILE_INFO_COLS}&thread_id=eq.${threadId}&id=${inList(ids)}`),
+    getFiles: (threadId, ids) => call("GET", `ws_files?select=${FILE_INFO_COLS},data&thread_id=eq.${threadId}&id=${inList(ids)}`),
     // Approval gate (api/_lib/workspace-actions.js). A missing table means no proposals can be saved or approved.
     listActions: (threadId) => call("GET", `ws_actions?select=${ACTION_COLS}&thread_id=eq.${threadId}&order=created_at.desc&limit=50`),
     getAction: async (id) => (await call("GET", `ws_actions?select=${ACTION_COLS}&id=eq.${id}`))[0] ?? null,
@@ -121,7 +128,7 @@ export function createSupabaseStore(env, f = fetch) {
 // `shared` set to "unreadable" makes the shared-threads query fail, to prove nothing is shared then.
 /** @param {{ control?: boolean | "unreadable", shared?: "unreadable" }} [opts] */
 export function createMemoryStore({ control = false, shared = null } = {}) {
-  const projects = [], threads = [], messages = [], notes = [], connectors = [], actions = [];
+  const projects = [], threads = [], messages = [], notes = [], connectors = [], actions = [], files = [];
   let ctl = control;
   let clock = Date.parse("2026-10-21T00:00:00Z");
   const now = () => new Date(clock++).toISOString();
@@ -215,6 +222,15 @@ export function createMemoryStore({ control = false, shared = null } = {}) {
       return { stopped: ctl, updated_at: now() };
     },
     setControl: async (stopped) => { ctl = stopped; return { stopped, updated_at: now() }; },
+    addFile: async (f) => {
+      const row = { id: randomUUID(), ...f, created_at: now() };
+      files.push(row);
+      const { data, ...info } = row;
+      return info;
+    },
+    countFiles: async (threadId) => files.filter((f) => f.thread_id === threadId).length,
+    fileInfo: async (threadId, ids) => files.filter((f) => f.thread_id === threadId && ids.includes(f.id)).map(({ data, ...info }) => info),
+    getFiles: async (threadId, ids) => files.filter((f) => f.thread_id === threadId && ids.includes(f.id)).map((f) => ({ ...f })),
     listActions: async (threadId) => actions.filter((a) => a.thread_id === threadId).sort(byNewest("created_at")).map((a) => structuredClone(a)),
     getAction: async (id) => structuredClone(actions.find((a) => a.id === id) ?? null),
     addAction: async (a) => {

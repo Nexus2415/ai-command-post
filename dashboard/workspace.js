@@ -6,6 +6,8 @@
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = String(text); return e; };
   const MODEL_NAMES = { claude: "Claude", chatgpt: "ChatGPT", gemini: "Gemini", perplexity: "Perplexity" };
   let projectId = null, threadId = null, busy = false, status = null, files = [], lastState = null, threadPrivate = null;
+  // Images and PDFs uploaded to the open thread for the next message (ids from upload_file), up to 3.
+  let uploads = [];
   // The owner's choice of extra AIs for a discussion (null: the default, one more).
   let picks = null;
   // Same markers as api/_lib/workspace-roundtable.js.
@@ -147,6 +149,7 @@
   }
 
   async function openThread(id) {
+    if (id !== threadId) { uploads = []; showFiles(); }
     threadId = id;
     const { thread, messages } = await post("get_thread", { threadId: id });
     $("welcome").hidden = true;
@@ -301,15 +304,44 @@
     showText(box, content);
     if (src) box.append(el("div", "drew", "Drew on: " + src[1]));
   }
+  // Images and PDFs are named by a marker (same as api/_lib/workspace-files.js); each shows as the picture itself,
+  // or a button that opens the PDF. Files are fetched from the server and shown through blob links, never as HTML.
+  const ATTACHED = /<<<attached (image|PDF, \d+ pages?): ([^\n<>#]{1,120}) #([0-9a-f-]{36})>>>/g;
+  const blobs = new Map();
+  async function fileUrl(id) {
+    if (!blobs.has(id)) {
+      const { file } = await post("get_file", { threadId, fileId: id });
+      const bin = atob(file.data), bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      blobs.set(id, URL.createObjectURL(new Blob([bytes], { type: file.mime })));
+    }
+    return blobs.get(id);
+  }
+  function attachedBox(kind, name, id) {
+    const d = el("div", "attached");
+    if (kind === "image") {
+      const img = el("img"); img.alt = name; img.loading = "lazy";
+      d.append(img, el("span", "note", name));
+      fileUrl(id).then((u) => { img.src = u; }, () => { img.replaceWith(el("span", "note", "(image no longer available)")); });
+    } else {
+      const b = el("button", "btn ghost", "Open PDF: " + name + " (" + kind.slice(5) + ")"); b.type = "button";
+      b.addEventListener("click", () => fileUrl(id).then((u) => window.open(u, "_blank", "noopener"), (e) => say(e.message, "err")));
+      d.append(b);
+    }
+    return d;
+  }
   function showText(box, content) {
     let at = 0;
-    for (const f of content.matchAll(FILE_BLOCK)) {
-      const before = content.slice(at, f.index).trim();
+    const blocks = [
+      ...[...content.matchAll(FILE_BLOCK)].map((f) => ({ at: f.index, len: f[0].length, node: () => { const d = el("details", "file"); d.append(el("summary", "", "File: " + f[1]), el("pre", "", f[2])); return d; } })),
+      ...[...content.matchAll(ATTACHED)].map((f) => ({ at: f.index, len: f[0].length, node: () => attachedBox(f[1] === "image" ? "image" : f[1], f[2], f[3]) })),
+    ].sort((a, b) => a.at - b.at);
+    for (const f of blocks) {
+      if (f.at < at) continue;
+      const before = content.slice(at, f.at).trim();
       if (before) box.append(document.createTextNode(before));
-      const d = el("details", "file");
-      d.append(el("summary", "", "File: " + f[1]), el("pre", "", f[2]));
-      box.append(d);
-      at = f.index + f[0].length;
+      box.append(f.node());
+      at = f.at + f.len;
     }
     const rest = content.slice(at).trim();
     if (rest || at === 0) box.append(document.createTextNode(at === 0 ? content : rest));
@@ -324,6 +356,52 @@
       x.addEventListener("click", () => { files.splice(i, 1); showFiles(); });
       chip.append(x); row.append(chip);
     });
+    uploads.forEach((u, i) => {
+      const chip = el("span", "chip", u.name + (u.pages ? " (PDF, " + u.pages + (u.pages === 1 ? " page)" : " pages)") : " (image)"));
+      const x = el("button", "", "Remove"); x.type = "button"; x.setAttribute("aria-label", "Remove " + u.name);
+      x.addEventListener("click", () => { uploads.splice(i, 1); showFiles(); });
+      chip.append(x); row.append(chip);
+    });
+    // What the files add to each reply, at the dearest AI's rates (Claude): an image ~0.3¢, a PDF page up to ~0.4¢.
+    if (uploads.length) {
+      const pages = uploads.reduce((n, u) => n + (u.pages || 0), 0), imgs = uploads.filter((u) => !u.pages).length;
+      const cents = imgs * 0.35 + pages * 0.45;
+      row.append(el("span", "note", "Adds up to about " + (cents < 1 ? cents.toFixed(1) : Math.ceil(cents)) + "¢ to each reply while these are the newest files in the thread."));
+    }
+  }
+  // Images are shrunk here to at most 1568 px on the long side (what the AIs read anyway) and sent as JPEG, so a
+  // phone photo uploads as a few hundred KB. GIFs are sent as they are. Nothing is kept in browser storage.
+  const MAX_SIDE = 1568;
+  async function shrink(file) {
+    if (file.type === "image/gif") return file;
+    const bmp = await createImageBitmap(file);
+    const k = Math.min(1, MAX_SIDE / Math.max(bmp.width, bmp.height));
+    const c = document.createElement("canvas");
+    c.width = Math.max(1, Math.round(bmp.width * k)); c.height = Math.max(1, Math.round(bmp.height * k));
+    const g = c.getContext("2d"); g.fillStyle = "#fff"; g.fillRect(0, 0, c.width, c.height);
+    g.drawImage(bmp, 0, 0, c.width, c.height);
+    return new Promise((ok, no) => c.toBlob((b) => (b ? ok(b) : no(new Error("Couldn't read " + file.name + "."))), "image/jpeg", 0.85));
+  }
+  async function base64(blob) {
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    let bin = "";
+    for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return btoa(bin);
+  }
+  async function upload(file) {
+    if (!threadId) throw new Error("Open a thread first.");
+    if (uploads.length >= 3) throw new Error("Attach at most 3 images or PDFs.");
+    const pdf = file.type === "application/pdf" || /\.pdf$/i.test(file.name);
+    if (pdf && file.size > 3000000) throw new Error(file.name + " is too big: PDFs up to 3 MB work.");
+    if (!pdf && file.size > 25000000) throw new Error(file.name + " is too big.");
+    const blob = pdf ? file : await shrink(file);
+    if (!pdf && blob.size > 1500000) throw new Error(file.name + " is still over 1.5 MB after shrinking.");
+    const name = file.name.replace(/[\u0000-\u001f<>#]/g, "_").slice(0, 120) || "file";
+    const mime = pdf ? "application/pdf" : blob.type || file.type;
+    say("Uploading " + name + "…", "warn");
+    const { file: saved } = await post("upload_file", { threadId, name: pdf || mime === "image/gif" ? name : name.replace(/\.[a-z0-9]+$/i, "") + ".jpg", mime, data: await base64(blob) });
+    uploads.push(saved);
+    say("");
   }
 
   // Run one user action at a time and report failures on the page.
@@ -359,6 +437,7 @@
   $("cFile").addEventListener("change", guard(async () => {
     try {
       for (const file of $("cFile").files) {
+        if (/^image\//.test(file.type) || file.type === "application/pdf" || /\.pdf$/i.test(file.name)) { await upload(file); continue; }
         if (files.length >= 3) throw new Error("Attach at most 3 files.");
         if (file.size > 200000) throw new Error(file.name + " is too big. Text files up to 30,000 characters work.");
         const text = await file.text();
@@ -370,8 +449,9 @@
   }));
   $("cForm").addEventListener("submit", guard(async () => {
     const text = $("cText").value;
-    if (!text.trim() && !files.length) return;
+    if (!text.trim() && !files.length && !uploads.length) return;
     const attachments = files.length ? files : undefined;
+    const picked = uploads.length ? uploads.map((u) => u.id) : undefined;
     $("cSend").disabled = true;
     const ms = status && currentModel() && status.models[currentModel()];
     say(ms && ms.ready ? "Waiting for the reply…" : "");
@@ -381,12 +461,13 @@
       const how = mode();
       let failed = [];
       if (ms && ms.ready && how === "discuss" && also.length) {
-        const ran = await roundtable(text, attachments, [currentModel(), ...also]);
-        if (ran) { $("cText").value = ""; grow(); files = []; showFiles(); }
+        const ran = await roundtable(text, attachments, [currentModel(), ...also], picked);
+        if (ran) { $("cText").value = ""; grow(); files = []; uploads = []; showFiles(); }
         return;
       }
-      if (ms && ms.ready) await post("chat", { threadId, content: text, attachments }).catch(async (e) => { await openThread(threadId); throw e; });
-      else await post("add_message", { threadId, content: text, attachments });
+      if (ms && ms.ready) await post("chat", { threadId, content: text, attachments, files: picked }).catch(async (e) => { await openThread(threadId); throw e; });
+      else await post("add_message", { threadId, content: text, attachments, files: picked });
+      uploads = [];
       if (ms && ms.ready && how === "check") {
         $("cText").value = ""; grow(); files = []; showFiles();
         await openThread(threadId);
@@ -444,11 +525,11 @@
     showMode();
   }
   for (const r of document.querySelectorAll('#cMode input')) r.addEventListener("change", () => setMode(r.value, true));
-  async function roundtable(text, attachments, models) {
-    const est = await post("roundtable_estimate", { threadId, content: text, attachments, models });
+  async function roundtable(text, attachments, models, picked) {
+    const est = await post("roundtable_estimate", { threadId, content: text, attachments, models, files: picked });
     if (!est.fits) throw new Error("Not sent: asking several AIs could cost up to " + money(est.estimate.total) + ". " + est.why);
     say("Step 1 of 3: each AI answers on its own…", "warn");
-    const r1 = await post("roundtable", { step: "start", threadId, content: text, attachments, models });
+    const r1 = await post("roundtable", { step: "start", threadId, content: text, attachments, models, files: picked });
     await openThread(threadId);
     return finishRoundtable(models, r1.roundtableUsd, who(r1.failed));
   }

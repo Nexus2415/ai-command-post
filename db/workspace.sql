@@ -128,3 +128,20 @@ create table if not exists ws_actions (
 create index if not exists ws_actions_thread_idx on ws_actions (thread_id, created_at desc);
 alter table ws_actions enable row level security;
 revoke all on ws_actions from anon, authenticated;
+
+-- Images and PDFs in a thread (2026-11-25; api/_lib/workspace-files.js). The file is kept here as base64 so it
+-- never needs a public link; only the website's server (service key) can read it, and only for its own thread.
+-- Messages carry a short marker naming the file. A missing table only means uploads aren't available yet.
+create table if not exists ws_files (
+  id uuid primary key default gen_random_uuid(),
+  thread_id uuid not null references ws_threads(id) on delete cascade,
+  name text not null check (char_length(name) between 1 and 120),
+  mime text not null check (mime in ('image/png', 'image/jpeg', 'image/gif', 'image/webp', 'application/pdf')),
+  bytes integer not null check (bytes between 1 and 3000000),
+  pages integer not null default 0 check (pages between 0 and 30),
+  data text not null check (char_length(data) <= 4000000),
+  created_at timestamptz not null default now()
+);
+create index if not exists ws_files_thread_idx on ws_files (thread_id, created_at);
+alter table ws_files enable row level security;
+revoke all on ws_files from anon, authenticated;

@@ -62,7 +62,13 @@ In Vercel, open **arnexyia-command-post → Settings → Environment Variables**
 ## Step 7: text files
 - **Attach text file** under the message box adds up to 3 text files (notes, CSV, JSON, code and similar) to the next message. A message can be just files.
 - The page reads each file as text and sends it inside the message, marked with its name; nothing is uploaded or stored anywhere else. The 32,000-character message limit covers the files too.
-- In the conversation each file shows as a block you can open and close. Images and PDFs aren't supported yet.
+- In the conversation each file shows as a block you can open and close.
+
+## Step 7b: images and PDFs
+- The same **+** button takes images (PNG, JPEG, GIF, WebP; phone photos are shrunk to 1568 px first) and PDFs (up to 3 MB and 30 pages). Up to 3 per message, 30 per thread.
+- Each is uploaded to the workspace's own database (table `ws_files`, `db/workspace.sql`), readable only by the website's server and only within its thread. The message carries a short marker naming the file; the page shows the picture, or an "Open PDF" button.
+- Claude and ChatGPT see the thread's 3 newest files with every reply, so follow-up questions work. Perplexity can't open files and is told so. Through OpenRouter, PDFs are read by its free text parser (scanned PDFs without text come through empty).
+- Cost: an image adds up to ~0.3¢ and a PDF page up to ~0.4¢ per reply at Claude's rates (estimates count 1,600 tokens per image and 2,000 per PDF page, so the caps see them before any call). The page shows the figure next to the files.
 
 ## Step 8: MCP plugins
 - Any remote MCP server (Streamable HTTP) can be added as a plugin by listing it in `ACP_MCP_SERVERS`, for example:
