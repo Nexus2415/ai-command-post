@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { handle } from "../api/workspace.js";
 import { createMemoryStore } from "../api/_lib/workspace-store.js";
-import { RATES, SUSPENDED_MODELS, MAX_HISTORY_CHARS, trimHistory } from "../api/_lib/workspace-models.js";
+import { RATES, SUSPENDED_MODELS, MAX_HISTORY_CHARS, trimHistory, runChat } from "../api/_lib/workspace-models.js";
 import { DEFAULT_RATES } from "../src/budget.ts";
 import { SUSPENDED_AGENTS } from "../src/config.ts";
 
@@ -184,4 +184,23 @@ test("a project holds at most 20 notes of up to 2,000 characters", async () => {
   assert.equal((await call("add_note", { projectId: p.project.id, content: "x".repeat(2001) })).status, 400);
   for (let i = 0; i < 20; i++) assert.equal((await call("add_note", { projectId: p.project.id, content: `n${i}` })).status, 200);
   assert.equal((await call("add_note", { projectId: p.project.id, content: "one more" })).status, 409);
+});
+
+
+test("tool-only provider completion reports incomplete analysis and preserves usage", async () => {
+  let calls = 0;
+  const f = (async () => new Response(JSON.stringify({
+    content: ++calls === 1 ? [{ type: "tool_use", id: "tool-1", name: "linear_search_issues", input: {} }] : [],
+    usage: { input_tokens: 10, output_tokens: 2 },
+  }))) as typeof fetch;
+  const out = await runChat(base, "claude", [{role:"user", content:"Audit"}], {
+    f, tools: [{ name:"linear_search_issues", description:"Synthetic lookup", parameters:{type:"object",properties:{}} }],
+    runTool: async () => ({ok:true, text:"Synthetic result", usd:0}),
+  });
+  assert.match(out.text, /did not return an analysis/);
+  assert.match(out.text, /Tools used: linear_search_issues/);
+  assert.equal(calls, 2);
+  assert.equal(out.inputTokens, 20);
+  assert.equal(out.outputTokens, 4);
+  assert.ok(out.costUsd > 0);
 });
