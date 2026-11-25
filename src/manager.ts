@@ -465,6 +465,8 @@ export class Manager {
 
     // 6. Atomic claim + budget through the broker. If it cannot answer, nothing is dispatched.
     if (!this.live("claim")) return this.halted(null, "claim");
+    const claimRefusal = this.executionRefusal(job);
+    if (claimRefusal) return { status: "BLOCKED", reason: claimRefusal };
     const profile = this.p.executors.find((x) => x.key === executor)!;
     let claim: BrokerResult;
     try {
@@ -601,12 +603,55 @@ export class Manager {
 
   // --- dispatch, verification, reconciliation -------------------------------------------------------------------
 
+  /**
+   * Admission is not a perpetual execution grant. Re-read the trusted ports at
+   * each worker boundary; the immutable admitted expiry/budget remain ceilings.
+   * This is a local synthetic seam, not a substitute for a transactional
+   * production capability lease or gateway authorization.
+   */
+  private executionRefusal(job: Job): string | null {
+    try {
+      const now = this.p.now().getTime();
+      const expiry = Date.parse(job.permissionsExpireAt);
+      if (!Number.isFinite(now) || !Number.isFinite(expiry) || now >= expiry) return "permission_expired";
+      const grant = this.p.authority.grants.find(g => g.intent === job.intent);
+      if (!grant || !job.permissions.includes(job.intent)) return "permission_missing";
+      const currentExpiry = Date.parse(grant.expiresAt);
+      if (!Number.isFinite(currentExpiry) || now >= currentExpiry) return "permission_expired";
+      if (job.tier !== "green" || (grant.maxTier !== "green" && grant.maxTier !== "yellow")) return "permission_tier_denied";
+      const profile = this.p.executors.find(x => x.key === job.executor);
+      if (!profile || profile.configured !== true) return "executor_unconfigured";
+      if (profile.suspended !== false || SUSPENDED_AGENTS.includes(job.executor)) return "executor_suspended";
+      if (profile.costTier !== "free" && profile.costTier !== "paid") return "unknown_cost_tier";
+      if (profile.costTier === "paid" && this.p.authority.paidExecutionApproved !== true) return "unapproved_provider_cost";
+      if (!Number.isSafeInteger(profile.worstCaseMicros) || profile.worstCaseMicros < 0 ||
+          !Number.isSafeInteger(grant.maxBudgetMicros) || grant.maxBudgetMicros < 0 ||
+          !Number.isSafeInteger(job.maxBudgetMicros) || job.maxBudgetMicros < 0 ||
+          profile.worstCaseMicros > Math.min(grant.maxBudgetMicros, job.maxBudgetMicros) ||
+          (profile.costTier === "free" && profile.worstCaseMicros !== 0)) return "insufficient_budget";
+      return null;
+    } catch {
+      return "authority_unavailable";
+    }
+  }
+
+  private async refuseDispatch(job: Job, reason: string): Promise<Decision> {
+    // Once the broker acknowledged dispatch, keep the conservative unknown
+    // outcome/reconciliation path. Never retry on a revoked authority.
+    if (job.state === "dispatched") return this.ambiguous(job, reason);
+    const decision = await this.stop(job, "authority_recheck");
+    await this.audit(job.tenantId, job.taskId, job.eventId, job, "authority_refused", reason);
+    return { ...decision, reason };
+  }
+
   /** Runs one admitted job on its one worker. Checks the kill switch before every forward step. */
   async dispatch(jobId: string): Promise<Decision> {
     const job = this.jobs.get(jobId);
     if (!job) return { status: "REJECTED", reason: "unknown_job" };
     if (job.state !== "admitted" || job.attemptId === null || job.fence === null) return { status: "REJECTED", reason: `job_not_dispatchable:${job.state}`, job };
     if (!this.live("dispatch")) return this.stop(job, "dispatch");
+    const dispatchRefusal = this.executionRefusal(job);
+    if (dispatchRefusal) return this.refuseDispatch(job, dispatchRefusal);
     const { attemptId, fence } = job;
     let step: BrokerStep;
     try {
@@ -623,6 +668,8 @@ export class Manager {
       return this.halted(job, "worker_start");
     }
 
+    const workerRefusal = this.executionRefusal(job);
+    if (workerRefusal) return this.refuseDispatch(job, workerRefusal);
     let result: WorkerResult;
     try {
       result = await this.p.worker.run(job);
@@ -726,6 +773,8 @@ export class Manager {
       return { status: "BLOCKED", reason: "retries_exhausted", job };
     }
     if (!this.live("retry")) return this.halted(job, "retry");
+    const retryRefusal = this.executionRefusal(job);
+    if (retryRefusal) return { status: "BLOCKED", reason: retryRefusal, job };
     const profile = this.p.executors.find((x) => x.key === job.executor);
     if (!profile) return { status: "BLOCKED", reason: "executor_unconfigured", job };
     let t: BrokerResult;

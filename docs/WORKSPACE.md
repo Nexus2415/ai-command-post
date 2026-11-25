@@ -69,6 +69,26 @@ In Vercel, open **arnexyia-command-post → Settings → Environment Variables**
 - Up to 5 servers. A server that can't be reached is skipped and the reply goes ahead. The page lists each server under Plugins. Claude and ChatGPT can use them; Perplexity and side-by-side answers don't use plugins.
 - Before naming a tool, check what it reads. A tool that fetches any web page brings back the risk described in Step 4.
 
+## Step 9: Tools and connectors page (add and build your own, read-only)
+Open **Tools and connectors** from the workspace (`/tools.html`).
+- **Add a connector you already have**: an MCP server, by address. Click **Check what it offers**; the page lists the server's tools. Only tools the server marks read-only, and whose names don't sound like a change (send, delete, buy…), can be ticked. Each tool gets only the simple inputs the server lists.
+- **Build a new look-up tool**: name, what it does, its https address, the inputs the AI fills in (text, number or yes/no; they go into the address as `?name=value`), and what comes back. Always a GET.
+- **Review, then confirm.** Nothing is usable until you have read the plain-language review (where it goes, what the AI can send, what comes back, the key, who can use it, the cost) and pressed **Confirm and turn on**. The confirmation covers exactly what you saw; any change needs a new review.
+- **Turn off** takes effect on the very next reply. **Delete** removes it. Connectors set in Vercel (`ACP_MCP_SERVERS`, Step 8) are listed too but can only be changed there.
+- Who can use it: every project, or one project.
+
+What the builder refuses, and why:
+- Anything that writes, sends, posts, buys, deletes or changes (any method but GET, and names, descriptions or addresses with words like send, post, delete, buy, pay, update). Outward actions wait for the approval gate.
+- Any address that isn't public https: IP addresses, localhost, `.internal`, `.local`, `.lan`, `.corp` and similar names, custom ports, usernames in the address. When a tool runs, every address its name resolves to is checked again at connect time, so a public name pointing at a private address (for example 169.254.169.254) is blocked too. Redirects are never followed.
+- Any key typed into the page, or a key-like part of an address (`?api_key=…`). A key lives in a Vercel variable: `ACP_TOOL_TOKEN_…` for a look-up tool, `ACP_MCP_TOKEN_…` for a connector. The page only ever holds the variable's name. One key variable can only go to one host.
+- Anything the workspace's rules (the harm rules) refuse.
+
+Every use of a tool passes the Stop everything switch and the rules gate, is counted against the spend caps (a nominal $0.001 per call, so a runaway loop stops at the cap), and is listed under the reply. What a tool sends back reaches the AI wrapped as untrusted data, never instructions.
+
+Owner setup: run the latest `db/workspace.sql` once (it adds the `ws_connectors` table). Until then the page says the setup step is needed and chat works as before.
+
+Known limits: a GET can still have side effects on a badly designed service, so only point the builder at look-up addresses. Whatever the AI types into an input goes to that service, as with any search tool.
+
 ## Everything the owner does to start using the workspace
 1. Merge the workspace PRs in order (#61, #62, #63, #64, #65). Each merge goes live.
 2. Create the free Supabase project and run `db/workspace.sql` (see Owner setup above). If you ran an earlier copy, run the latest one again; it is safe to re-run.

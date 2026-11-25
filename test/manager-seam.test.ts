@@ -1029,3 +1029,93 @@ test("SYNTHETIC restart: a settled attempt is complete only with recorded eviden
     assert.equal(rec4.state, "unknown", "not retryable until reconciled");
   });
 });
+
+
+// ARN-134: the admission snapshot is not an evergreen capability.
+test("ARN-134 original grant expiry blocks dispatch even if current grant was extended", async () => {
+  await offline(async () => {
+    const r = rig();
+    const job = (await r.m.handleEvent(ev())).job!;
+    r.ports.authority.grants[0]!.expiresAt = "2026-10-14T21:00:00Z";
+    r.ports.now = () => new Date(FUTURE);
+    const d = await r.m.dispatch(job.jobId);
+    assert.equal(d.status, "HALTED");
+    assert.equal(d.reason, "permission_expired");
+    assert.equal(r.worker.calls, 0);
+    assert.ok(!r.broker.calls.includes("markDispatched"));
+    assert.equal(r.broker.attemptState(job.attemptId!), "released");
+  });
+});
+
+test("ARN-134 revoked grant, suspended worker and reduced budget prevent dispatch", async () => {
+  await offline(async () => {
+    const cases: { change: (r: Rig) => void; reason: string }[] = [
+      { change: r => { r.ports.authority.grants = []; }, reason: "permission_missing" },
+      { change: r => { r.ports.executors[0]!.suspended = true; }, reason: "executor_suspended" },
+      { change: r => { r.ports.executors[0]!.configured = false; }, reason: "executor_unconfigured" },
+      { change: r => { r.ports.executors[0]!.costTier = "paid"; }, reason: "unapproved_provider_cost" },
+      { change: r => { r.ports.executors[0]!.worstCaseMicros = 1; }, reason: "insufficient_budget" },
+      { change: r => { r.ports.now = () => new Date(NaN); }, reason: "permission_expired" },
+    ];
+    for (const c of cases) {
+      const r = rig();
+      const job = (await r.m.handleEvent(ev())).job!;
+      c.change(r);
+      const d = await r.m.dispatch(job.jobId);
+      assert.equal(d.reason, c.reason);
+      assert.equal(r.worker.calls, 0);
+      assert.ok(!r.broker.calls.includes("markDispatched"));
+      assert.equal(r.broker.attemptState(job.attemptId!), "released");
+    }
+  });
+});
+
+test("ARN-134 grant revoked during dispatch audit prevents worker start and preserves unknown outcome", async () => {
+  await offline(async () => {
+    const r = rig();
+    const job = (await r.m.handleEvent(ev())).job!;
+    const append = r.ports.audit.append.bind(r.ports.audit);
+    r.ports.audit.append = async e => {
+      await append(e);
+      if (e.step === "dispatched") r.ports.authority.grants = [];
+    };
+    const d = await r.m.dispatch(job.jobId);
+    assert.equal(d.status, "BLOCKED");
+    assert.equal(d.reason, "unknown_outcome:permission_missing");
+    assert.equal(d.job!.state, "unknown");
+    assert.equal(r.worker.calls, 0);
+    assert.equal(r.broker.attemptState(job.attemptId!), "unknown");
+    assert.equal((await r.m.retry(job.jobId)).reason, "job_not_retryable:unknown");
+  });
+});
+
+test("ARN-134 expired or revoked grant prevents retry reservation", async () => {
+  await offline(async () => {
+    for (const revoked of [false, true]) {
+      const r = rig();
+      const job = (await r.m.handleEvent(ev())).job!;
+      r.verifier.mode = "reject";
+      assert.equal((await r.m.dispatch(job.jobId)).job!.state, "failed");
+      if (revoked) r.ports.authority.grants = [];
+      else r.ports.now = () => new Date(FUTURE);
+      assert.equal((await r.m.retry(job.jobId)).reason, revoked ? "permission_missing" : "permission_expired");
+      assert.ok(!r.broker.calls.includes("takeover"));
+      assert.equal(r.worker.calls, 1);
+    }
+  });
+});
+
+test("ARN-134 expiry during admission audit prevents initial claim", async () => {
+  await offline(async () => {
+    const r = rig();
+    const append = r.ports.audit.append.bind(r.ports.audit);
+    r.ports.audit.append = async e => {
+      await append(e);
+      if (e.step === "admission_decided") r.ports.now = () => new Date(FUTURE);
+    };
+    const d = await r.m.handleEvent(ev());
+    assert.equal(d.reason, "permission_expired");
+    assert.ok(!r.broker.calls.includes("claimAndReserve"));
+    assert.equal(r.worker.calls, 0);
+  });
+});

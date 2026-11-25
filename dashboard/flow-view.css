@@ -1,0 +1,78 @@
+/* Workflow flow chart (flow-view.js). Designed in Lovable as a mockup, hand-ported here. Presentation only.
+   Every state shows an icon AND a word, so nothing depends on colour alone. */
+.convo > header{flex-wrap:wrap}
+.fv-toggle{display:inline-flex;border:1px solid var(--line);margin:0;flex:none}
+.fv-toggle button{min-height:44px;padding:0 16px;border:0;background:transparent;color:var(--muted);font:500 14px var(--mono);letter-spacing:.04em;text-transform:uppercase;cursor:pointer}
+.fv-toggle button[aria-pressed="true"]{background:var(--olive,var(--accent-soft));color:var(--fg);box-shadow:inset 0 -3px 0 var(--sand,var(--accent))}
+.convo{grid-template-rows:auto auto minmax(0,1fr) auto}
+.fv{overflow:auto;min-width:0;padding:0 12px 24px;--wire:#6fd1b4;--wire-dim:var(--line)}
+.fv[hidden],#mList[hidden]{display:none}
+.fv .empty{padding:16px;font-size:15px}
+
+/* Status strip: the current step and the running cost, always visible at the top of the chart. */
+.fv-strip{position:sticky;top:0;z-index:5;display:flex;flex-wrap:wrap;justify-content:space-between;gap:4px 12px;margin:0 -12px 12px;padding:10px 14px;
+  background:var(--panel-2);border-bottom:1px solid var(--line);font:500 15px/1.4 var(--mono)}
+.fv-strip[data-state="working"]{border-bottom:2px solid var(--amber,var(--warn));color:var(--fg)}
+.fv-strip[data-state="working"] .fv-now{color:var(--amber,var(--warn))}
+.fv-cost{color:var(--sand,var(--accent));font-weight:700}
+.fv-nav{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}
+.fv-count{font:500 14px var(--mono);color:var(--muted)}
+
+/* The chart: steps top to bottom, joined by glowing wires. */
+.fv-chart{list-style:none;margin:0 auto;padding:0;max-width:720px}
+.fv-step{display:grid;grid-template-columns:minmax(0,1fr);justify-items:center;min-width:0}
+.fv-label{justify-self:stretch;border-top:1px solid var(--line);padding:10px 2px 10px;font:500 14px var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--sand,var(--accent))}
+.fv-wire{width:3px;height:34px;background:var(--wire);box-shadow:0 0 8px var(--wire);border-radius:2px}
+.fv-wire[data-state="waiting"]{background:repeating-linear-gradient(180deg,var(--wire-dim) 0 5px,transparent 5px 10px);box-shadow:none}
+.fv-wire[data-state="working"]{background:repeating-linear-gradient(180deg,var(--amber,var(--warn)) 0 6px,transparent 6px 12px);background-size:3px 12px;
+  box-shadow:0 0 10px var(--amber,var(--warn));animation:fv-flow .8s linear infinite}
+@keyframes fv-flow{to{background-position:0 12px}}
+.fv-row{display:grid;grid-template-columns:minmax(0,1fr);gap:10px;width:100%;min-width:0;justify-items:center}
+.fv-row.fv-many{grid-template-columns:repeat(auto-fit,minmax(140px,1fr))}
+
+/* Nodes: big tap targets, readable text. */
+.fv-node{box-sizing:border-box;min-width:0;overflow-wrap:anywhere;display:grid;gap:6px;justify-items:start;text-align:left;width:100%;max-width:440px;min-height:64px;padding:12px 14px;cursor:pointer;
+  background:linear-gradient(180deg,var(--panel),var(--panel-2));color:var(--fg);border:2px solid var(--wire);border-radius:4px;
+  box-shadow:0 0 14px -6px var(--wire);font:400 15px/1.35 var(--body)}
+.fv-node:hover{filter:brightness(1.12)}
+.fv-node:focus-visible{outline:3px solid var(--amber,var(--accent));outline-offset:3px}
+.fv-head{display:flex;align-items:center;gap:10px;font-weight:600;font-size:16px}
+.fv-head .ins{flex:none}
+.fv-state{display:inline-flex;align-items:center;gap:6px;font:700 14px var(--mono);letter-spacing:.04em;text-transform:uppercase}
+.fv-icon{flex:none}
+.fv-meta{font:500 14px/1.4 var(--mono);color:var(--muted)}
+.fv-shape{width:28px;height:28px;flex:none;background:var(--sand,var(--accent))}
+.fv-shape-question{clip-path:polygon(0 0,100% 0,100% 75%,40% 75%,15% 100%,15% 75%,0 75%)}
+.fv-shape-gate{clip-path:polygon(30% 0,70% 0,100% 30%,100% 70%,70% 100%,30% 100%,0 70%,0 30%)}
+.fv-shape-tools{clip-path:circle(50%);background:var(--wire)}
+.fv-gate{clip-path:polygon(14px 0,calc(100% - 14px) 0,100% 14px,100% calc(100% - 14px),calc(100% - 14px) 100%,14px 100%,0 calc(100% - 14px),0 14px);border:0;box-shadow:inset 0 0 0 2px var(--wire)}
+
+.fv-node[data-state="done"] .fv-state,.fv-node[data-state="passed"] .fv-state{color:var(--good)}
+.fv-node[data-state="working"]{border-color:var(--amber,var(--warn));animation:fv-pulse 1.6s ease-in-out infinite}
+.fv-node[data-state="working"] .fv-state{color:var(--amber,var(--warn))}
+.fv-node[data-state="waiting"]{border-style:dashed;border-color:var(--line);box-shadow:none;background:var(--panel-2)}
+.fv-node[data-state="waiting"] .fv-state{color:var(--muted)}
+.fv-node[data-state="refused"],.fv-node[data-state="failed"],.fv-node[data-state="stopped"]{border-color:var(--bad);border-width:3px;box-shadow:0 0 14px -6px var(--bad)}
+.fv-node[data-state="refused"] .fv-state,.fv-node[data-state="failed"] .fv-state,.fv-node[data-state="stopped"] .fv-state{color:var(--bad)}
+.fv-gate[data-state="refused"]{box-shadow:inset 0 0 0 3px var(--bad)}
+.fv-gate[data-state="working"]{box-shadow:inset 0 0 0 2px var(--amber,var(--warn))}
+@keyframes fv-pulse{50%{box-shadow:0 0 0 4px rgba(242,180,65,.35),0 0 22px rgba(242,180,65,.5)}}
+
+/* Detail sheet: slides up from the bottom on a phone. */
+.fv-sheet{width:min(720px,100%);max-width:100%;max-height:85dvh;margin:auto auto 0;padding:0;border:1px solid var(--line);border-bottom:0;border-radius:8px 8px 0 0;
+  background:var(--panel);color:var(--fg);overflow:auto}
+.fv-sheet::backdrop{background:rgba(6,9,7,.8)}
+.fv-sheet-top{position:sticky;top:0;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;background:var(--panel);border-bottom:1px solid var(--line)}
+.fv-sheet-title{margin:0;font-size:20px}
+.fv-close{min-height:44px;min-width:88px}
+.fv-body{padding:12px 16px 24px;font-size:15px;line-height:1.5}
+.fv-body h4{margin:16px 0 6px;font:500 14px var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--sand,var(--accent))}
+.fv-fact{margin:6px 0}
+.fv-text{white-space:pre-wrap;overflow-wrap:anywhere;max-height:40dvh;overflow:auto;margin:0;padding:10px 12px;border-left:3px solid var(--line);background:var(--panel-2);font:15px/1.5 var(--body)}
+.fv-list{margin:0;padding-left:20px;display:grid;gap:6px;overflow-wrap:anywhere}
+
+@media (prefers-reduced-motion:reduce){
+  .fv-wire[data-state="working"],.fv-node[data-state="working"]{animation:none}
+  .fv-node[data-state="working"]{border-width:4px}
+}
+@media (max-width:640px){.fv-row.fv-many{grid-template-columns:1fr}}

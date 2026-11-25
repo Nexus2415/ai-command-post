@@ -217,7 +217,7 @@ test("before the database update, threads read as private: null (not shared)", a
 });
 
 test("no tool or plugin can read workspace threads", () => {
-  for (const f of ["api/_lib/workspace-plugins.js", "api/_lib/workspace-mcp.js"]) {
+  for (const f of ["api/_lib/workspace-plugins.js", "api/_lib/workspace-mcp.js", "api/_lib/workspace-connectors.js"]) {
     const src = readFileSync(f, "utf8");
     assert.doesNotMatch(src, /workspace-store|sharedContext|listMessages|ws_messages|ws_threads/, f);
   }

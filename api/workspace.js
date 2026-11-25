@@ -5,7 +5,11 @@ import { hasSitePassword, isSameOrigin } from "./_lib/site-auth.js";
 import { MODELS, StoreError, createSupabaseStore, isId, workspaceConfigured } from "./_lib/workspace-store.js";
 import { BudgetStop, ModelError, estimateUsd, isPaid, mergeTurns, modelStatus, runChat, trimHistory } from "./_lib/workspace-models.js";
 import { pluginStatus, readyTools, runTool, urlsIn } from "./_lib/workspace-plugins.js";
-import { mcpStatus, mcpTools } from "./_lib/workspace-mcp.js";
+import { mcpServers, mcpStatus, mcpTools } from "./_lib/workspace-mcp.js";
+import {
+  MAX_CONNECTORS, checkHttpTool, checkMcpConnector, connectorTools, describeRow, fingerprint, guardedFetch, inspectMcp,
+  summary, tokenReuseProblem,
+} from "./_lib/workspace-connectors.js";
 import { STOP_MARK, harmCheck, logRefusal, refusalText, textOf } from "./_lib/workspace-rules.js";
 import { CHANGED, inheritedSources, sharedFor, sourcesLine, stillShared, stripSources } from "./_lib/workspace-shared.js";
 import { CRITIQUE_MARK, SYNTHESIS_MARK, critiquePrompt, estimateRounds, roundtableState, synthesisPrompt } from "./_lib/workspace-roundtable.js";
@@ -123,6 +127,43 @@ const reply = (store, threadId, model, text, r) => store.addMessage(threadId, {
   input_tokens: r.inputTokens, output_tokens: r.outputTokens, cost_usd: Math.round(r.costUsd * 1e6) / 1e6,
 });
 
+
+// Saved connectors. A missing table (setup step not done yet) or a storage error means none: chat carries on
+// without them, and the Tools page says the setup step is needed.
+async function savedConnectors(store) {
+  try { return { rows: await store.listConnectors(), ready: true }; } catch { return { rows: [], ready: false }; }
+}
+// Checks a connector or custom tool from the Tools page. Returns an error response, or { spec, fp, summary }.
+async function checkConnector(store, args, env, deps) {
+  const kind = args.kind;
+  if (kind !== "http" && kind !== "mcp") return error(400, "Pick a connector or a custom tool.");
+  const raw = args.spec && typeof args.spec === "object" && !Array.isArray(args.spec) ? args.spec : null;
+  if (!raw) return error(400, "Nothing to check.");
+  let project = null;
+  if (raw.projectId != null) {
+    if (!isId(raw.projectId) || !(project = await store.getProject(raw.projectId))) return error(400, "Unknown project.");
+  }
+  const { rows, ready } = await savedConnectors(store);
+  if (!ready) return error(503, "Connector storage isn't set up yet: the one-time setup step (the ws_connectors table) is still to do.");
+  const taken = new Set([...rows.map((r) => r.name), ...mcpServers(env).map((s) => s.name)]);
+  let checked;
+  if (kind === "http") checked = checkHttpTool(raw, env, taken);
+  else {
+    const halt = await stopReason(store);
+    if (halt) return stopped(halt);
+    const seen = await inspectMcp(env, raw, deps.net);
+    if (seen.problems.length) return { status: 422, body: { error: "Not saved. See the reasons below.", problems: seen.problems } };
+    checked = checkMcpConnector(raw, env, seen.tools, taken);
+  }
+  const { spec, problems } = checked;
+  if (!problems.length) {
+    const reuse = tokenReuseProblem(spec, rows, env);
+    if (reuse) problems.push(reuse);
+  }
+  if (problems.length) return { status: 422, body: { error: "Not saved. See the reasons below.", problems } };
+  return { spec, fp: fingerprint(spec), summary: summary(spec, { projectName: project?.name, caps: caps(env) }), count: rows.length };
+}
+
 const ACTIONS = Object.freeze({
   async list_projects(store) {
     return { projects: await store.listProjects() };
@@ -188,6 +229,52 @@ const ACTIONS = Object.freeze({
     if (!isId(args.noteId)) return error(400, "Unknown note.");
     return (await store.deleteNote(args.noteId)) ? { deleted: true } : error(404, "Unknown note.");
   },
+  // Tools page: every connector and custom tool, what each can reach, and whether it is on.
+  async tools_overview(store, args, env) {
+    const { rows, ready } = await savedConnectors(store);
+    const projects = await store.listProjects();
+    const name = (id) => projects.find((p) => p.id === id)?.name ?? null;
+    return {
+      setupNeeded: !ready, caps: caps(env),
+      connectors: rows.map((r) => ({ ...describeRow(r), summary: summary(r.spec, { projectName: name(r.project_id), caps: caps(env) }) })),
+      // Servers set in Vercel (ACP_MCP_SERVERS) are shown but can only be changed there.
+      fromVercel: mcpServers(env).map((s) => ({ name: s.name, host: new URL(s.url).host, tools: s.tools.map((t) => t.name), keyVar: s.tokenVar })),
+      projects: projects.map((p) => ({ id: p.id, name: p.name })),
+    };
+  },
+  // Asks an MCP server which tools it offers, so the owner can pick. Nothing is saved.
+  async connector_inspect(store, args, env, deps) {
+    const halt = await stopReason(store);
+    if (halt) return stopped(halt);
+    const out = await inspectMcp(env, args, deps.net);
+    return out.problems.length ? { status: 422, body: { error: "Couldn't check that server.", problems: out.problems } } : { tools: out.tools };
+  },
+  // Checks a definition and returns the plain-language summary and the confirmation code. Nothing is saved.
+  async connector_preview(store, args, env, deps) {
+    const c = await checkConnector(store, args, env, deps);
+    if (c.status) return c;
+    return { spec: c.spec, summary: c.summary, confirm: c.fp };
+  },
+  // Saves it, only when `confirm` matches what the owner was shown (any change needs a new preview).
+  async connector_save(store, args, env, deps) {
+    const c = await checkConnector(store, args, env, deps);
+    if (c.status) return c;
+    if (args.confirm !== c.fp) return error(409, "This changed since you reviewed it. Review it again and confirm.");
+    if (c.count >= MAX_CONNECTORS) return error(409, `Up to ${MAX_CONNECTORS} connectors and tools. Delete one first.`);
+    const row = await store.addConnector({ project_id: c.spec.projectId, kind: c.spec.kind, name: c.spec.name, spec: c.spec, fingerprint: c.fp, enabled: true });
+    console.warn(JSON.stringify({ event: "connector_added", kind: row.kind, name: row.name, host: new URL(row.spec.url).host }));
+    return { connector: describeRow(row) };
+  },
+  // On/off, instantly: a switched-off connector is left out of the very next reply.
+  async connector_set_enabled(store, args) {
+    if (!isId(args.id) || typeof args.enabled !== "boolean") return error(400, "Say which connector, and on or off.");
+    const row = await store.setConnectorEnabled(args.id, args.enabled);
+    return row ? { connector: describeRow(row) } : error(404, "Unknown connector.");
+  },
+  async connector_delete(store, args) {
+    if (!isId(args.id)) return error(400, "Unknown connector.");
+    return (await store.deleteConnector(args.id)) ? { deleted: true } : error(404, "Unknown connector.");
+  },
   // The "Stop everything" switch. Reading it never fails: an unreadable switch reports stopped.
   async control(store) {
     const why = await stopReason(store);
@@ -210,8 +297,11 @@ const ACTIONS = Object.freeze({
       return [m, { ready: s.ready, reason: s.reason, via: s.via ?? null }];
     }));
     const why = await stopReason(store);
+    const own = Object.fromEntries((await savedConnectors(store)).rows.map((r) => [`conn_${r.name}`, {
+      title: r.kind === "http" ? `Tool: ${r.name}` : `Connector: ${r.name}`, description: describeRow(r).host, ready: r.enabled,
+    }]));
     return {
-      models, plugins: { ...pluginStatus(env), ...mcpStatus(env) },
+      models, plugins: { ...pluginStatus(env), ...mcpStatus(env), ...own },
       control: { stopped: Boolean(why), reason: why },
       budget: { ...caps(env), monthSpent: spent.monthUsd, threadSpent: threadId ? spent.threadUsd : null },
     };
@@ -251,7 +341,11 @@ const ACTIONS = Object.freeze({
     if (!(await stillShared(store, thread, shared))) return error(409, CHANGED);
     const saved = content ? await store.addMessage(thread.id, { role: "user", content }) : null;
     // MCP servers are asked for their tools only for models that can use tools.
-    const tools = [...readyTools(env), ...(model === "perplexity" ? [] : await mcpTools(env, deps.fetch))];
+    // Connectors and custom tools from the Tools page: switched on, confirmed, and for this project (or all).
+    const tools = [...readyTools(env), ...(model === "perplexity" ? [] : [
+      ...await mcpTools(env, deps.fetch),
+      ...await connectorTools(env, (await savedConnectors(store)).rows, thread.project_id, deps.net).catch(() => []),
+    ])];
     // Web access for this reply: pages the owner linked may be read; search results add more. Each web call is
     // checked against the caps first (web calls are always paid) and listed under the reply.
     const allowedUrls = new Set(urlsIn(asked));
@@ -457,7 +551,8 @@ async function runRound1(store, env, deps, { thread, content, models, sent, shar
 
 // Pure request handler, so tests can drive it with a memory store.
 export async function handle(req, env, makeStore = createSupabaseStore, deps = {}) {
-  const d = { fetch: deps.fetch ?? fetch, now: deps.now ?? (() => new Date()) };
+  // `net` is the network for connectors and custom tools: guarded (public addresses only) in production.
+  const d = { fetch: deps.fetch ?? fetch, net: deps.net ?? deps.fetch ?? guardedFetch, now: deps.now ?? (() => new Date()) };
   if (!env.ACP_SITE_PASSWORD) return error(503, "The website isn't configured yet.");
   if (!hasSitePassword(req, env)) return error(401, "Wrong password");
   if (req.method !== "POST") return error(405, "POST only");
