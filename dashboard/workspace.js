@@ -293,13 +293,18 @@
   // An answer that drew on other threads ends with this line (same as api/_lib/workspace-shared.js); it is shown
   // as a small "Drew on" note under the answer.
   const SOURCES_LINE = /\n*Drew on other threads: ([^\n]*)/;
+  // A light-model answer ends with this line (same as api/_lib/workspace-shared.js ROUTE_LABEL).
+  const ROUTE_LINE = /\n*Answered by the light model \(smart routing\): ([^\n]*)/;
   // Attached files arrive folded into the message between markers; each shows as a collapsible block.
   const FILE_BLOCK = /<<<file: ([^\n]{1,120})>>>\n([\s\S]*?)\n<<<end of file>>>/g;
   function showContent(box, content) {
     const src = content.match(SOURCES_LINE);
     if (src) content = content.replace(SOURCES_LINE, "");
+    const route = content.match(ROUTE_LINE);
+    if (route) content = content.replace(ROUTE_LINE, "");
     showText(box, content);
     if (src) box.append(el("div", "drew", "Drew on: " + src[1]));
+    if (route) box.append(el("div", "drew", "⚡ Light model: " + route[1]));
   }
   function showText(box, content) {
     let at = 0;
@@ -385,7 +390,7 @@
         if (ran) { $("cText").value = ""; grow(); files = []; showFiles(); }
         return;
       }
-      if (ms && ms.ready) await post("chat", { threadId, content: text, attachments }).catch(async (e) => { await openThread(threadId); throw e; });
+      if (ms && ms.ready) await post("chat", { threadId, content: text, attachments, routing: smart() }).catch(async (e) => { await openThread(threadId); throw e; });
       else await post("add_message", { threadId, content: text, attachments });
       if (ms && ms.ready && how === "check") {
         $("cText").value = ""; grow(); files = []; showFiles();
@@ -400,7 +405,7 @@
   }));
   $("cRetry").addEventListener("click", guard(async () => {
     say("Waiting for the reply…");
-    await post("chat", { threadId }).catch(async (e) => { await openThread(threadId); throw e; });
+    await post("chat", { threadId, routing: smart() }).catch(async (e) => { await openThread(threadId); throw e; });
     say("");
     await openThread(threadId);
   }));
@@ -420,6 +425,15 @@
     try { await post("roundtable", { step: "join", threadId, model: c.checker }); } finally { await openThread(threadId); }
     await finishRoundtable([c.answeredBy, c.checker], 0, "");
   }
+  // Smart routing: on by default (the cheap choice). Kept in memory for this page only, never in browser storage.
+  const smart = () => $("cSmart").getAttribute("aria-pressed") === "true";
+  $("cSmart").addEventListener("click", () => {
+    const on = !smart();
+    $("cSmart").setAttribute("aria-pressed", String(on));
+    $("cSmart").title = on ? "Smart routing is on: short, simple questions go to a light model (Claude Haiku or GPT-5 nano), about 20 times cheaper. Anything harder still gets the full model. Click to always use the full model."
+      : "Smart routing is off: every question goes to the full model. Click to send simple questions to a light model, about 20 times cheaper.";
+    showMode();
+  });
   const MODE_HINT = {
     single: "One AI answers. Cheapest: well under 1¢.",
     check: "One AI answers, a cheaper AI checks it: about 1¢. If they disagree, they discuss it (a few ¢).",
@@ -432,11 +446,13 @@
   function showMode() {
     const how = mode();
     $("cOptsBtn").hidden = how !== "discuss";
+    // Discussion always uses each AI's full model.
+    $("cSmart").hidden = how === "discuss";
     if (how !== "discuss") setOpts(false);
     const n = $("cCompare").querySelectorAll("input:checked").length + 1;
     $("cOptsBtn").textContent = n + " AIs";
     const ms = status && threadId && currentModel() && status.models[currentModel()];
-    if (ms && ms.ready) $("cNote").textContent = MODE_HINT[how];
+    if (ms && ms.ready) $("cNote").textContent = MODE_HINT[how] + (how !== "discuss" && smart() ? " ⚡ Simple questions: light model, ~20× cheaper." : "");
   }
   function setMode(v, remember) {
     for (const r of document.querySelectorAll('#cMode input')) r.checked = r.value === v;

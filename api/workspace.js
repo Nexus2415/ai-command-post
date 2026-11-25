@@ -3,7 +3,7 @@
 // budget checks.
 import { hasSitePassword, isSameOrigin } from "./_lib/site-auth.js";
 import { MODELS, StoreError, createSupabaseStore, isId, workspaceConfigured } from "./_lib/workspace-store.js";
-import { BudgetStop, ModelError, estimateUsd, isPaid, mergeTurns, modelStatus, runChat, trimHistory } from "./_lib/workspace-models.js";
+import { BudgetStop, LIGHT_NAMES, ModelError, estimateUsd, isPaid, mergeTurns, modelStatus, routeTier, runChat, trimHistory } from "./_lib/workspace-models.js";
 import { pluginStatus, readyTools, runTool, urlsIn } from "./_lib/workspace-plugins.js";
 import { mcpServers, mcpStatus, mcpTools } from "./_lib/workspace-mcp.js";
 import {
@@ -11,7 +11,7 @@ import {
   summary, tokenReuseProblem,
 } from "./_lib/workspace-connectors.js";
 import { STOP_MARK, harmCheck, logRefusal, refusalText, textOf } from "./_lib/workspace-rules.js";
-import { CHANGED, inheritedSources, sharedFor, sourcesLine, stillShared, stripSources } from "./_lib/workspace-shared.js";
+import { CHANGED, ROUTE_LABEL, inheritedSources, sharedFor, sourcesLine, stillShared, stripSources } from "./_lib/workspace-shared.js";
 import { MAX_NOTES, REMEMBER_PROMPT, extractFacts, memoryFor, saveFacts } from "./_lib/workspace-memory.js";
 import { isShared } from "./_lib/workspace-shared.js";
 import { CHECK_MARK, CRITIQUE_MARK, SYNTHESIS_MARK, checkPrompt, checkerDisagrees, critiquePrompt, estimateRounds, roundtableState, synthesisPrompt } from "./_lib/workspace-roundtable.js";
@@ -443,11 +443,15 @@ const ACTIONS = Object.freeze({
     const rule = harmCheck(asked);
     if (rule) return refusedRequest(rule, await refuse(store, thread.id, "request", rule));
     const sent = trimHistory(mergeTurns(history));
+    // Smart routing (the owner's toggle, sent as routing: true): a short, plain question goes to the same vendor's
+    // light model. Decided here for free; anything in doubt gets the full model.
+    const tier = args.routing === true ? routeTier(model, asked, { historyChars: sent.reduce((n, m) => n + m.content.length, 0) - asked.length }) : "full";
+    const routeLine = tier === "light" ? `\n\n${ROUTE_LABEL}${LIGHT_NAMES[model]}. For the full model, turn Smart routing off and ask again.` : "";
     // Background from the project's other shared threads (bounded; private threads are never read).
     const shared = await sharedFor(store, thread, asked);
 
     const over = await budgetCheck(store, env, deps, thread.id, isPaid(env, model));
-    const first = over(estimateUsd(model, [...sent, { content: shared.text }], env));
+    const first = over(estimateUsd(model, [...sent, { content: shared.text }], env, tier));
     if (first) return error(402, first);
 
     // Re-checked just before anything is sent: a thread made private meanwhile stops the answer (nothing saved).
@@ -475,7 +479,7 @@ const ACTIONS = Object.freeze({
     let out;
     try {
       out = await runChat(env, model, sent, {
-        f: deps.fetch, tools, shared: shared.text,
+        f: deps.fetch, tools, shared: shared.text, tier,
         notes: await memoryFor(store, thread.project_id),
         // Only a shared thread may add to project memory (re-checked on the server when saving).
         remember: isShared(thread) ? REMEMBER_PROMPT : "",
@@ -504,8 +508,8 @@ const ACTIONS = Object.freeze({
       stopReason: () => stopReason(store), harmCheck, trusted: !out.toolsUsed?.length && !shared.sources.length,
     });
     const message = await gatedReply(store, thread.id, model, answer || "(The AI sent an empty reply.)", out, "",
-      memoryLine + sourcesLine(shared.sources) + webAuditText(webLog) + proposalsText(gate.made));
-    return { saved, message };
+      memoryLine + sourcesLine(shared.sources) + webAuditText(webLog) + proposalsText(gate.made) + routeLine);
+    return { saved, message, tier };
   },
   // Side-by-side answers: one message goes to 2-3 AIs at once and each answer is saved with its AI. Only the web
   // tools are on here; each web call is checked against the caps when it is made (see runRound1).

@@ -188,6 +188,7 @@ details.file pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:300px;ov
               <label title="One AI answers and a second, cheaper AI checks it. About 1 cent; if the checker disagrees they discuss it (a few cents)."><input type="radio" name="cMode" value="check" checked><span>+ Checker</span></label>
               <label title="Every chosen AI answers, they settle disagreements, then one agreed answer. A few cents; up to about 15 cents with 3 AIs."><input type="radio" name="cMode" value="discuss"><span>Discussion</span></label>
             </div>
+            <button class="linkbtn smart" type="button" id="cSmart" aria-pressed="true" title="Smart routing is on: short, simple questions go to a light model (Claude Haiku or GPT-5 nano), about 20 times cheaper. Anything harder still gets the full model. Click to always use the full model."><span aria-hidden="true">⚡</span><span class="lbl">Smart</span></button>
             <button class="linkbtn" type="button" id="cOptsBtn" aria-controls="cOpts" aria-expanded="false" hidden>AIs</button>
             <span class="grow"></span>
             <button class="sendbtn" type="submit" id="cSend" aria-label="Send"><svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7" stroke="currentColor" stroke-width="2.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></button>

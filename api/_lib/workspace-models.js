@@ -37,6 +37,35 @@ export function openRouterIdOk(model, id) {
   const vendor = OR_VENDORS[model];
   return Boolean(vendor) && typeof id === "string" && new RegExp(`^${vendor}/[A-Za-z0-9._:-]{1,100}$`).test(id);
 }
+// Smart routing (2026-11-25): a simple question may go to the same vendor's light model, about 20x cheaper.
+// Prices are OpenRouter's list prices of 2026-11-25 (anthropic/claude-haiku-5.5 $0.10/$0.50, openai/gpt-5-nano
+// $0.05/$0.40 per million tokens). Perplexity has no lighter model, and Gemini stays suspended.
+export const LIGHT_RATES = Object.freeze({
+  claude: { inputPerM: 0.1, outputPerM: 0.5, freeTier: false },
+  chatgpt: { inputPerM: 0.05, outputPerM: 0.4, freeTier: false },
+});
+const LIGHT_DIRECT_IDS = { claude: "claude-haiku-5-5", chatgpt: "gpt-5-nano" };
+const LIGHT_OR_IDS = { claude: "anthropic/claude-haiku-5.5", chatgpt: "openai/gpt-5-nano" };
+const LIGHT_VARS = { claude: "ACP_MODEL_CLAUDE_LIGHT", chatgpt: "ACP_MODEL_CHATGPT_LIGHT" };
+const LIGHT_OR_VARS = { claude: "ACP_OPENROUTER_MODEL_CLAUDE_LIGHT", chatgpt: "ACP_OPENROUTER_MODEL_CHATGPT_LIGHT" };
+export const LIGHT_NAMES = Object.freeze({ claude: "Claude Haiku", chatgpt: "GPT-5 nano" });
+export const hasLight = (model) => Object.hasOwn(LIGHT_RATES, model);
+const rateFor = (model, tier) => (tier === "light" && hasLight(model) ? LIGHT_RATES[model] : RATES[model]);
+
+// Which tier a question needs, decided here for free (no extra AI call). Light only when the question is short and
+// plain: no attached files, no long conversation, and none of the words that usually mean real work. Anything in
+// doubt gets the full model.
+const HEAVY = /\b(analy[sz]\w*|strateg\w*|plan(?:s|ning)?|code|coding|debug\w*|review\w*|contract\w*|legal|law|compare|comparison|evaluat\w*|design\w*|architect\w*|draft\w*|proposal\w*|essay|report|step[- ]by[- ]step|calculat\w*|financ\w*|forecast\w*|budget\w*|tax\w*|bid|rfq|rfp|invest\w*|research\w*|pros and cons|trade-?offs?|why)\b/i;
+export const LIGHT_MAX_QUESTION = 280;
+export const LIGHT_MAX_HISTORY = 6_000;
+export function routeTier(model, question, { historyChars = 0, files = false } = {}) {
+  if (!hasLight(model) || files) return "full";
+  const q = String(question).trim();
+  if (!q || q.length > LIGHT_MAX_QUESTION || historyChars > LIGHT_MAX_HISTORY) return "full";
+  if (q.includes("<<<") || HEAVY.test(q) || (q.match(/\?/g) || []).length > 2 || q.split("\n").length > 3) return "full";
+  return "light";
+}
+
 // OpenRouter adds a 5.5% fee when credits are bought, so every OpenRouter cost and estimate is raised by it.
 export const OPENROUTER_FEE = 1.055;
 
@@ -46,11 +75,14 @@ export const MAX_HISTORY_CHARS = 60_000;
 
 export class ModelError extends Error {}
 
-export function modelStatus(env, model) {
+export function modelStatus(env, model, tier = "full") {
   if (SUSPENDED_MODELS.includes(model)) return { ready: false, reason: "Turned off by the owner." };
-  if (env[KEY_VARS[model]]) return { ready: true, reason: null, via: "direct", id: env[MODEL_VARS[model]] || DEFAULT_IDS[model] };
+  const light = tier === "light" && hasLight(model);
+  if (env[KEY_VARS[model]]) {
+    return { ready: true, reason: null, via: "direct", id: light ? env[LIGHT_VARS[model]] || LIGHT_DIRECT_IDS[model] : env[MODEL_VARS[model]] || DEFAULT_IDS[model] };
+  }
   if (env.OPENROUTER_API_KEY) {
-    const id = env[OR_MODEL_VARS[model]] || OR_DEFAULT_IDS[model];
+    const id = light ? env[LIGHT_OR_VARS[model]] || LIGHT_OR_IDS[model] : env[OR_MODEL_VARS[model]] || OR_DEFAULT_IDS[model];
     if (!openRouterIdOk(model, id)) return { ready: false, reason: `The OpenRouter model for ${NAMES[model]} must be a ${OR_VENDORS[model]}/ model.` };
     return { ready: true, reason: null, via: "openrouter", id };
   }
@@ -61,16 +93,16 @@ export function modelStatus(env, model) {
 export const isPaid = (env, model) => !RATES[model].freeTier || modelStatus(env, model).via === "openrouter";
 const feeFor = (env, model) => (modelStatus(env, model).via === "openrouter" ? OPENROUTER_FEE : 1);
 
-export function costUsd(model, inputTokens, outputTokens) {
-  const r = RATES[model];
+export function costUsd(model, inputTokens, outputTokens, tier = "full") {
+  const r = rateFor(model, tier);
   return (inputTokens * r.inputPerM + outputTokens * r.outputPerM) / 1_000_000 + (r.perRequestUsd ?? 0);
 }
 
 // Worst case for one reply, used before the call: about one token per 3 characters (tokens usually cover ~4),
 // and the full output allowance.
-export function estimateUsd(model, history, env = {}) {
+export function estimateUsd(model, history, env = {}, tier = "full") {
   const chars = history.reduce((n, m) => n + m.content.length, 0);
-  return costUsd(model, Math.ceil(chars / 3) + 50, MAX_OUTPUT_TOKENS) * feeFor(env, model);
+  return costUsd(model, Math.ceil(chars / 3) + 50, MAX_OUTPUT_TOKENS, tier) * feeFor(env, model);
 }
 
 const NAMES = { claude: "Claude", chatgpt: "ChatGPT", gemini: "Gemini", perplexity: "Perplexity" };
@@ -161,8 +193,8 @@ const DEADLINE_MS = 70_000;
 export class BudgetStop extends Error {}
 
 // One model call. `convo` is the provider's own message list, so tool turns keep their exact shape.
-async function step(env, model, convo, tools, allowCalls, f, system) {
-  const status = modelStatus(env, model);
+async function step(env, model, convo, tools, allowCalls, f, system, tier = "full") {
+  const status = modelStatus(env, model, tier);
   if (!status.ready) throw new ModelError(status.reason);
   if (status.via === "openrouter") {
     if (!openRouterIdOk(model, status.id)) throw new ModelError("That OpenRouter model isn't allowed.");
@@ -251,8 +283,8 @@ const tokens = (n) => Math.max(0, Math.floor(Number(n) || 0));
  * `beforeCall(estimateUsd, costSoFarUsd)` runs before every model call and throws BudgetStop to stop. Usage from calls already
  * made is always returned, so it is recorded even when a later step fails.
  */
-export async function runChat(env, model, history, { f = fetch, tools = [], runTool, beforeCall = async () => {}, now = Date.now, notes = [], shared = "", remember = "" } = {}) {
-  const status = modelStatus(env, model);
+export async function runChat(env, model, history, { f = fetch, tools = [], runTool, beforeCall = async () => {}, now = Date.now, notes = [], shared = "", remember = "", tier = "full" } = {}) {
+  const status = modelStatus(env, model, tier);
   if (!status.ready) throw new ModelError(status.reason);
   const fee = feeFor(env, model);
   const started = now();
@@ -265,7 +297,7 @@ export async function runChat(env, model, history, { f = fetch, tools = [], runT
     const allowCalls = round < MAX_TOOL_ROUNDS;
     try {
       // The system prompt (project notes and the shared background) is counted too.
-      await beforeCall(costUsd(model, Math.ceil((JSON.stringify(convo).length + system.length) / 3) + 50, MAX_OUTPUT_TOKENS) * fee, cost);
+      await beforeCall(costUsd(model, Math.ceil((JSON.stringify(convo).length + system.length) / 3) + 50, MAX_OUTPUT_TOKENS, tier) * fee, cost);
     } catch (e) {
       if (!(e instanceof BudgetStop)) throw e;
       note = e.message;
@@ -273,7 +305,7 @@ export async function runChat(env, model, history, { f = fetch, tools = [], runT
     }
     let r;
     try {
-      r = await step(env, model, convo, tools, allowCalls, f, system);
+      r = await step(env, model, convo, tools, allowCalls, f, system, tier);
     } catch (e) {
       if (e instanceof ModelError) e.usage = usage();
       throw e;
@@ -281,7 +313,7 @@ export async function runChat(env, model, history, { f = fetch, tools = [], runT
     const i = tokens(r.input), o = tokens(r.output);
     inputTokens += i; outputTokens += o;
     // Through OpenRouter, the higher of its reported cost and our own rates, plus the credit fee.
-    cost += status.via === "openrouter" ? Math.max(r.reportedUsd ?? 0, costUsd(model, i, o)) * fee : costUsd(model, i, o);
+    cost += status.via === "openrouter" ? Math.max(r.reportedUsd ?? 0, costUsd(model, i, o, tier)) * fee : costUsd(model, i, o, tier);
     text = r.text;
     if (!r.calls.length || !allowCalls || !tools.length) break;
     if (now() - started > DEADLINE_MS) { note = "Stopped early to stay inside the time limit."; break; }
