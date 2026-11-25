@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { handle } from "../api/workspace.js";
 import { createMemoryStore } from "../api/_lib/workspace-store.js";
-import { CRITIQUE_MARK, SYNTHESIS_MARK, estimateRounds, roundtableState } from "../api/_lib/workspace-roundtable.js";
+import { CHECK_MARK, CRITIQUE_MARK, SYNTHESIS_MARK, checkerDisagrees, estimateRounds, roundtableState } from "../api/_lib/workspace-roundtable.js";
 
 // Roundtable mode: the AIs read each other's answers, critique them, and a lead writes one conclusion.
 // Fake fetch only; no real model is ever called.
@@ -23,7 +23,7 @@ const vendor = (u: string) => (u.includes("anthropic") ? "claude" : u.includes("
 // Neutral answer texts, so a test can tell whether an AI's name leaked into another AI's prompt.
 const TEXT: Record<string, string> = { claude: "Plan one", chatgpt: "Plan two", perplexity: "Plan three" };
 
-function harness(env: Record<string, string> = base, fail: (model: string, n: number) => boolean = () => false) {
+function harness(env: Record<string, string> = base, fail: (model: string, n: number) => boolean = () => false, say: (model: string, n: number) => string | null = () => null) {
   const store = createMemoryStore();
   const calls: { model: string; body: any }[] = [];
   const fakeFetch = (async (url: any, init: any) => {
@@ -31,7 +31,8 @@ function harness(env: Record<string, string> = base, fail: (model: string, n: nu
     const body = JSON.parse(init.body);
     calls.push({ model, body });
     if (fail(model, calls.filter((c) => c.model === model).length)) return json({ error: "boom" }, 500);
-    const text = `${TEXT[model]} (call ${calls.filter((c) => c.model === model).length})`;
+    const n = calls.filter((c) => c.model === model).length;
+    const text = say(model, n) ?? `${TEXT[model]} (call ${n})`;
     if (model === "claude") return json({ content: [{ type: "text", text }], usage: { input_tokens: 1000, output_tokens: 500 } });
     return json({ choices: [{ message: { content: text } }], usage: { prompt_tokens: 100, completion_tokens: 50 } });
   }) as typeof fetch;
@@ -198,17 +199,68 @@ test("the page uses the same round markers as the server and offers the roundtab
   const html = readFileSync(new URL("../dashboard/workspace.html", import.meta.url), "utf8");
   assert.ok(js.includes(JSON.stringify(CRITIQUE_MARK)), "critique marker matches");
   assert.ok(js.includes(JSON.stringify(SYNTHESIS_MARK)), "conclusion marker matches");
-  assert.match(html, /id="cRound"/);
+  assert.match(html, /id="cMode"/);
   assert.match(html, /id="cDiscuss"/);
   assert.match(js, /post\("roundtable_estimate"/);
-  // Default: every question goes to the roundtable (this thread's AI plus one more), with no pop-up per question;
-  // the server's budget check still refuses anything over the caps.
-  assert.match(html, /id="cRound"[^>]*checked/);
-  assert.match(js, /picks = null, roundOn = true/);
+  // A three-way toggle: 1 AI, + Checker (the default) and Discussion, each with its rough cost, remembered per
+  // project. No pop-up per question; the server's budget check still refuses anything over the caps.
+  for (const v of ["single", "check", "discuss"]) assert.match(html, new RegExp(`name="cMode" value="${v}"`));
+  assert.match(html, /value="check" checked/);
+  assert.match(html, /title="One AI answers\. Cheapest[^"]*cent/);
+  assert.match(js, /modes\.get\(projectId\) \|\| "check"/);
+  assert.match(js, /modes\.set\(projectId, v\)/);
+  assert.match(js, /post\("check", \{ threadId \}\)/);
+  assert.match(js, /step: "join"/);
+  assert.ok(js.includes(JSON.stringify(CHECK_MARK)), "check marker matches");
   assert.match(js, /others\.slice\(0, 1\)/);
   assert.doesNotMatch(js, /window\.confirm\("Run a roundtable/);
   // A finished roundtable shows the agreed answer, with each AI's own answer and the conflict round folded under it.
   assert.match(js, /Each AI's own answer \(/);
   assert.match(js, /How they settled their disagreements/);
   assert.doesNotMatch(js, /innerHTML/, "messages are untrusted text");
+});
+
+test("AI + checker: the cheapest other AI checks one answer; agreeing ends there", async () => {
+  const { call, calls, store } = harness();
+  const t = await thread(call);
+  assert.equal((await call("chat", { threadId: t.id, content: "Should we launch?" })).status, 200);
+  const out = await call("check", { threadId: t.id });
+  assert.equal(out.status, 200);
+  const b = out.body as any;
+  assert.equal(b.checker, "chatgpt", "the cheapest ready AI that didn't answer");
+  assert.equal(b.disagrees, false);
+  assert.ok(b.message.content.startsWith(CHECK_MARK + "\n"));
+  const p = lastUser(calls.at(-1)!.body);
+  assert.match(p, /AGREE or DISAGREE/);
+  assert.match(p, /The answer to check:\nPlan one/);
+  assert.doesNotMatch(p, /Claude|ChatGPT|Perplexity/);
+  assert.equal(calls.length, 2, "one answer plus one short check");
+  const st = roundtableState(await store.listMessages(t.id))!;
+  assert.equal(st.answers.length, 1, "a check isn't counted as an answer");
+  assert.equal(st.checks.length, 1);
+  assert.equal((await call("check", { threadId: t.id })).status, 409, "checked once only");
+});
+
+test("AI + checker: a disagreement runs the discussion and ends in one settled answer", async () => {
+  const { call, calls } = harness(base, () => false, (m, n) => (m === "chatgpt" && n === 1 ? "DISAGREE\nIt misses the cost." : null));
+  const t = await thread(call);
+  await call("chat", { threadId: t.id, content: "Should we launch?" });
+  const chk = (await call("check", { threadId: t.id })).body as any;
+  assert.equal(chk.disagrees, true);
+  const join = await call("roundtable", { step: "join", threadId: t.id, model: chk.checker });
+  assert.equal(join.status, 200);
+  assert.equal((join.body as any).message.model, "chatgpt");
+  assert.equal((await call("roundtable", { step: "join", threadId: t.id, model: "chatgpt" })).status, 409, "joins once");
+  assert.equal((await call("roundtable", { step: "critique", threadId: t.id })).status, 200);
+  const syn = (await call("roundtable", { step: "synthesize", threadId: t.id, models: ["claude", "chatgpt"] })).body as any;
+  assert.ok(syn.message.content.startsWith(SYNTHESIS_MARK + "\n"));
+  assert.match(syn.message.content, /Roundtable: Claude, ChatGPT\. Conclusion by Claude\.$/);
+  assert.equal(calls.length, 1 + 1 + 1 + 2 + 1);
+});
+
+test("the checker's verdict is read from its first word only", () => {
+  assert.equal(checkerDisagrees("DISAGREE\nNo."), true);
+  assert.equal(checkerDisagrees("**Disagree**: wrong price"), true);
+  assert.equal(checkerDisagrees("AGREE\nI don't disagree."), false);
+  assert.equal(checkerDisagrees("Looks right."), false);
 });

@@ -43,16 +43,19 @@ In Vercel, open **arnexyia-command-post → Settings → Environment Variables**
 - Under the message box, tick up to two other ready AIs ("Also ask, side by side"). The message then goes to the thread's AI and those AIs at once, and their answers show in columns.
 - The budget check covers every chosen AI's worst case together, before any call. Plugins stay off for side-by-side answers, so nothing can spend past that check.
 
-## Step 6b: roundtable, the default way a question is answered
-- Every question goes to the roundtable by default: the thread's own AI plus one more ready AI. The "AIs" button under the question box adds a third AI, turns off "Agree on one answer" (side-by-side answers only), or, with every box unticked, asks one AI only. The choice is kept while the page is open. Three rounds run, one after the other:
+## Step 6b: how a question is answered (1 AI / + Checker / Discussion)
+- A three-way toggle on the question box picks how each question is answered. The line under the box shows the rough cost of the chosen mode. The choice is remembered per project while the page is open (the page never writes browser storage).
+  - **1 AI**: the thread's AI answers. Cheapest, well under 1 cent.
+  - **+ Checker** (the default): the thread's AI answers, then the cheapest other ready AI checks it and replies AGREE or DISAGREE with a sentence or two (about 1 cent in all). If it disagrees, it gives its own full answer and the two go through the discussion's review and conclusion rounds below (a few cents).
+  - **Discussion**: the thread's AI plus the AIs ticked under "AIs" (one more by default, up to 3 in all) go through three rounds:
   1. Each AI answers on its own (the same as side-by-side).
   2. Each AI reads the others' answers, labelled Answer A, B… with no names, and writes Agreements, Conflicts (every point where the answers contradict each other, which side is right and why, or what would settle it) and a Revised answer.
   3. The thread's own AI (the lead) first settles every conflict on the strength of the evidence, not on a vote, then writes the one concluded answer: Answer, Conflicts settled, Risks, Next step, in plain language.
-- A finished roundtable shows the concluded answer first, with "Each AI's own answer" and "How they settled their disagreements" folded underneath.
-- There is no pop-up per question. Before anything runs the server works out the worst-case cost of all three rounds; if that would go over the thread or monthly budget, nothing is sent and the page says so. Each round is checked again before it runs.
+- A finished discussion shows the concluded answer first, with "Each AI's own answer" and "How they settled their disagreements" (including the checker's verdict) folded underneath. A check that agreed shows as a short line under the answer.
+- There is no pop-up per question. The check and the checker's own answer are each checked against the caps before they run. Before a discussion runs the server works out the worst-case cost of all three rounds; if that would go over the thread or monthly budget, nothing is sent and the page says so. Each round is checked again before it runs.
 - If an AI fails, the others carry on; the conclusion lists who dropped out. If the lead fails, another AI that answered writes the conclusion.
 - Every round is saved in the thread like any other reply, so later messages in the thread see the conclusion. A side-by-side answer can be turned into one agreed answer later with "Agree on one answer from these"; a roundtable that stopped part way shows "Finish: write the agreed answer".
-- Typical cost with the default two AIs: a few cents a question at most (about 5 AI calls instead of 1). With three AIs about $0.03–0.06; worst case about $0.15. The $1 thread and $15 monthly caps still apply.
+- Typical cost: + Checker about 1 cent (2 calls, the second short); a two-AI discussion a few cents (about 5 calls). With three AIs about $0.03–0.06; worst case about $0.15. The $1 thread and $15 monthly caps still apply.
 - If one AI fails, the other answers are kept and the page says which AI didn't answer.
 - Later messages in the thread send the earlier answers back to the AI labelled by who gave them, so it can build on all of them.
 

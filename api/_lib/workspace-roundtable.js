@@ -8,6 +8,8 @@ import { MAX_OUTPUT_TOKENS, costUsd, OPENROUTER_FEE, modelStatus, isNotice } fro
 // screen and later replies can tell them apart. Only the server writes assistant messages, so a user can't fake one.
 export const CRITIQUE_MARK = "[Roundtable round 2: critique and revised answer]";
 export const SYNTHESIS_MARK = "[Roundtable final answer]";
+// "AI + checker" mode: a second AI checks the thread AI's answer in a line or two. Its message starts with this.
+export const CHECK_MARK = "[Checked by a second AI]";
 const FAILED_PREFIX = "(The AI provider failed";
 
 // Each answer quoted into a prompt is cut to this many characters, and the question too, so a roundtable's
@@ -25,6 +27,7 @@ const fee = (env, m) => (modelStatus(env, m).via === "openrouter" ? OPENROUTER_F
 export const kindOf = (m) => m.role !== "assistant" ? "user"
   : isNotice(m) ? "notice"
   : m.content.startsWith(SYNTHESIS_MARK) ? "synthesis"
+  : m.content.startsWith(CHECK_MARK) ? "check"
   : m.content.startsWith(CRITIQUE_MARK) ? "critique"
   : m.content.startsWith(FAILED_PREFIX) ? "failed" : "answer";
 const body = (m) => stripSources(m.content.replace(/^\[Roundtable[^\]\n]*\]\n?/, "")).trim();
@@ -41,7 +44,7 @@ export function roundtableState(messages) {
   const pick = (kind) => after.filter((m) => kindOf(m) === kind && m.model);
   return {
     before: messages.slice(0, q), question: messages[q],
-    answers: pick("answer"), critiques: pick("critique"), synthesis: after.find((m) => kindOf(m) === "synthesis") ?? null,
+    answers: pick("answer"), critiques: pick("critique"), checks: pick("check"), synthesis: after.find((m) => kindOf(m) === "synthesis") ?? null,
   };
 }
 
@@ -63,6 +66,20 @@ export function critiquePrompt(question, own, others) {
       "Revised answer: your best answer now, changed where another answer convinced you.\nBe concise: about 300 words.",
   ].join("\n\n");
 }
+
+// "AI + checker" prompt: the checker reads the question and one answer (no name) and says whether it holds up.
+export function checkPrompt(question, answer) {
+  return [
+    SHARED.replace("one of several AIs at a roundtable", "the checker of another AI's answer"),
+    `The question:\n${cut(question, QUESTION_CHARS)}`,
+    `The answer to check:\n${cut(answer, QUOTE_CHARS)}`,
+    "Check it for factual mistakes, missing risks, or a clearly better approach. Reply with AGREE or DISAGREE alone " +
+      "on the first line, then at most two short sentences on why. Say DISAGREE only if something important is wrong " +
+      "or missing, not over wording or small details.",
+  ].join("\n\n");
+}
+// The checker's verdict: true when it disagrees. Anything that doesn't start with DISAGREE counts as agreeing.
+export const checkerDisagrees = (text) => /^\W*disagree\b/i.test(String(text));
 
 // Round 3 prompt for the lead AI: every answer and every critique, anonymised, and the synthesis it must write.
 export function synthesisPrompt(question, answers, critiques) {

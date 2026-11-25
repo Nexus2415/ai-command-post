@@ -14,7 +14,7 @@ import { STOP_MARK, harmCheck, logRefusal, refusalText, textOf } from "./_lib/wo
 import { CHANGED, inheritedSources, sharedFor, sourcesLine, stillShared, stripSources } from "./_lib/workspace-shared.js";
 import { MAX_NOTES, REMEMBER_PROMPT, extractFacts, memoryFor, saveFacts } from "./_lib/workspace-memory.js";
 import { isShared } from "./_lib/workspace-shared.js";
-import { CRITIQUE_MARK, SYNTHESIS_MARK, critiquePrompt, estimateRounds, roundtableState, synthesisPrompt } from "./_lib/workspace-roundtable.js";
+import { CHECK_MARK, CRITIQUE_MARK, SYNTHESIS_MARK, checkPrompt, checkerDisagrees, critiquePrompt, estimateRounds, roundtableState, synthesisPrompt } from "./_lib/workspace-roundtable.js";
 import {
   ACTION_KINDS, ACTION_MARK, ActionError, MAX_PENDING_PER_THREAD, MAX_PROPOSALS_PER_REPLY, actionsReady, approvalProblem,
   buildProposal, describeAction, isProposalTool, proposalTools, runAction,
@@ -516,6 +516,36 @@ const ACTIONS = Object.freeze({
     if (why) return error(402, why);
     return runRound1(store, env, deps, p);
   },
+  // "AI + checker" mode, after the thread's AI has answered: the cheapest other ready AI checks that answer in a line
+  // or two. If it disagrees, the page runs the discussion (join, critique, synthesize) so the conflict is settled.
+  async check(store, args, env, deps) {
+    if (!isId(args.threadId)) return error(400, "Unknown thread.");
+    const thread = await store.getThread(args.threadId);
+    if (!thread) return error(404, "Unknown thread.");
+    const halt = await stopReason(store);
+    if (halt) return stopped(halt);
+    const state = roundtableState(await store.listMessages(thread.id));
+    if (!state || state.answers.length !== 1 || state.critiques.length || state.synthesis) return error(409, "There is no single answer to check.");
+    if (state.checks.length) return error(409, "This answer has already been checked.");
+    const answer = state.answers[0];
+    const prompt = checkPrompt(state.question.content, stripSources(answer.content));
+    const cost = (m) => (isPaid(env, m) ? estimateUsd(m, [{ content: prompt }], env) : 0);
+    const asked = MODELS.includes(args.model) ? [args.model] : MODELS;
+    const choices = asked.filter((m) => m !== answer.model && modelStatus(env, m).ready).sort((a, b) => cost(a) - cost(b));
+    if (!choices.length) return error(409, "No second AI is available to check this answer.");
+    const m = choices[0];
+    const why = (await budgetCheck(store, env, deps, thread.id, isPaid(env, m)))(cost(m));
+    if (why) return error(402, why);
+    const notes = await memoryFor(store, thread.project_id);
+    let r;
+    try { r = await runChat(env, m, [{ role: "user", content: prompt }], { f: deps.fetch, notes }); } catch (e) {
+      if (!(e instanceof ModelError)) throw e;
+      if (e.usage?.costUsd > 0) await reply(store, thread.id, m, `(The AI provider failed partway through this reply: ${e.message})`, e.usage);
+      return { status: 502, body: { error: e.message, failed: [{ model: m, error: e.message }] } };
+    }
+    const message = await gatedReply(store, thread.id, m, r.text, r, `${CHECK_MARK}\n`, inheritedSources(state.answers));
+    return { message, checker: m, disagrees: checkerDisagrees(r.text), answeredBy: answer.model };
+  },
   // Roundtable mode, before it starts: the worst-case cost of all three rounds and whether the caps allow it.
   async roundtable_estimate(store, args, env, deps) {
     const p = await askSeveral(store, { ...args, content: typeof args.content === "string" && args.content.trim() ? args.content : "?" }, env);
@@ -538,7 +568,7 @@ const ACTIONS = Object.freeze({
       if ("status" in out) return out;
       return { ...out, estimate, lead: p.lead, roundtableUsd: sumCost(out.messages) };
     }
-    if (args.step !== "critique" && args.step !== "synthesize") return error(400, "Unknown roundtable step.");
+    if (!["critique", "synthesize", "join"].includes(args.step)) return error(400, "Unknown roundtable step.");
     if (!isId(args.threadId)) return error(400, "Unknown thread.");
     const thread = await store.getThread(args.threadId);
     if (!thread) return error(404, "Unknown thread.");
@@ -553,6 +583,27 @@ const ACTIONS = Object.freeze({
     const failedReply = (m, e) => (e.usage?.costUsd > 0
       ? reply(store, thread.id, m, `(The AI provider failed partway through this reply: ${e.message})`, e.usage) : null);
     const ready = (m) => modelStatus(env, m).ready;
+
+    // step "join": after a checker disagreed, the checker gives its own full answer to the same question, so the
+    // usual critique and conclusion rounds can run on two answers.
+    if (args.step === "join") {
+      const m = args.model;
+      if (!MODELS.includes(m) || !ready(m)) return error(409, "That AI isn't available.");
+      if (state.critiques.length || state.answers.some((a) => a.model === m)) return error(409, "That AI has already answered.");
+      const sent = trimHistory(mergeTurns([...state.before, state.question]));
+      const shared = await sharedFor(store, thread, state.question.content);
+      const why = over(isPaid(env, m) ? estimateUsd(m, [...sent, { content: shared.text }], env) : 0);
+      if (why) return error(402, why);
+      if (!(await stillShared(store, thread, shared))) return error(409, CHANGED);
+      let r;
+      try { r = await runChat(env, m, sent, { f: deps.fetch, notes, shared: shared.text }); } catch (e) {
+        if (!(e instanceof ModelError)) throw e;
+        await failedReply(m, e);
+        return { status: 502, body: { error: e.message, failed: [{ model: m, error: e.message }] } };
+      }
+      const message = await gatedReply(store, thread.id, m, r.text, r, "", sourcesLine(shared.sources));
+      return { message, roundtableUsd: sumCost([...state.answers, ...state.checks, message]) };
+    }
 
     if (args.step === "critique") {
       if (state.answers.length < 2) return error(409, "A roundtable needs answers from at least 2 AIs; only 1 answered.");

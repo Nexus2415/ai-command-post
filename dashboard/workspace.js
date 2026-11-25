@@ -6,11 +6,13 @@
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = String(text); return e; };
   const MODEL_NAMES = { claude: "Claude", chatgpt: "ChatGPT", gemini: "Gemini", perplexity: "Perplexity" };
   let projectId = null, threadId = null, busy = false, status = null, files = [], lastState = null, threadPrivate = null;
-  // The owner's choice of extra AIs (null: the default, one more) and whether they agree on one answer (default on).
-  let picks = null, roundOn = true;
+  // The owner's choice of extra AIs for a discussion (null: the default, one more).
+  let picks = null;
   // Same markers as api/_lib/workspace-roundtable.js.
   const CRITIQUE_MARK = "[Roundtable round 2: critique and revised answer]", SYNTHESIS_MARK = "[Roundtable final answer]";
+  const CHECK_MARK = "[Checked by a second AI]";
   const kindOf = (m) => m.role !== "assistant" ? "user" : m.content.startsWith(SYNTHESIS_MARK) ? "synthesis"
+    : m.content.startsWith(CHECK_MARK) ? "check"
     : m.content.startsWith(CRITIQUE_MARK) ? "critique" : m.content.startsWith("(The AI provider failed") ? "failed" : "answer";
   // After the last message from the owner: how many AIs answered, critiqued, and whether a conclusion exists.
   function roundState(messages) {
@@ -165,9 +167,12 @@
       const box = el("div", "m " + (m.role === "assistant" ? "assistant" : "user") + (kind === "synthesis" ? " synth" : ""));
       if (m.model) box.dataset.model = m.model;
       const name = nameOf(m);
+      const body = m.content.replace(/^\[(Roundtable|Checked by)[^\]\n]*\]\n?/, "");
+      if (kind === "check") box.classList.add("check");
       box.append(el("span", "who", kind === "critique" ? name + " · review and revised answer"
+        : kind === "check" ? "Checked by " + name + (/^\W*disagree\b/i.test(body) ? " · disagrees" : " · agrees")
         : kind === "synthesis" ? "Concluded answer · agreed by the AIs, written by " + name : name));
-      showContent(box, kind === "critique" || kind === "synthesis" ? m.content.replace(/^\[Roundtable[^\]\n]*\]\n?/, "") : m.content);
+      showContent(box, kind === "critique" || kind === "synthesis" || kind === "check" ? body : m.content);
       return box;
     };
     const rowOf = (ms, kind) => { const r = el("div", "cmp"); r.dataset.kind = kind; for (const m of ms) r.append(boxOf(m, kind)); return r; };
@@ -178,11 +183,11 @@
       for (const m of head) list.append(boxOf(m, "user"));
       const synth = ai.find((m) => kindOf(m) === "synthesis");
       if (synth) {
-        const answers = ai.filter((m) => kindOf(m) === "answer"), reviews = ai.filter((m) => kindOf(m) === "critique");
+        const answers = ai.filter((m) => kindOf(m) === "answer"), reviews = ai.filter((m) => ["check", "critique"].includes(kindOf(m)));
         list.append(boxOf(synth, "synthesis"));
         if (answers.length) list.append(fold("Each AI's own answer (" + answers.map(nameOf).join(", ") + ")", rowOf(answers, "answer")));
-        if (reviews.length) list.append(fold("How they settled their disagreements", rowOf(reviews, "critique")));
-        for (const m of ai) if (!["synthesis", "answer", "critique"].includes(kindOf(m))) list.append(boxOf(m, kindOf(m)));
+        if (reviews.length) { const r = el("div", "cmp"); r.dataset.kind = "critique"; for (const m of reviews) r.append(boxOf(m, kindOf(m))); list.append(fold("How they settled their disagreements", r)); }
+        for (const m of ai) if (!["synthesis", "answer", "critique", "check"].includes(kindOf(m))) list.append(boxOf(m, kindOf(m)));
         continue;
       }
       let row = null, rowKind = null;
@@ -197,7 +202,7 @@
       }
     }
     // Unwrap rows holding a single plain answer, so one-AI replies look like a normal chat.
-    for (const r of list.querySelectorAll(".cmp")) if (r.children.length === 1 && r.dataset.kind !== "critique" && !r.closest("details")) r.replaceWith(r.firstElementChild);
+    for (const r of list.querySelectorAll(".cmp")) if (r.children.length === 1 && (r.dataset.kind !== "critique") && !r.closest("details")) r.replaceWith(r.firstElementChild);
     lastState = roundState(messages);
     if (window.ACPFlow) window.ACPFlow.update(messages, thread);
     const sc = $("scroller"); sc.scrollTop = sc.scrollHeight;
@@ -206,31 +211,25 @@
     $("cNote").textContent = ms && !ms.ready ? (MODEL_NAMES[thread.model] || "This AI") + " can't reply yet: " + ms.reason
       : "Ctrl+Enter to send.";
     $("cRetry").hidden = !(messages.length && messages[messages.length - 1].role === "user" && ms && ms.ready);
-    // Every question goes to the roundtable by default: this thread's AI plus one more ready AI answer, settle
-    // their disagreements and agree on one answer. "AIs" lets the owner add a third, or untick to ask one AI only.
-    // Choices are kept while the page is open.
+    // How each question is answered: the toggle on the question box, remembered per project while the page is open.
+    // "1 AI" asks this thread's AI; "+ Checker" (the default) has the cheapest other AI check that answer and runs
+    // the discussion only if it disagrees; "Discussion" asks this thread's AI plus the AIs ticked under "AIs".
     const box = $("cCompare");
     box.replaceChildren(box.firstElementChild);
     const others = ms && ms.ready && status ? Object.keys(MODEL_NAMES).filter((k) => k !== thread.model && status.models[k] && status.models[k].ready) : [];
     const chosen = picks ? others.filter((k) => picks.has(k)) : others.slice(0, 1);
-    const sync = () => {
-      const on = box.querySelectorAll("input:checked").length;
-      for (const i of box.querySelectorAll("input")) i.disabled = !i.checked && on >= 2;
-      $("cRoundRow").hidden = !on;
-      $("cOptsBtn").textContent = on ? (on + 1) + " AIs" + ($("cRound").checked ? " · one agreed answer" : " · side by side") : "1 AI";
-    };
     for (const k of others) {
       const input = el("input"); input.type = "checkbox"; input.value = k; input.checked = chosen.includes(k);
-      input.addEventListener("change", () => { picks = new Set([...box.querySelectorAll("input:checked")].map((i) => i.value)); sync(); });
+      input.addEventListener("change", () => {
+        if (!box.querySelector("input:checked")) input.checked = true; // a discussion needs at least one more AI
+        picks = new Set([...box.querySelectorAll("input:checked")].map((i) => i.value)); showMode();
+      });
       const label = el("label"); label.append(input, document.createTextNode(MODEL_NAMES[k]));
       box.append(label);
     }
     box.hidden = !others.length;
-    $("cOptsBtn").hidden = !others.length;
-    if (!others.length) setOpts(false);
-    $("cRound").checked = roundOn;
-    $("cRound").onchange = () => { roundOn = $("cRound").checked; sync(); };
-    sync();
+    for (const r of document.querySelectorAll('#cMode input')) r.disabled = r.value !== "single" && !others.length;
+    setMode(others.length ? savedMode() : "single", false);
     // A side-by-side answer (or a roundtable that stopped part way) can be taken through the remaining rounds.
     $("cDiscuss").hidden = !(lastState && lastState.answers >= 2 && !lastState.done);
     $("cDiscuss").textContent = lastState && lastState.critiques ? "Finish: write the agreed answer" : "Agree on one answer from these";
@@ -379,16 +378,21 @@
     try {
       // With no AI ready the message is only saved; otherwise the server saves it and asks the thread's AI.
       const also = [...$("cCompare").querySelectorAll("input:checked")].map((i) => i.value);
+      const how = mode();
       let failed = [];
-      if (ms && ms.ready && also.length && $("cRound").checked) {
+      if (ms && ms.ready && how === "discuss" && also.length) {
         const ran = await roundtable(text, attachments, [currentModel(), ...also]);
         if (ran) { $("cText").value = ""; grow(); files = []; showFiles(); }
         return;
       }
-      if (ms && ms.ready && also.length) {
-        failed = (await post("compare", { threadId, content: text, attachments, models: [currentModel(), ...also] })).failed || [];
-      } else if (ms && ms.ready) await post("chat", { threadId, content: text, attachments }).catch(async (e) => { await openThread(threadId); throw e; });
+      if (ms && ms.ready) await post("chat", { threadId, content: text, attachments }).catch(async (e) => { await openThread(threadId); throw e; });
       else await post("add_message", { threadId, content: text, attachments });
+      if (ms && ms.ready && how === "check") {
+        $("cText").value = ""; grow(); files = []; showFiles();
+        await openThread(threadId);
+        await checkAnswer();
+        return;
+      }
       $("cText").value = ""; grow(); files = []; showFiles();
       say(failed.map((f) => (MODEL_NAMES[f.model] || f.model) + " didn't answer: " + f.error).join(" "), failed.length ? "err" : "");
       await openThread(threadId);
@@ -403,6 +407,43 @@
   // Roundtable mode: round 1 (each AI answers), round 2 (each critiques the others and revises), round 3 (the
   // lead writes one conclusion). One request per round; the server checks the budget before each one.
   const who = (list) => (list || []).map((f) => (MODEL_NAMES[f.model] || f.model) + " dropped out: " + f.error).join(" ");
+  // AI + checker: a second AI checks the answer just given. If it disagrees, it gives its own answer and the two
+  // settle the conflict through the usual review and conclusion rounds.
+  async function checkAnswer() {
+    say("Checking the answer with a second AI…", "warn");
+    let c;
+    try { c = await post("check", { threadId }); } catch (e) { say("The answer stands, but the check didn't run: " + e.message, "err"); return; }
+    await openThread(threadId);
+    const checker = MODEL_NAMES[c.checker] || c.checker;
+    if (!c.disagrees) { say(checker + " checked it and agrees."); return; }
+    say(checker + " disagrees, so it answers too and they settle it… (step 1 of 3)", "warn");
+    try { await post("roundtable", { step: "join", threadId, model: c.checker }); } finally { await openThread(threadId); }
+    await finishRoundtable([c.answeredBy, c.checker], 0, "");
+  }
+  const MODE_HINT = {
+    single: "One AI answers. Cheapest: well under 1¢.",
+    check: "One AI answers, a cheaper AI checks it: about 1¢. If they disagree, they discuss it (a few ¢).",
+    discuss: "Each AI answers, they settle disagreements, then one agreed answer: a few ¢ (up to ~15¢ with 3 AIs).",
+  };
+  // Remembered per project while the page is open. Kept in memory only: this page never writes browser storage.
+  const modes = new Map();
+  const savedMode = () => modes.get(projectId) || "check";
+  function mode() { const r = document.querySelector('#cMode input:checked'); return r ? r.value : "single"; }
+  function showMode() {
+    const how = mode();
+    $("cOptsBtn").hidden = how !== "discuss";
+    if (how !== "discuss") setOpts(false);
+    const n = $("cCompare").querySelectorAll("input:checked").length + 1;
+    $("cOptsBtn").textContent = n + " AIs";
+    const ms = status && threadId && currentModel() && status.models[currentModel()];
+    if (ms && ms.ready) $("cNote").textContent = MODE_HINT[how];
+  }
+  function setMode(v, remember) {
+    for (const r of document.querySelectorAll('#cMode input')) r.checked = r.value === v;
+    if (remember) modes.set(projectId, v);
+    showMode();
+  }
+  for (const r of document.querySelectorAll('#cMode input')) r.addEventListener("change", () => setMode(r.value, true));
   async function roundtable(text, attachments, models) {
     const est = await post("roundtable_estimate", { threadId, content: text, attachments, models });
     if (!est.fits) throw new Error("Not sent: asking several AIs could cost up to " + money(est.estimate.total) + ". " + est.why);

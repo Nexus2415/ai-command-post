@@ -109,7 +109,7 @@ test("the workspace page shows side-by-side answers in columns and offers other 
   const { readFileSync } = await import("node:fs");
   const js = readFileSync(new URL("../dashboard/workspace.js", import.meta.url), "utf8");
   const html = readFileSync(new URL("../dashboard/workspace.html", import.meta.url), "utf8");
-  assert.match(js, /post\("compare"/);
+  assert.match(js, /post\("roundtable", \{ step: "start"/, "several AIs answer side by side as round 1 of a discussion");
   assert.match(js, /el\("div", "cmp"\)/);
   assert.match(html, /id="cCompare"/);
   assert.match(html, /\.cmp\{display:grid/);

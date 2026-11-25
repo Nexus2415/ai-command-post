@@ -133,7 +133,7 @@ test("the workspace reads like a chat: answers in one column, one question box a
   const at = (s: string) => { const i = main.indexOf(s); assert.ok(i >= 0, s); return i; };
   assert.ok(at('class="bar"') < at('id="mList"') && at('id="mList"') < at('class="dock"') && at('class="dock"') < at('id="cText"'));
   // Every feature is still on the page: list, memory, stop switch, More menu (spend, plugins, tools), compare, roundtable, files.
-  for (const id of ["pList", "tList", "notes", "nForm", "stopSwitch", "moreBtn", "morePanel", "budget", "plugins", "cCompare", "cRound", "cDiscuss", "cRetry", "cAttach", "cFile", "aPanel", "cPrivacy", "cModel", "menuBtn"])
+  for (const id of ["pList", "tList", "notes", "nForm", "stopSwitch", "moreBtn", "morePanel", "budget", "plugins", "cCompare", "cMode", "cDiscuss", "cRetry", "cAttach", "cFile", "aPanel", "cPrivacy", "cModel", "menuBtn"])
     assert.match(html, new RegExp(`id="${id}"`), id);
   assert.match(html, /href="\/tools\.html"/);
   // Phones get the list as a drawer; the question box has a readable width.
