@@ -147,3 +147,10 @@ Claude and ChatGPT threads can use the public web through Firecrawl (Perplexity 
 - The **⚡ Smart** button next to the answer modes is on by default. With it on, a short, plain question (under 280 characters, no files, no words like analyze, plan, draft, review, contract, why) goes to the same vendor's light model: Claude Haiku ($0.10/$0.50 per million tokens) instead of Claude Sonnet ($2/$10), or GPT-5 nano instead of GPT-5 mini. The choice is made on the server for free, with no extra AI call; anything in doubt gets the full model.
 - A light answer ends with a small "⚡ Light model" note. Turn Smart off and ask again for the full model. Discussion mode always uses the full models; Perplexity has no light model.
 - Light models can be changed with `ACP_OPENROUTER_MODEL_CLAUDE_LIGHT` / `ACP_OPENROUTER_MODEL_CHATGPT_LIGHT` (same-vendor only) or `ACP_MODEL_CLAUDE_LIGHT` / `ACP_MODEL_CHATGPT_LIGHT` with direct keys. Costs use the light rates in `api/_lib/workspace-models.js` (or OpenRouter's reported cost, whichever is higher).
+
+## Phone and voice
+
+- **Add to home screen:** the workspace has a web-app manifest and icons, so on a phone "Add to Home Screen" opens it like an app.
+- **Talk:** when the question box is empty, the send button becomes a microphone. Speech is turned into text in the box by the browser (Chrome uses Google's speech service, Safari uses Apple's); nothing is sent until you press send, and nothing is recorded or stored here. Free.
+- **Listen:** each answer has a "▶ Listen" button that reads it aloud with the device's own voice. Free.
+- Form fields are 16px on touch screens so iPhones don't zoom in when you tap them.
