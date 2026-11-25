@@ -51,6 +51,10 @@ alter table ws_notes add column if not exists model text check (model in ('claud
 alter table ws_notes add column if not exists thread_id uuid references ws_threads(id) on delete set null;
 alter table ws_notes add column if not exists pending boolean not null default false;
 alter table ws_notes add column if not exists updated_at timestamptz;
+-- Memory corrections: an AI may propose changing (`replaces`) or forgetting (`forget`) one note. Proposals stay pending
+-- until the owner keeps them; deleting the old note deletes its proposals. Safe to run again.
+alter table ws_notes add column if not exists replaces uuid references ws_notes(id) on delete cascade;
+alter table ws_notes add column if not exists forget boolean not null default false;
 
 -- A new message moves its thread to the top of the list.
 create or replace function ws_touch_thread() returns trigger language plpgsql set search_path = public as $$

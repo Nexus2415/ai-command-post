@@ -19,6 +19,8 @@ const note = (n) => ({
   source: n.source === "ai" ? "ai" : "owner", model: n.model ?? null, thread_id: n.thread_id ?? null,
   // An AI-saved fact counts as waiting for review unless the flag is certainly false (fail closed).
   pending: n.source === "ai" ? n.pending !== false : n.pending === true,
+  // A proposed correction names the note it changes; `forget` proposals remove it instead.
+  replaces: n.replaces ?? null, forget: n.forget === true,
 });
 const CONTROL_COLS = "stopped,updated_at";
 const CONNECTOR_COLS = "id,project_id,kind,name,spec,fingerprint,enabled,created_at";
@@ -196,7 +198,7 @@ export function createMemoryStore({ control = false, shared = null } = {}) {
     },
     listNotes: async (projectId) => notes.filter((n) => n.project_id === projectId).map((n) => ({ ...n })),
     addNote: async (projectId, content, extra = {}) => {
-      const n = { id: randomUUID(), project_id: projectId, content, source: "owner", model: null, thread_id: null, pending: false, ...extra, created_at: now() };
+      const n = { id: randomUUID(), project_id: projectId, content, source: "owner", model: null, thread_id: null, pending: false, replaces: null, forget: false, ...extra, created_at: now() };
       notes.push(n);
       return { ...n };
     },
@@ -209,6 +211,8 @@ export function createMemoryStore({ control = false, shared = null } = {}) {
     deleteNote: async (noteId) => {
       const i = notes.findIndex((n) => n.id === noteId);
       if (i >= 0) notes.splice(i, 1);
+      // Same as the database: proposals about a deleted note go with it.
+      for (let j = notes.length - 1; j >= 0; j--) if (notes[j].replaces === noteId) notes.splice(j, 1);
       return i >= 0;
     },
     spend: async (threadId, since) => ({

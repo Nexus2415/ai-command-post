@@ -110,23 +110,28 @@
     if (!notes.length) list.append(el("li", "empty", "No notes yet."));
     for (const n of notes) {
       const row = el("li", "nrow" + (n.pending ? " pending" : ""));
-      const body = el("span", null, n.content);
+      // A proposed correction shows the note it would change, so the owner checks it against the original.
+      const old = n.replaces ? notes.find((x) => x.id === n.replaces) : null;
+      const body = el("span", null, !n.replaces ? n.content
+        : n.forget ? "Forget: \u201c" + (old ? old.content : "a note") + "\u201d. Reason: " + n.content
+        : "Change \u201c" + (old ? old.content : "a note") + "\u201d to \u201c" + n.content + "\u201d");
+      const by = MODEL_NAMES[n.model] || "an AI";
       const tag = n.source === "ai"
-        ? el("span", "note ntag", (n.pending ? "Waiting for you. " : "") + "Saved by " + (MODEL_NAMES[n.model] || "an AI"))
+        ? el("span", "note ntag", (n.pending ? "Waiting for you. " : "") + (n.replaces ? "Proposed by " : "Saved by ") + by)
         : null;
       const actions = el("span", "row nact");
       const btn = (label, aria, fn) => {
         const b = el("button", null, label); b.type = "button"; b.setAttribute("aria-label", aria + ": " + n.content.slice(0, 40));
         b.addEventListener("click", guard(fn)); actions.append(b); return b;
       };
-      if (n.pending) btn("Keep", "Keep this fact", async () => { await post("keep_note", { noteId: n.id }); await loadNotes(); });
-      btn("Edit", "Edit note", async () => {
+      if (n.pending) btn(n.replaces ? "Approve" : "Keep", n.replaces ? "Approve this memory change" : "Keep this fact", async () => { await post("keep_note", { noteId: n.id }); await loadNotes(); });
+      if (!n.forget) btn("Edit", "Edit note", async () => {
         const next = window.prompt("Edit this note", n.content);
         if (next == null || !next.trim() || next.trim() === n.content) return;
         await post("update_note", { noteId: n.id, content: next });
         await loadNotes();
       });
-      btn("Delete", "Delete note", async () => { await post("delete_note", { noteId: n.id }); await loadNotes(); });
+      btn(n.replaces ? "Reject" : "Delete", n.replaces ? "Reject this memory change" : "Delete note", async () => { await post("delete_note", { noteId: n.id }); await loadNotes(); });
       row.append(body);
       if (tag) row.append(tag);
       row.append(actions);

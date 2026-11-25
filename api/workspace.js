@@ -13,7 +13,7 @@ import {
 } from "./_lib/workspace-connectors.js";
 import { STOP_MARK, harmCheck, logRefusal, refusalText, textOf } from "./_lib/workspace-rules.js";
 import { CHANGED, ROUTE_LABEL, inheritedSources, sharedFor, sourcesLine, stillShared, stripSources } from "./_lib/workspace-shared.js";
-import { MAX_NOTES, REMEMBER_PROMPT, extractFacts, memoryFor, saveFacts } from "./_lib/workspace-memory.js";
+import { MAX_NOTES, REMEMBER_PROMPT, applyChange, extractFacts, memoryFor, saveChanges, saveFacts } from "./_lib/workspace-memory.js";
 import { isShared } from "./_lib/workspace-shared.js";
 import { CHECK_MARK, CRITIQUE_MARK, SYNTHESIS_MARK, checkPrompt, checkerDisagrees, critiquePrompt, estimateRounds, roundtableState, synthesisPrompt } from "./_lib/workspace-roundtable.js";
 import {
@@ -613,10 +613,10 @@ const ACTIONS = Object.freeze({
     }
     // Facts the AI asked to remember are taken out of the reply and saved to project memory, live when the reply
     // used nothing from outside (no tools, no other threads), otherwise waiting for the owner's review.
-    const { text: answer, facts } = extractFacts(out.text);
+    const { text: answer, facts, changes } = extractFacts(out.text);
     const memoryLine = harmCheck(answer) ? "" : await saveFacts(store, thread.id, model, facts, {
       stopReason: () => stopReason(store), harmCheck, trusted: !out.toolsUsed?.length && !shared.sources.length,
-    });
+    }) + await saveChanges(store, thread.id, model, changes, { stopReason: () => stopReason(store), harmCheck });
     const message = await gatedReply(store, thread.id, model, answer || "(The AI sent an empty reply.)", out, "",
       memoryLine + sourcesLine(shared.sources) + webAuditText(webLog) + proposalsText(gate.made) + routeLine);
     return { saved, message, tier };
@@ -827,11 +827,17 @@ export async function runDueAgents(env, makeStore = createSupabaseStore, deps = 
   return { status: 200, body: { results } };
 }
 
-// Memory edits need the memory columns; before the one-time database update they report that plainly.
+// Memory edits need the memory columns; before the one-time database update they report that plainly. Keeping (or
+// editing) a proposed correction applies it: the old note is replaced, or removed for a forget.
 async function memoryUpdate(store, noteId, patch) {
   try {
     const note = await store.updateNote(noteId, patch);
-    return note ? { note } : error(404, "Unknown note.");
+    if (!note) return error(404, "Unknown note.");
+    if (note.replaces) {
+      const kept = await applyChange(store, note);
+      return kept ? { note: kept } : { forgotten: true };
+    }
+    return { note };
   } catch (e) {
     if (e instanceof StoreError) return error(503, "Editing project memory needs a one-time database update first.");
     throw e;
