@@ -18,7 +18,7 @@ test("shared NEXIA navigation links to the four existing surfaces and marks only
     assert.equal((nav.match(/aria-current="page"/g) || []).length, 1);
     assert.ok(nav.includes('href="' + page.href + '" aria-current="page"'));
     assert.ok(html.indexOf('href="/nexia-shell.css"') > html.lastIndexOf("</style>"));
-    assert.match(nav, /Independent controls not connected/);
+    assert.match(nav, /Advanced emergency controls are not ready yet/);
     assert.doesNotMatch(nav, /<button/);
   }
 });
@@ -32,4 +32,18 @@ test("NEXIA retains all existing UI control IDs and no fabricated emergency cont
   assert.match(css, /@media\(max-width:420px\)/);
   assert.match(css, /@media\(prefers-reduced-motion:reduce\)/);
   assert.match(css, /\.stopbtn/);
+});
+
+test("plain-language descriptions accompany the branded feature names", () => {
+  for (const page of pages) {
+    const html = read(page.file);
+    for (const label of ["Assign work", "Talk to AI", "Track work", "Connect apps"]) assert.ok(html.includes("<small>" + label + "</small>"), label);
+  }
+  const home = read("index.html");
+  assert.match(home, /Assign a task/);
+  assert.match(home, /Send a question/);
+  const consoleScript = read("console.js");
+  assert.match(consoleScript, /does not start AI work or allow changes/);
+  assert.match(consoleScript, /cannot confirm that it is on/);
+  assert.match(home, /Work already sent to another service may continue/);
 });
