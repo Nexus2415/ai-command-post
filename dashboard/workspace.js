@@ -95,7 +95,8 @@
     $("tNew").disabled = false;
     $("notes").hidden = false;
     closeThread();
-    await Promise.all([loadProjects(), loadThreads(), loadNotes()]);
+    $("agents").hidden = false;
+    await Promise.all([loadProjects(), loadThreads(), loadNotes(), loadAgents()]);
   }
 
   // Project memory: the owner's notes, and facts the AIs saved from shared threads. A fact from a reply that used
@@ -130,6 +131,43 @@
     }
   }
 
+  // Scheduled agents: what each does, when, and how its last run went. "Run now" goes through the same checks.
+  async function loadAgents() {
+    const out = await post("list_agents", { projectId });
+    const warn = $("gCron");
+    warn.hidden = !(out.setupNeeded || !out.cronReady);
+    warn.textContent = out.setupNeeded ? "Scheduled agents need a one-time database update first."
+      : "Automatic runs are off until CRON_SECRET is added in Vercel. \"Run now\" works already.";
+    const list = $("gList"); list.replaceChildren();
+    if (!out.agents.length) list.append(el("li", "empty", "No agents yet."));
+    for (const a of out.agents) {
+      const row = el("li", "nrow" + (a.enabled ? "" : " off"));
+      row.append(el("span", null, a.name + " · " + (MODEL_NAMES[a.model] || a.model)));
+      row.append(el("span", "note ntag", (a.enabled ? a.schedule : "Off") + (a.lastStatus ? " · Last run: " + a.lastStatus : " · Not run yet")));
+      const actions = el("span", "row nact");
+      const btn = (label, aria, fn) => {
+        const b = el("button", null, label); b.type = "button"; b.setAttribute("aria-label", aria + ": " + a.name);
+        b.addEventListener("click", guard(fn)); actions.append(b); return b;
+      };
+      if (a.enabled) btn("Run now", "Run this agent now", async () => {
+        say("Running " + a.name + "…", "warn");
+        const r = await post("run_agent_now", { id: a.id });
+        say(r.run.status);
+        await Promise.all([loadAgents(), loadThreads()]);
+        if (r.run.threadId) await openThread(r.run.threadId);
+      });
+      if (a.threadId) btn("Open", "Open this agent's thread", async () => openThread(a.threadId));
+      btn(a.enabled ? "Turn off" : "Turn on", a.enabled ? "Turn this agent off" : "Turn this agent on", async () => {
+        await post("set_agent_enabled", { id: a.id, enabled: !a.enabled }); await loadAgents();
+      });
+      btn("Delete", "Delete agent", async () => {
+        if (!window.confirm("Delete the agent " + a.name + "? Its threads stay.")) return;
+        await post("delete_agent", { id: a.id }); await loadAgents();
+      });
+      row.append(actions);
+      list.append(row);
+    }
+  }
   async function loadThreads() {
     if (!projectId) return;
     const { threads } = await post("list_threads", { projectId });
@@ -440,6 +478,15 @@
     $("tTitle").value = ""; toggle("tForm", "tTitle", false);
     await openThread(thread.id);
   }));
+  $("gCadence").addEventListener("change", () => { $("gDay").hidden = $("gCadence").value !== "weekly"; });
+  $("gForm").addEventListener("submit", guard(async () => {
+    const weekly = $("gCadence").value === "weekly";
+    await post("add_agent", { projectId, name: $("gName").value, prompt: $("gPrompt").value, model: $("gModel").value,
+      cadence: $("gCadence").value, weekday: weekly ? Number($("gDay").value) : undefined });
+    $("gName").value = ""; $("gPrompt").value = "";
+    await loadAgents();
+  }));
+
   $("cAttach").addEventListener("click", () => $("cFile").click());
   $("cFile").addEventListener("change", guard(async () => {
     try {

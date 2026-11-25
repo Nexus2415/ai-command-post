@@ -154,3 +154,10 @@ Claude and ChatGPT threads can use the public web through Firecrawl (Perplexity 
 - **Talk:** when the question box is empty, the send button becomes a microphone. Speech is turned into text in the box by the browser (Chrome uses Google's speech service, Safari uses Apple's); nothing is sent until you press send, and nothing is recorded or stored here. Free.
 - **Listen:** each answer has a "▶ Listen" button that reads it aloud with the device's own voice. Free.
 - Form fields are 16px on touch screens so iPhones don't zoom in when you tap them.
+
+## Scheduled agents
+- In the side panel under Project memory: **Scheduled agents**. Give one a name, an instruction, an AI, and every day or one day a week. Up to 5 in the workspace.
+- Each run asks the instruction in the agent's own thread for the month ("⏰ name · 2026-11"), through the same path as your own questions: Stop everything is checked first (stopped or unreadable means the run is skipped), the rules gate checks the instruction when saved and on every run, the $15/month and per-thread caps apply (so each agent can spend at most the thread cap a month), web tools keep their own checks, and an agent can only **propose** Linear actions for you to approve. Smart routing is on for runs.
+- A run is claimed in one conditional database update, so it happens at most once a day even if the cron fires twice; "Run now" counts as that day's run.
+- Automatic runs come from a Vercel cron (`vercel.json`, daily at 12:00 UTC; the free plan allows once a day). They stay off until **CRON_SECRET** (any random text of at least 32 characters) is added in Vercel → arnexyia-command-post → Settings → Environment Variables. Vercel then sends it with each cron call and `api/cron.js` refuses every other caller. "Run now" works without it.
+- Database: table `ws_agents` in `db/workspace.sql`.

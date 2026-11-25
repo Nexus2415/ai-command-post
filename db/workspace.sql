@@ -145,3 +145,27 @@ create table if not exists ws_files (
 create index if not exists ws_files_thread_idx on ws_files (thread_id, created_at);
 alter table ws_files enable row level security;
 revoke all on ws_files from anon, authenticated;
+
+-- Scheduled agents (2026-11-25; api/_lib/workspace-agents.js). An instruction that runs by itself, daily or weekly,
+-- through the same chat path as the owner's questions (stop switch, rules gate, caps, approval gate all apply). Each
+-- agent writes into its own thread per month. `last_run_at` is claimed in one conditional update, so a run happens
+-- at most once a day. A missing table only means no agents.
+create table if not exists ws_agents (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid not null references ws_projects(id) on delete cascade,
+  name text not null check (char_length(name) between 1 and 60),
+  prompt text not null check (char_length(prompt) between 1 and 4000),
+  model text not null check (model in ('claude', 'chatgpt', 'gemini', 'perplexity')),
+  cadence text not null check (cadence in ('daily', 'weekly')),
+  weekday smallint check (weekday between 0 and 6),
+  enabled boolean not null default true,
+  thread_id uuid references ws_threads(id) on delete set null,
+  thread_month text check (thread_month ~ '^[0-9]{4}-[0-9]{2}$'),
+  last_run_at timestamptz,
+  last_status text check (char_length(last_status) <= 300),
+  created_at timestamptz not null default now(),
+  check ((cadence = 'weekly') = (weekday is not null))
+);
+create index if not exists ws_agents_project_idx on ws_agents (project_id, created_at);
+alter table ws_agents enable row level security;
+revoke all on ws_agents from anon, authenticated;
