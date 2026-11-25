@@ -21,6 +21,10 @@ import {
   buildProposal, describeAction, isProposalTool, proposalTools, runAction,
 } from "./_lib/workspace-actions.js";
 
+import {
+  AgentProblem, MAX_AGENTS, RUN_NOW_GAP_MS, checkAgent, cronReady, dayStart, describeSchedule, isDue, monthKey, runMessage, threadTitle,
+} from "./_lib/workspace-agents.js";
+
 // Vercel: model replies can take a while.
 export const config = { maxDuration: 120 };
 
@@ -278,6 +282,58 @@ const ACTIONS = Object.freeze({
     if (!isId(args.threadId) || !isId(args.fileId)) return error(400, "Unknown file.");
     const [f] = await store.getFiles(args.threadId, [args.fileId]).catch(() => []);
     return f ? { file: { id: f.id, name: f.name, mime: f.mime, data: f.data } } : error(404, "Unknown file.");
+  },
+  // Scheduled agents in a project, with when each runs and how its last run went.
+  async list_agents(store, args, env) {
+    if (!isId(args.projectId)) return error(400, "Unknown project.");
+    if (!(await store.getProject(args.projectId))) return error(404, "Unknown project.");
+    try {
+      return { cronReady: cronReady(env), agents: (await store.listAgents(args.projectId)).map(describeAgent) };
+    } catch (e) {
+      if (e instanceof StoreError) return { cronReady: cronReady(env), agents: [], setupNeeded: true };
+      throw e;
+    }
+  },
+  async add_agent(store, args, env) {
+    if (!isId(args.projectId)) return error(400, "Unknown project.");
+    let a;
+    try { a = checkAgent(args, MODELS); } catch (e) { if (e instanceof AgentProblem) return error(400, e.message); throw e; }
+    const ms = modelStatus(env, a.model);
+    if (!ms.ready) return error(409, `${NAMES[a.model]} can't run agents: ${ms.reason}`);
+    // The rules gate checks the instruction once now, and again on every run.
+    const rule = harmCheck(`${a.name}\n${a.prompt}`);
+    if (rule) { logRefusal("agent", rule); return error(422, `Refused by the rules gate: ${rule.reason}. Nothing was saved.`); }
+    if (!(await store.getProject(args.projectId))) return error(404, "Unknown project.");
+    try {
+      if ((await store.countAgents()) >= MAX_AGENTS) return error(409, `Up to ${MAX_AGENTS} scheduled agents. Delete one first.`);
+      const row = await store.addAgent({ project_id: args.projectId, ...a, enabled: true });
+      console.warn(JSON.stringify({ event: "agent_added", id: row.id, cadence: row.cadence }));
+      return { agent: describeAgent(row) };
+    } catch (e) {
+      if (e instanceof StoreError) return error(503, "Scheduled agents need a one-time database update first.");
+      throw e;
+    }
+  },
+  async set_agent_enabled(store, args) {
+    if (!isId(args.id) || typeof args.enabled !== "boolean") return error(400, "Say which agent, and on or off.");
+    const row = await store.updateAgent(args.id, { enabled: args.enabled });
+    return row ? { agent: describeAgent(row) } : error(404, "Unknown agent.");
+  },
+  async delete_agent(store, args) {
+    if (!isId(args.id)) return error(400, "Unknown agent.");
+    return (await store.deleteAgent(args.id)) ? { deleted: true } : error(404, "Unknown agent.");
+  },
+  // Runs one agent now, through exactly the same path as a scheduled run. It counts as today's run.
+  async run_agent_now(store, args, env, deps) {
+    if (!isId(args.id)) return error(400, "Unknown agent.");
+    const agent = await store.getAgent(args.id);
+    if (!agent) return error(404, "Unknown agent.");
+    if (!agent.enabled) return error(409, "This agent is switched off. Switch it on first.");
+    const halt = await stopReason(store);
+    if (halt) return stopped(halt);
+    const out = await runAgent(store, env, deps, agent, new Date(deps.now().getTime() - RUN_NOW_GAP_MS).toISOString());
+    if (!out.ran) return error(409, out.status);
+    return { run: out, agent: describeAgent((await store.getAgent(agent.id)) ?? agent) };
   },
   // Private threads: hidden from every other thread's AI until the owner makes them shared again.
   async set_private(store, args) {
@@ -702,6 +758,57 @@ const ACTIONS = Object.freeze({
     return { status: 502, body: { error: "No AI could write the conclusion. The first answers and critiques are saved.", failed } };
   },
 });
+
+const describeAgent = (a) => ({
+  id: a.id, projectId: a.project_id, name: a.name, prompt: a.prompt, model: a.model, cadence: a.cadence, weekday: a.weekday,
+  enabled: a.enabled === true, schedule: describeSchedule(a), threadId: a.thread_id ?? null, lastRunAt: a.last_run_at ?? null, lastStatus: a.last_status ?? null,
+});
+
+// One run of one agent. The Stop everything switch is checked before anything (a stopped or unreadable switch skips
+// the run without using it up); then the run is claimed (at most once since `before`); then the agent's instruction
+// is asked in its thread for this month through the ordinary chat path, so the rules gate, both caps, the web tools'
+// own checks and the approval gate all apply exactly as for the owner's questions.
+async function runAgent(store, env, deps, agent, before) {
+  const now = deps.now();
+  if (await stopReason(store)) return { id: agent.id, ran: false, status: "Skipped: Stop everything is on." };
+  const claimed = await store.claimAgentRun(agent.id, before, now.toISOString());
+  if (!claimed) return { id: agent.id, ran: false, status: "It already ran just now (or it is switched off)." };
+  let status, threadId = null;
+  try {
+    const month = monthKey(now);
+    threadId = claimed.thread_month === month && isId(claimed.thread_id) && (await store.getThread(claimed.thread_id)) ? claimed.thread_id : null;
+    if (!threadId) {
+      threadId = (await store.createThread(claimed.project_id, threadTitle(claimed, now), claimed.model)).id;
+      await store.updateAgent(claimed.id, { thread_id: threadId, thread_month: month });
+    }
+    const out = await ACTIONS.chat(store, { threadId, content: runMessage(claimed, now), routing: true }, env, deps);
+    status = out.status ? `Didn't finish: ${out.body.error}` : `Done. Cost $${Number(out.message.cost_usd || 0).toFixed(3)}.`;
+  } catch (e) {
+    if (!(e instanceof StoreError || e?.name === "TimeoutError" || e instanceof TypeError)) throw e;
+    status = "Didn't run: workspace storage was unavailable.";
+  }
+  await store.updateAgent(claimed.id, { last_status: status.slice(0, 300) }).catch(() => null);
+  console.warn(JSON.stringify({ event: "agent_run", id: claimed.id, ok: status.startsWith("Done") }));
+  return { id: claimed.id, ran: true, status, threadId };
+}
+
+/**
+ * The daily cron (api/cron.js): runs every switched-on agent due today, at most once each per UTC day, up to
+ * MAX_AGENTS. The caller has already checked the cron secret. One agent's failure never stops the others.
+ */
+export async function runDueAgents(env, makeStore = createSupabaseStore, deps = {}) {
+  const d = { fetch: deps.fetch ?? fetch, net: deps.net ?? deps.fetch ?? guardedFetch, now: deps.now ?? (() => new Date()) };
+  if (!workspaceConfigured(env)) return error(503, "Workspace storage isn't set up yet.");
+  const store = makeStore(env, d.fetch);
+  const now = d.now();
+  let agents;
+  try { agents = await store.listEnabledAgents(); } catch { return { status: 200, body: { results: [], note: "No scheduled agents set up." } }; }
+  const due = agents.filter((a) => isDue(a, now)).slice(0, MAX_AGENTS);
+  const results = await Promise.all(due.map((a) => runAgent(store, env, d, a, dayStart(now))
+    .catch(() => ({ id: a.id, ran: false, status: "Failed unexpectedly." }))));
+  console.warn(JSON.stringify({ event: "agents_cron", due: due.length, ran: results.filter((r) => r.ran).length }));
+  return { status: 200, body: { results } };
+}
 
 // Memory edits need the memory columns; before the one-time database update they report that plainly.
 async function memoryUpdate(store, noteId, patch) {
