@@ -25,6 +25,7 @@ const CONNECTOR_COLS = "id,project_id,kind,name,spec,fingerprint,enabled,created
 const MESSAGE_COLS = "id,thread_id,role,content,model,input_tokens,output_tokens,cost_usd,created_at";
 const FILE_INFO_COLS = "id,thread_id,name,mime,bytes,pages,created_at";
 const inList = (ids) => `in.(${ids.join(",")})`;
+const AGENT_COLS = "id,project_id,name,prompt,model,cadence,weekday,enabled,thread_id,thread_month,last_run_at,last_status,created_at";
 const ACTION_COLS = "id,thread_id,kind,payload,fingerprint,status,proposed_by,result,result_url,created_at,expires_at,decided_at";
 
 export class StoreError extends Error {}
@@ -113,6 +114,19 @@ export function createSupabaseStore(env, f = fetch) {
     countFiles: async (threadId) => (await call("GET", `ws_files?select=id&thread_id=eq.${threadId}&limit=1000`)).length,
     fileInfo: (threadId, ids) => call("GET", `ws_files?select=${FILE_INFO_COLS}&thread_id=eq.${threadId}&id=${inList(ids)}`),
     getFiles: (threadId, ids) => call("GET", `ws_files?select=${FILE_INFO_COLS},data&thread_id=eq.${threadId}&id=${inList(ids)}`),
+    // Scheduled agents (api/_lib/workspace-agents.js). A missing table means no agents: nothing runs.
+    listAgents: (projectId) => call("GET", `ws_agents?select=${AGENT_COLS}&project_id=eq.${projectId}&order=created_at.asc&limit=50`),
+    listEnabledAgents: () => call("GET", `ws_agents?select=${AGENT_COLS}&enabled=is.true&order=created_at.asc&limit=50`),
+    countAgents: async () => (await call("GET", "ws_agents?select=id&limit=100")).length,
+    getAgent: async (id) => (await call("GET", `ws_agents?select=${AGENT_COLS}&id=eq.${id}`))[0] ?? null,
+    addAgent: async (a) => one(await call("POST", `ws_agents?select=${AGENT_COLS}`, a)),
+    updateAgent: async (id, patch) => (await call("PATCH", `ws_agents?id=eq.${id}&select=${AGENT_COLS}`, patch, "return=representation"))[0] ?? null,
+    deleteAgent: async (id) => (await call("DELETE", `ws_agents?id=eq.${id}&select=id`)).length > 0,
+    // Claims a run in one conditional update: only a switched-on agent whose last run is older than `before`.
+    // null means it is off, gone, or already claimed (a second cron call, a double click).
+    claimAgentRun: async (id, before, at) => (await call("PATCH",
+      `ws_agents?id=eq.${id}&enabled=is.true&or=${encodeURIComponent(`(last_run_at.is.null,last_run_at.lt."${before}")`)}&select=${AGENT_COLS}`,
+      { last_run_at: at, last_status: "Running…" }, "return=representation"))[0] ?? null,
     // Approval gate (api/_lib/workspace-actions.js). A missing table means no proposals can be saved or approved.
     listActions: (threadId) => call("GET", `ws_actions?select=${ACTION_COLS}&thread_id=eq.${threadId}&order=created_at.desc&limit=50`),
     getAction: async (id) => (await call("GET", `ws_actions?select=${ACTION_COLS}&id=eq.${id}`))[0] ?? null,
@@ -128,7 +142,7 @@ export function createSupabaseStore(env, f = fetch) {
 // `shared` set to "unreadable" makes the shared-threads query fail, to prove nothing is shared then.
 /** @param {{ control?: boolean | "unreadable", shared?: "unreadable" }} [opts] */
 export function createMemoryStore({ control = false, shared = null } = {}) {
-  const projects = [], threads = [], messages = [], notes = [], connectors = [], actions = [], files = [];
+  const projects = [], threads = [], messages = [], notes = [], connectors = [], actions = [], files = [], agents = [];
   let ctl = control;
   let clock = Date.parse("2026-10-21T00:00:00Z");
   const now = () => new Date(clock++).toISOString();
@@ -231,6 +245,23 @@ export function createMemoryStore({ control = false, shared = null } = {}) {
     countFiles: async (threadId) => files.filter((f) => f.thread_id === threadId).length,
     fileInfo: async (threadId, ids) => files.filter((f) => f.thread_id === threadId && ids.includes(f.id)).map(({ data, ...info }) => info),
     getFiles: async (threadId, ids) => files.filter((f) => f.thread_id === threadId && ids.includes(f.id)).map((f) => ({ ...f })),
+    listAgents: async (projectId) => agents.filter((a) => a.project_id === projectId).map((a) => ({ ...a })),
+    listEnabledAgents: async () => agents.filter((a) => a.enabled === true).map((a) => ({ ...a })),
+    countAgents: async () => agents.length,
+    getAgent: async (id) => { const a = agents.find((x) => x.id === id); return a ? { ...a } : null; },
+    addAgent: async (a) => {
+      const row = { id: randomUUID(), enabled: true, thread_id: null, thread_month: null, last_run_at: null, last_status: null, ...a, created_at: now() };
+      agents.push(row);
+      return { ...row };
+    },
+    updateAgent: async (id, patch) => { const a = agents.find((x) => x.id === id); if (a) Object.assign(a, patch); return a ? { ...a } : null; },
+    deleteAgent: async (id) => { const i = agents.findIndex((a) => a.id === id); if (i >= 0) agents.splice(i, 1); return i >= 0; },
+    claimAgentRun: async (id, before, at) => {
+      const a = agents.find((x) => x.id === id && x.enabled === true && (!x.last_run_at || x.last_run_at < before));
+      if (!a) return null;
+      Object.assign(a, { last_run_at: at, last_status: "Running…" });
+      return { ...a };
+    },
     listActions: async (threadId) => actions.filter((a) => a.thread_id === threadId).sort(byNewest("created_at")).map((a) => structuredClone(a)),
     getAction: async (id) => structuredClone(actions.find((a) => a.id === id) ?? null),
     addAction: async (a) => {

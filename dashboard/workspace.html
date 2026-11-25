@@ -50,6 +50,10 @@ button,select,textarea{font:inherit;color:inherit}
 .list button[aria-current="true"]{background:var(--accent-soft)}
 .memory{display:grid;gap:6px;padding:12px 14px;border-top:1px solid var(--line);background:var(--panel-2)}
 .memory .list{padding:0}
+.agentform{display:grid;gap:6px}
+.agentform .row{flex-wrap:wrap;align-items:center;gap:6px}
+.agentform input,.agentform textarea{width:100%}
+.note.warn{color:var(--warn)}
 .list .nrow{display:flex;gap:8px;align-items:flex-start;padding:6px 4px;white-space:pre-wrap;overflow-wrap:anywhere}
 .list .nrow{flex-wrap:wrap}
 .list .nrow > span:first-child{flex:1 1 60%}
@@ -145,6 +149,23 @@ details.file pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:300px;ov
       <p class="note">Every AI in this project reads these notes. The AIs add facts you tell them in shared threads (never from private ones). Facts from replies that used the web or other threads wait here until you tap Keep.</p>
       <ul class="list" id="nList"></ul>
       <form id="nForm" class="row"><label class="note" for="nText" style="width:100%">New note</label><textarea id="nText" maxlength="2000" rows="2" required></textarea><button class="btn ghost" type="submit">Add note</button></form>
+    </details>
+    <details id="agents" class="memory sect" hidden>
+      <summary><h3 id="gH" class="eyebrow">Scheduled agents</h3></summary>
+      <p class="note">An instruction that runs by itself every day or once a week, in its own thread. Same fences as your questions: Stop everything, the spend caps, and nothing outward without your approval.</p>
+      <p class="note warn" id="gCron" hidden></p>
+      <ul class="list" id="gList"></ul>
+      <form id="gForm" class="agentform">
+        <label class="note" for="gName">Name</label><input id="gName" maxlength="60" required placeholder="Morning brief">
+        <label class="note" for="gPrompt">What it should do</label><textarea id="gPrompt" maxlength="4000" rows="3" required placeholder="Search the web for news about federal IT contracts and give me 5 bullet points."></textarea>
+        <div class="row">
+          <label class="note" for="gModel">AI</label><select id="gModel" class="sel"><option value="claude">Claude</option><option value="chatgpt">ChatGPT</option><option value="perplexity">Perplexity</option></select>
+          <label class="note" for="gCadence">How often</label><select id="gCadence" class="sel"><option value="daily">Every day</option><option value="weekly">Once a week</option></select>
+          <select id="gDay" class="sel" aria-label="Day of the week" hidden><option value="1">Monday</option><option value="2">Tuesday</option><option value="3">Wednesday</option><option value="4">Thursday</option><option value="5">Friday</option><option value="6">Saturday</option><option value="0">Sunday</option></select>
+        </div>
+        <p class="note">Runs around 7 AM Eastern (12:00 UTC). Usually about 1¢ a run, more if it searches the web.</p>
+        <button class="btn ghost" type="submit">Add agent</button>
+      </form>
     </details>
   </aside>
   <div class="scrim" id="scrim" hidden></div>
