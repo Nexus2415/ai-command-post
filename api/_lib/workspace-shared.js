@@ -23,7 +23,10 @@ const SOURCES_LINE = /\n*Drew on other threads: [^\n]*/g;
 // The project-memory lines written under a reply (workspace-memory.js) are owner-only too: a fact still waiting for
 // the owner's review must never reach a model through history or another thread's background.
 const MEMORY_LINES = /\n*(?:Saved to project memory: |Waiting for you to keep or delete \(Project memory\): |Project memory is full \()[^\n]*/g;
-export const stripSources = (s) => String(s).replace(SOURCES_LINE, "").replace(MEMORY_LINES, "");
+// The smart-routing note under a light-model answer (api/workspace.js) is for the owner too.
+export const ROUTE_LABEL = "Answered by the light model (smart routing): ";
+const ROUTE_LINE = /\n*Answered by the light model \(smart routing\): [^\n]*/g;
+export const stripSources = (s) => String(s).replace(SOURCES_LINE, "").replace(MEMORY_LINES, "").replace(ROUTE_LINE, "");
 const SYNTHESIS = "[Roundtable final answer]";
 const FAILED = "(The AI provider failed";
 
