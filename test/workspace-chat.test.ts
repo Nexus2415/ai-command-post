@@ -194,7 +194,7 @@ test("tool-only provider completion reports incomplete analysis and preserves us
     usage: { input_tokens: 10, output_tokens: 2 },
   }))) as typeof fetch;
   const out = await runChat(base, "claude", [{role:"user", content:"Audit"}], {
-    f, tools: [{ name:"linear_search_issues", description:"Synthetic lookup", parameters:{type:"object",properties:{}} }],
+    f, tools: [{ name:"linear_search_issues", description:"Synthetic lookup", parameters:{type:"object",properties:{}} }] as never[],
     runTool: async () => ({ok:true, text:"Synthetic result", usd:0}),
   });
   assert.match(out.text, /did not return an analysis/);
