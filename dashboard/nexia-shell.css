@@ -102,3 +102,10 @@ h1,h2,h3 {font-family:var(--display);font-weight:650;letter-spacing:.01em}
   .nexia-workspace-body .modes {max-width:100%}
 }
 @media(prefers-reduced-motion:reduce){.nexia-emblem *{animation:none!important;transition:none!important}}
+
+/* Plain-language captions are visible on desktop and phone. */
+.nexia-links a > span {min-width:0;display:grid;gap:3px;line-height:1.25}
+.nexia-links a small {display:block;font-size:10px;font-weight:400;color:var(--muted)}
+.nexia-planned li {flex-wrap:wrap;gap:3px 7px}
+.nexia-planned li small {margin-left:0}
+@media(max-width:420px){.nexia-links a {overflow-wrap:anywhere;font-size:10.5px}.nexia-links a small {font-size:10px}}
