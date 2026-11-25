@@ -138,7 +138,8 @@ const SYSTEM = "You are an assistant in the AI Command Post workspace for Arnexy
 // Project memory: the owner's notes for the project, newest last, up to MAX_NOTES_CHARS in all.
 export const MAX_NOTES_CHARS = 8_000;
 // `shared` is the bounded background from the project's other shared threads (workspace-shared.js), or "".
-export function systemPrompt(notes, shared = "") {
+// `remember` adds the instruction that lets the AI save facts to project memory (workspace-memory.js).
+export function systemPrompt(notes, shared = "", remember = "") {
   const kept = [];
   let chars = 0;
   for (let i = notes.length - 1; i >= 0; i--) {
@@ -147,7 +148,8 @@ export function systemPrompt(notes, shared = "") {
     chars += c.length;
     kept.unshift(c);
   }
-  const base = kept.length ? `${SYSTEM}\n\nProject notes from the owner (keep them in mind):\n${kept.map((n) => `- ${n}`).join("\n")}` : SYSTEM;
+  let base = kept.length ? `${SYSTEM}\n\nProject notes (from the owner, or saved from the owner's conversations; keep them in mind):\n${kept.map((n) => `- ${n}`).join("\n")}` : SYSTEM;
+  if (remember) base += `\n\n${remember}`;
   return shared ? `${base}\n\n${shared}` : base;
 }
 
@@ -249,12 +251,12 @@ const tokens = (n) => Math.max(0, Math.floor(Number(n) || 0));
  * `beforeCall(estimateUsd, costSoFarUsd)` runs before every model call and throws BudgetStop to stop. Usage from calls already
  * made is always returned, so it is recorded even when a later step fails.
  */
-export async function runChat(env, model, history, { f = fetch, tools = [], runTool, beforeCall = async () => {}, now = Date.now, notes = [], shared = "" } = {}) {
+export async function runChat(env, model, history, { f = fetch, tools = [], runTool, beforeCall = async () => {}, now = Date.now, notes = [], shared = "", remember = "" } = {}) {
   const status = modelStatus(env, model);
   if (!status.ready) throw new ModelError(status.reason);
   const fee = feeFor(env, model);
   const started = now();
-  const system = systemPrompt(notes, shared);
+  const system = systemPrompt(notes, shared, remember);
   const convo = history.map((m) => ({ role: m.role, content: m.content }));
   const used = [];
   let inputTokens = 0, outputTokens = 0, cost = 0, text = "", note = "";

@@ -12,7 +12,14 @@ const PROJECT_COLS = "id,name,created_at";
 // thread whose flag is missing or unreadable is reported as private: null, and sharing treats it as private.
 const privacyOf = (t) => (t.private === true ? true : t.private === false ? false : null);
 const thread = (t) => ({ id: t.id, project_id: t.project_id, title: t.title, model: t.model, created_at: t.created_at, updated_at: t.updated_at, private: privacyOf(t) });
-const NOTE_COLS = "id,project_id,content,created_at";
+// Notes are read with "*" too, so they keep working before the memory columns exist (db/workspace.sql). A note
+// without them is the owner's own (every note was, before automatic memory).
+const note = (n) => ({
+  id: n.id, project_id: n.project_id, content: n.content, created_at: n.created_at,
+  source: n.source === "ai" ? "ai" : "owner", model: n.model ?? null, thread_id: n.thread_id ?? null,
+  // An AI-saved fact counts as waiting for review unless the flag is certainly false (fail closed).
+  pending: n.source === "ai" ? n.pending !== false : n.pending === true,
+});
 const CONTROL_COLS = "stopped,updated_at";
 const CONNECTOR_COLS = "id,project_id,kind,name,spec,fingerprint,enabled,created_at";
 const MESSAGE_COLS = "id,thread_id,role,content,model,input_tokens,output_tokens,cost_usd,created_at";
@@ -74,10 +81,15 @@ export function createSupabaseStore(env, f = fetch) {
       call("GET", `ws_messages?select=${MESSAGE_COLS}&thread_id=eq.${threadId}&order=created_at.asc&limit=500`),
     addMessage: async (threadId, msg) =>
       one(await call("POST", `ws_messages?select=${MESSAGE_COLS}`, { thread_id: threadId, ...msg })),
-    listNotes: (projectId) =>
-      call("GET", `ws_notes?select=${NOTE_COLS}&project_id=eq.${projectId}&order=created_at.asc&limit=50`),
-    addNote: async (projectId, content) =>
-      one(await call("POST", `ws_notes?select=${NOTE_COLS}`, { project_id: projectId, content })),
+    listNotes: async (projectId) =>
+      (await call("GET", `ws_notes?select=*&project_id=eq.${projectId}&order=created_at.asc&limit=50`)).map(note),
+    // `extra` ({ source, model, thread_id, pending }) needs the memory columns; the owner's own notes don't.
+    addNote: async (projectId, content, extra = {}) =>
+      note(one(await call("POST", `ws_notes?select=*`, { project_id: projectId, content, ...extra }))),
+    // The owner edits a note, or keeps an AI-saved fact (pending: false).
+    updateNote: async (noteId, patch) =>
+      (await call("PATCH", `ws_notes?id=eq.${noteId}&select=*`, { ...patch, updated_at: new Date().toISOString() }))
+        .map(note)[0] ?? null,
     deleteNote: async (noteId) => (await call("DELETE", `ws_notes?id=eq.${noteId}&select=id`)).length > 0,
     spend: async (threadId, since) => {
       const row = one(await call("POST", "rpc/ws_spend", { p_thread: threadId, p_since: since }));
@@ -153,11 +165,17 @@ export function createMemoryStore({ control = false, shared = null } = {}) {
       if (t) t.updated_at = m.created_at;
       return m;
     },
-    listNotes: async (projectId) => notes.filter((n) => n.project_id === projectId),
-    addNote: async (projectId, content) => {
-      const n = { id: randomUUID(), project_id: projectId, content, created_at: now() };
+    listNotes: async (projectId) => notes.filter((n) => n.project_id === projectId).map((n) => ({ ...n })),
+    addNote: async (projectId, content, extra = {}) => {
+      const n = { id: randomUUID(), project_id: projectId, content, source: "owner", model: null, thread_id: null, pending: false, ...extra, created_at: now() };
       notes.push(n);
-      return n;
+      return { ...n };
+    },
+    updateNote: async (noteId, patch) => {
+      const n = notes.find((x) => x.id === noteId);
+      if (!n) return null;
+      Object.assign(n, patch);
+      return { ...n };
     },
     deleteNote: async (noteId) => {
       const i = notes.findIndex((n) => n.id === noteId);

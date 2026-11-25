@@ -92,17 +92,34 @@
     await Promise.all([loadProjects(), loadThreads(), loadNotes()]);
   }
 
+  // Project memory: the owner's notes, and facts the AIs saved from shared threads. A fact from a reply that used
+  // the web, a tool or another thread waits here until the owner keeps it; no AI reads it before then.
   async function loadNotes() {
     const { notes } = await post("list_notes", { projectId });
     const list = $("nList"); list.replaceChildren();
     if (!notes.length) list.append(el("li", "empty", "No notes yet."));
     for (const n of notes) {
-      const row = el("li", "nrow");
-      const del = el("button", null, "Delete");
-      del.type = "button";
-      del.setAttribute("aria-label", "Delete note: " + n.content.slice(0, 40));
-      del.addEventListener("click", guard(async () => { await post("delete_note", { noteId: n.id }); await loadNotes(); }));
-      row.append(el("span", null, n.content), del);
+      const row = el("li", "nrow" + (n.pending ? " pending" : ""));
+      const body = el("span", null, n.content);
+      const tag = n.source === "ai"
+        ? el("span", "note ntag", (n.pending ? "Waiting for you. " : "") + "Saved by " + (MODEL_NAMES[n.model] || "an AI"))
+        : null;
+      const actions = el("span", "row nact");
+      const btn = (label, aria, fn) => {
+        const b = el("button", null, label); b.type = "button"; b.setAttribute("aria-label", aria + ": " + n.content.slice(0, 40));
+        b.addEventListener("click", guard(fn)); actions.append(b); return b;
+      };
+      if (n.pending) btn("Keep", "Keep this fact", async () => { await post("keep_note", { noteId: n.id }); await loadNotes(); });
+      btn("Edit", "Edit note", async () => {
+        const next = window.prompt("Edit this note", n.content);
+        if (next == null || !next.trim() || next.trim() === n.content) return;
+        await post("update_note", { noteId: n.id, content: next });
+        await loadNotes();
+      });
+      btn("Delete", "Delete note", async () => { await post("delete_note", { noteId: n.id }); await loadNotes(); });
+      row.append(body);
+      if (tag) row.append(tag);
+      row.append(actions);
       list.append(row);
     }
   }
