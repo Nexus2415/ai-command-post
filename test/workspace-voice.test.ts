@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 
-// Mobile and voice: static checks only (the browser's speech features can't run in node). Talking fills the question
+// Mobile and voice: static checks and fake speech callbacks (real device audio is tested separately). Talking fills the question
 // box and never sends by itself; nothing is stored in the browser.
 const read = (p: string) => readFileSync(new URL(`../dashboard/${p}`, import.meta.url), "utf8");
 
@@ -33,7 +33,7 @@ test("the workspace can be added to a phone's home screen", () => {
 test("read aloud starts one chunk per callback and surfaces errors or silent start", () => {
   const js = read("workspace.js");
   const start = js.indexOf("  let speaking = null;");
-  const end = js.indexOf("  syncMic();\n\n  guard", start);
+  const end = js.indexOf('  window.addEventListener("pagehide", () => stopSpeaking());', start);
   assert.ok(start >= 0 && end > start);
   const utterances: any[] = [], notes: string[] = [], timers = new Map<number, () => void>();
   let timer = 0, cancels = 0;
