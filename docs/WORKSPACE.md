@@ -148,6 +148,11 @@ Claude and ChatGPT threads can use the public web through Firecrawl (Perplexity 
 - A light answer ends with a small "⚡ Light model" note. Turn Smart off and ask again for the full model. Discussion mode always uses the full models; Perplexity has no light model.
 - Light models can be changed with `ACP_OPENROUTER_MODEL_CLAUDE_LIGHT` / `ACP_OPENROUTER_MODEL_CHATGPT_LIGHT` (same-vendor only) or `ACP_MODEL_CLAUDE_LIGHT` / `ACP_MODEL_CHATGPT_LIGHT` with direct keys. Costs use the light rates in `api/_lib/workspace-models.js` (or OpenRouter's reported cost, whichever is higher).
 
+## Plugin catalog
+- The Tools page now opens with **Catalog: ready-made tools**: weather, currency rates, Wikipedia, Hacker News, GitHub projects and npm packages. All free, read-only, no key.
+- **Review** shows the same plain-language summary as a tool you build yourself; **Confirm and turn on** adds it for every project. The server uses its own copy of the entry (`api/_lib/workspace-catalog.js`), so only the project scope comes from the page. Once added it is an ordinary look-up tool: switchable, metered (~0.1¢ a call), stopped by Stop everything.
+- Adding an entry: free, no key, GET with `?name=value` inputs, and it must pass `test/workspace-catalog.test.ts`.
+
 ## Scheduled agents
 - In the side panel under Project memory: **Scheduled agents**. Give one a name, an instruction, an AI, and every day or one day a week. Up to 5 in the workspace.
 - Each run asks the instruction in the agent's own thread for the month ("⏰ name · 2026-11"), through the same path as your own questions: Stop everything is checked first (stopped or unreadable means the run is skipped), the rules gate checks the instruction when saved and on every run, the $15/month and per-thread caps apply (so each agent can spend at most the thread cap a month), web tools keep their own checks, and an agent can only **propose** Linear actions for you to approve. Smart routing is on for runs.

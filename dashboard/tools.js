@@ -78,6 +78,31 @@
     }
     if (!list.children.length) list.append(el("p", "empty", "Nothing added yet. Add a connector or build a tool below."));
   }
+  // Plugin catalog: ready-made look-up tools. Adding one goes through the same review and confirmation as any other;
+  // the server uses its own copy of the entry, so only the project scope is chosen here.
+  async function loadCatalog() {
+    const c = await post("catalog");
+    const list = $("catList"); list.replaceChildren();
+    for (const e of c.entries) {
+      const card = el("div", "conn");
+      card.append(el("span", "cat", e.category), el("strong", null, e.title), el("span", "note", e.blurb), el("span", "note", "Reaches only " + e.host));
+      if (e.added) card.append(el("span", "chip on", "Added"));
+      else {
+        const b = el("button", "btn ghost", "Review " + e.title); b.type = "button";
+        b.addEventListener("click", guard(async () => {
+          const out = $("catOut");
+          const spec = { projectId: null };
+          try {
+            const preview = await post("connector_preview", { catalogId: e.id, spec });
+            review(out, "http", preview.spec, preview, e.id);
+            out.scrollIntoView({ block: "nearest" });
+          } catch (err) { showError(out, err); }
+        }));
+        card.append(b);
+      }
+      list.append(card);
+    }
+  }
   function guard(fn) {
     return async (ev) => {
       if (ev && ev.preventDefault) ev.preventDefault();
@@ -87,7 +112,7 @@
   }
 
   // Shows the review and a Confirm button; saving sends the confirmation code for exactly what was shown.
-  function review(out, kind, spec, preview) {
+  function review(out, kind, spec, preview, catalogId) {
     const box = el("div", "review");
     box.append(el("strong", null, "Check this before it turns on"), summaryList(preview.summary));
     const row = el("div", "row");
@@ -98,9 +123,9 @@
     ok.addEventListener("click", async () => {
       ok.disabled = true;
       try {
-        await post("connector_save", { kind, spec, confirm: preview.confirm });
+        await post("connector_save", catalogId ? { catalogId, spec: { projectId: spec.projectId }, confirm: preview.confirm } : { kind, spec, confirm: preview.confirm });
         out.replaceChildren(el("p", "msg", spec.name + " is on. The AIs can use it in their next reply."));
-        await load();
+        await Promise.all([load(), loadCatalog()]);
       } catch (e) { ok.disabled = false; showError(out, e); }
     });
     no.addEventListener("click", () => out.replaceChildren());
@@ -182,5 +207,6 @@
 
   const sw = window.ACPStopSwitch.mount($("stopSwitch"), { post });
   sw.refresh();
-  load().catch((e) => say(e.message, "err"));
+  // One after the other, so the password is asked for once.
+  load().then(loadCatalog).catch((e) => say(e.message, "err"));
 })();
