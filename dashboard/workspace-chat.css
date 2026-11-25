@@ -141,3 +141,13 @@ body{background-image:none;font-size:15px}
 .modes input:disabled + span{opacity:.4;cursor:default}
 .m.check{font-size:14px;color:var(--muted);border-left:3px solid var(--ag,var(--line));padding-left:12px}
 @media (max-width:420px){.modes span{padding:4px 8px;font-size:11px}}
+/* Sent, waiting for the answer: your message shows at once, with a "thinking" line under it. */
+.m.user.pending{opacity:.85}
+.m.thinking{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:15px}
+.m.thinking .dots{display:inline-flex;gap:4px}
+.m.thinking .dots{width:36px;height:10px;background:
+  radial-gradient(circle,var(--accent) 45%,transparent 50%) 0 50%/10px 10px no-repeat,
+  radial-gradient(circle,var(--accent) 45%,transparent 50%) 13px 50%/10px 10px no-repeat,
+  radial-gradient(circle,var(--accent) 45%,transparent 50%) 26px 50%/10px 10px no-repeat;animation:think 1.2s ease-in-out infinite}
+@keyframes think{50%{opacity:.35}}
+@media (prefers-reduced-motion:reduce){.m.thinking .dots{animation:none}}
