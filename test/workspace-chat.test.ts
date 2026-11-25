@@ -193,10 +193,12 @@ test("tool-only provider completion reports incomplete analysis and preserves us
     content: ++calls === 1 ? [{ type: "tool_use", id: "tool-1", name: "linear_search_issues", input: {} }] : [],
     usage: { input_tokens: 10, output_tokens: 2 },
   }))) as typeof fetch;
-  const out = await runChat(base, "claude", [{role:"user", content:"Audit"}], {
+  // The JavaScript signature infers an incomplete options type; the runtime supports this injected tool seam.
+  const options = {
     f, tools: [{ name:"linear_search_issues", description:"Synthetic lookup", parameters:{type:"object",properties:{}} }] as never[],
     runTool: async () => ({ok:true, text:"Synthetic result", usd:0}),
-  });
+  };
+  const out = await runChat(base, "claude", [{role:"user", content:"Audit"}], options);
   assert.match(out.text, /did not return an analysis/);
   assert.match(out.text, /Tools used: linear_search_issues/);
   assert.equal(calls, 2);
