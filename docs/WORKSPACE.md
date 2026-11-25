@@ -41,7 +41,7 @@ In Vercel, open **arnexyia-command-post → Settings → Environment Variables**
 
 ## Step 6: side-by-side answers
 - Under the message box, tick up to two other ready AIs ("Also ask, side by side"). The message then goes to the thread's AI and those AIs at once, and their answers show in columns.
-- The budget check covers every chosen AI's worst case together, before any call. Plugins stay off for side-by-side answers, so nothing can spend past that check.
+- The budget check covers every chosen AI's worst case together, before any call. Only the read-only web tools (web_search, web_read_page) are on for side-by-side and discussion answers, and for a checker that joins a discussion; each web call is checked against the caps before it runs and listed under that AI's answer, as in a one-AI reply. Connectors, Linear, GitHub and action proposals stay off there.
 
 ## Step 6b: how a question is answered (1 AI / + Checker / Discussion)
 - A three-way toggle on the question box picks how each question is answered. The line under the box shows the rough cost of the chosen mode. The choice is remembered per project while the page is open (the page never writes browser storage).
@@ -70,7 +70,7 @@ In Vercel, open **arnexyia-command-post → Settings → Environment Variables**
 - Only the tools you name in `tools` are offered, and only when the server also marks them read-only. That mark is the server's own claim and can't be checked from here, so only name tools whose documentation says they only read. Your list is what decides.
 - For each tool, name the arguments it may receive and their type (`string`, `number` or `boolean`). A tool named on its own (`"list_recent"`) receives no arguments. Anything else the AI tries to send is refused before it leaves, as are values over 300 characters and any value that contains one of this site's keys or passwords.
 - A server's token goes in its own Vercel variable whose name starts with `ACP_MCP_TOKEN_`. No other variable can be used, so no other key can be sent to an MCP server.
-- Up to 5 servers. A server that can't be reached is skipped and the reply goes ahead. The page lists each server under Plugins. Claude and ChatGPT can use them; Perplexity and side-by-side answers don't use plugins.
+- Up to 5 servers. A server that can't be reached is skipped and the reply goes ahead. The page lists each server under Plugins. Claude and ChatGPT can use them; Perplexity and side-by-side answers don't use them (side-by-side answers get web search only).
 - Before naming a tool, check what it reads. A tool that fetches any web page brings back the risk described in Step 4.
 
 ## Step 9: Tools and connectors page (add and build your own, read-only)
