@@ -44,6 +44,13 @@ create table if not exists ws_notes (
   created_at timestamptz not null default now()
 );
 create index if not exists ws_notes_project_idx on ws_notes (project_id, created_at);
+-- Automatic memory: facts an AI saved from a shared thread (api/_lib/workspace-memory.js). `pending` facts wait for
+-- the owner to tap Keep; no AI reads them before then. Safe to run again.
+alter table ws_notes add column if not exists source text not null default 'owner' check (source in ('owner', 'ai'));
+alter table ws_notes add column if not exists model text check (model in ('claude', 'chatgpt', 'gemini', 'perplexity'));
+alter table ws_notes add column if not exists thread_id uuid references ws_threads(id) on delete set null;
+alter table ws_notes add column if not exists pending boolean not null default false;
+alter table ws_notes add column if not exists updated_at timestamptz;
 
 -- A new message moves its thread to the top of the list.
 create or replace function ws_touch_thread() returns trigger language plpgsql set search_path = public as $$

@@ -168,7 +168,7 @@ test("project notes reach every model's instructions, and only that project's", 
   await call("add_note", { projectId: other.project.id, content: "Unrelated note" });
   const t = (await call("create_thread", { projectId: p.project.id, title: "T" })).body as any;
   await call("chat", { threadId: t.thread.id, content: "Hi" });
-  assert.match(calls[0]!.body.system, /Project notes from the owner[\s\S]*- Pilot clients are in South Florida\./);
+  assert.match(calls[0]!.body.system, /Project notes \(from the owner[\s\S]*- Pilot clients are in South Florida\./);
   assert.doesNotMatch(calls[0]!.body.system, /Unrelated/);
 
   const notes = ((await call("list_notes", { projectId: p.project.id })).body as any).notes;

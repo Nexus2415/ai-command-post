@@ -12,6 +12,8 @@ import {
 } from "./_lib/workspace-connectors.js";
 import { STOP_MARK, harmCheck, logRefusal, refusalText, textOf } from "./_lib/workspace-rules.js";
 import { CHANGED, inheritedSources, sharedFor, sourcesLine, stillShared, stripSources } from "./_lib/workspace-shared.js";
+import { MAX_NOTES, REMEMBER_PROMPT, extractFacts, memoryFor, saveFacts } from "./_lib/workspace-memory.js";
+import { isShared } from "./_lib/workspace-shared.js";
 import { CRITIQUE_MARK, SYNTHESIS_MARK, critiquePrompt, estimateRounds, roundtableState, synthesisPrompt } from "./_lib/workspace-roundtable.js";
 import {
   ACTION_KINDS, ACTION_MARK, ActionError, MAX_PENDING_PER_THREAD, MAX_PROPOSALS_PER_REPLY, actionsReady, approvalProblem,
@@ -37,7 +39,6 @@ function caps(env) {
 }
 const monthStart = (now) => new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
 const usd = (n) => "$" + n.toFixed(2);
-const MAX_NOTES = 20;
 // Text files attached to a message are folded into it, marked by name, so the 32,000-character limit covers them.
 const MAX_FILES = 3;
 const NOT_A_MESSAGE = "A message of 1 to 32,000 characters is required.";
@@ -269,6 +270,18 @@ const ACTIONS = Object.freeze({
     if ((await store.listNotes(args.projectId)).length >= MAX_NOTES) return error(409, `A project can hold ${MAX_NOTES} notes. Delete one first.`);
     return { note: await store.addNote(args.projectId, content) };
   },
+  // The owner edits a note. Editing an AI-saved fact also keeps it: the owner has now read it.
+  async update_note(store, args) {
+    if (!isId(args.noteId)) return error(400, "Unknown note.");
+    const content = text(args.content, 2_000);
+    if (!content) return error(400, "A note of 1 to 2,000 characters is required.");
+    return memoryUpdate(store, args.noteId, { content, pending: false });
+  },
+  // Keep an AI-saved fact that was waiting for review: from now on every AI in the project reads it.
+  async keep_note(store, args) {
+    if (!isId(args.noteId)) return error(400, "Unknown note.");
+    return memoryUpdate(store, args.noteId, { pending: false });
+  },
   async delete_note(store, args) {
     if (!isId(args.noteId)) return error(400, "Unknown note.");
     return (await store.deleteNote(args.noteId)) ? { deleted: true } : error(404, "Unknown note.");
@@ -463,7 +476,9 @@ const ACTIONS = Object.freeze({
     try {
       out = await runChat(env, model, sent, {
         f: deps.fetch, tools, shared: shared.text,
-        notes: (await store.listNotes(thread.project_id)).map((n) => n.content),
+        notes: await memoryFor(store, thread.project_id),
+        // Only a shared thread may add to project memory (re-checked on the server when saving).
+        remember: isShared(thread) ? REMEMBER_PROMPT : "",
         runTool: gatedRunTool(store, thread.id, (name, a, soFar = 0) => (isProposalTool(name) && tools.some((t) => t.name === name)
           ? gate.propose(name, a) : runTool(env, tools, name, a, deps.fetch, webCtx(soFar)))),
         // Every later round of tool use is checked again: the stop switch, and the caps counting what this reply
@@ -482,7 +497,14 @@ const ACTIONS = Object.freeze({
       if (e.usage?.costUsd > 0) await record(`(The AI provider failed partway through this reply: ${e.message})`, e.usage);
       return { status: 502, body: { error: `${e.message} Your message was saved; try again for a reply.`, saved } };
     }
-    const message = await gatedReply(store, thread.id, model, out.text, out, "", sourcesLine(shared.sources) + webAuditText(webLog) + proposalsText(gate.made));
+    // Facts the AI asked to remember are taken out of the reply and saved to project memory, live when the reply
+    // used nothing from outside (no tools, no other threads), otherwise waiting for the owner's review.
+    const { text: answer, facts } = extractFacts(out.text);
+    const memoryLine = harmCheck(answer) ? "" : await saveFacts(store, thread.id, model, facts, {
+      stopReason: () => stopReason(store), harmCheck, trusted: !out.toolsUsed?.length && !shared.sources.length,
+    });
+    const message = await gatedReply(store, thread.id, model, answer || "(The AI sent an empty reply.)", out, "",
+      memoryLine + sourcesLine(shared.sources) + webAuditText(webLog) + proposalsText(gate.made));
     return { saved, message };
   },
   // Side-by-side answers: one message goes to 2-3 AIs at once and each answer is saved with its AI. Plugins stay
@@ -526,7 +548,7 @@ const ACTIONS = Object.freeze({
     if (!state || !state.answers.length) return error(409, "There is no side-by-side answer to discuss yet.");
     if (state.synthesis) return error(409, "This roundtable is already finished. Ask a new question to start another.");
     const over = await budgetCheck(store, env, deps, thread.id, true);
-    const notes = (await store.listNotes(thread.project_id)).map((n) => n.content);
+    const notes = await memoryFor(store, thread.project_id);
     const ask = (m, prompt) => runChat(env, m, [{ role: "user", content: prompt }], { f: deps.fetch, notes });
     const failedReply = (m, e) => (e.usage?.costUsd > 0
       ? reply(store, thread.id, m, `(The AI provider failed partway through this reply: ${e.message})`, e.usage) : null);
@@ -586,6 +608,17 @@ const ACTIONS = Object.freeze({
   },
 });
 
+// Memory edits need the memory columns; before the one-time database update they report that plainly.
+async function memoryUpdate(store, noteId, patch) {
+  try {
+    const note = await store.updateNote(noteId, patch);
+    return note ? { note } : error(404, "Unknown note.");
+  } catch (e) {
+    if (e instanceof StoreError) return error(503, "Editing project memory needs a one-time database update first.");
+    throw e;
+  }
+}
+
 const sumCost = (ms) => Math.round(ms.reduce((n, m) => n + Number(m.cost_usd || 0), 0) * 1e6) / 1e6;
 
 // Who took part, and who dropped out at which round, written under the conclusion.
@@ -640,7 +673,7 @@ async function runRound1(store, env, deps, { thread, content, models, sent, shar
   if (rule) return refusedRequest(rule, await refuse(store, thread.id, "request", rule));
   if (!(await stillShared(store, thread, shared))) return error(409, CHANGED);
   const saved = await store.addMessage(thread.id, { role: "user", content });
-  const notes = (await store.listNotes(thread.project_id)).map((n) => n.content);
+  const notes = await memoryFor(store, thread.project_id);
   const results = await Promise.all(models.map((m) => runChat(env, m, sent, { f: deps.fetch, notes, shared: shared.text })
     .then((r) => ({ m, r }), (e) => { if (e instanceof ModelError) return { m, e }; throw e; })));
   const messages = [], failed = [];

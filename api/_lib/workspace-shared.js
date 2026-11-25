@@ -20,7 +20,10 @@ export const MESSAGES_PER_THREAD = 8;     // newest messages read from each
 // so a thread title never travels on after its thread turns private.
 export const SOURCES_LABEL = "Drew on other threads: ";
 const SOURCES_LINE = /\n*Drew on other threads: [^\n]*/g;
-export const stripSources = (s) => String(s).replace(SOURCES_LINE, "");
+// The project-memory lines written under a reply (workspace-memory.js) are owner-only too: a fact still waiting for
+// the owner's review must never reach a model through history or another thread's background.
+const MEMORY_LINES = /\n*(?:Saved to project memory: |Waiting for you to keep or delete \(Project memory\): |Project memory is full \()[^\n]*/g;
+export const stripSources = (s) => String(s).replace(SOURCES_LINE, "").replace(MEMORY_LINES, "");
 const SYNTHESIS = "[Roundtable final answer]";
 const FAILED = "(The AI provider failed";
 

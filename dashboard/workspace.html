@@ -51,8 +51,13 @@ button,select,textarea{font:inherit;color:inherit}
 .memory{display:grid;gap:6px;padding:12px 14px;border-top:1px solid var(--line);background:var(--panel-2)}
 .memory .list{padding:0}
 .list .nrow{display:flex;gap:8px;align-items:flex-start;padding:6px 4px;white-space:pre-wrap;overflow-wrap:anywhere}
-.list .nrow span{flex:1}
-.list .nrow button{width:auto;padding:2px 6px;font-size:12px;color:var(--bad)}
+.list .nrow{flex-wrap:wrap}
+.list .nrow > span:first-child{flex:1 1 60%}
+.list .nrow .ntag{flex-basis:100%;order:3;white-space:normal;margin-top:-6px}
+.list .nrow.pending{border-left:3px solid var(--warn);background:var(--warn-soft)}
+.list .nrow .nact{flex:none;gap:4px}
+.list .nrow button{width:auto;padding:2px 6px;font-size:12px}
+.list .nrow button[aria-label^="Delete"]{color:var(--bad)}
 .list .sub{font:500 11px var(--mono);color:var(--muted)}
 .empty{color:var(--muted);padding:10px;font-size:13px}
 .btn{border:1px solid var(--accent);background:var(--accent);color:var(--accent-fg);border-radius:6px;padding:6px 12px;cursor:pointer;font-weight:600}
@@ -134,7 +139,7 @@ details.file pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:300px;ov
         <ul class="list" id="pList"><li class="empty">Loading…</li></ul>
         <section id="notes" class="memory" aria-labelledby="nH" hidden>
           <h3 id="nH" class="eyebrow">Project memory</h3>
-          <p class="note">Every AI in this project reads these notes.</p>
+          <p class="note">Every AI in this project reads these notes. The AIs add facts you tell them in shared threads (never from private ones). Facts from replies that used the web or other threads wait here until you tap Keep.</p>
           <ul class="list" id="nList"></ul>
           <form id="nForm" class="row"><label class="note" for="nText" style="width:100%">New note</label><textarea id="nText" maxlength="2000" rows="2" required></textarea><button class="btn ghost" type="submit">Add note</button></form>
         </section>
