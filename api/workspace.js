@@ -21,6 +21,7 @@ import {
   buildProposal, describeAction, isProposalTool, proposalTools, runAction,
 } from "./_lib/workspace-actions.js";
 
+import { CATALOG, catalogEntry } from "./_lib/workspace-catalog.js";
 import {
   AgentProblem, MAX_AGENTS, RUN_NOW_GAP_MS, checkAgent, cronReady, dayStart, describeSchedule, isDue, monthKey, runMessage, threadTitle,
 } from "./_lib/workspace-agents.js";
@@ -197,6 +198,13 @@ async function savedConnectors(store) {
 }
 // Checks a connector or custom tool from the Tools page. Returns an error response, or { spec, fp, summary }.
 async function checkConnector(store, args, env, deps) {
+  // A catalog entry is added from the server's own copy (workspace-catalog.js); only its project scope is chosen.
+  if (args.catalogId !== undefined) {
+    const entry = catalogEntry(args.catalogId);
+    if (!entry) return error(400, "That isn't in the catalog.");
+    const projectId = args.spec && typeof args.spec === "object" ? args.spec.projectId ?? null : null;
+    args = { kind: "http", spec: { ...structuredClone(entry.spec), projectId } };
+  }
   const kind = args.kind;
   if (kind !== "http" && kind !== "mcp") return error(400, "Pick a connector or a custom tool.");
   const raw = args.spec && typeof args.spec === "object" && !Array.isArray(args.spec) ? args.spec : null;
@@ -387,6 +395,15 @@ const ACTIONS = Object.freeze({
       // Servers set in Vercel (ACP_MCP_SERVERS) are shown but can only be changed there.
       fromVercel: mcpServers(env).map((s) => ({ name: s.name, host: new URL(s.url).host, tools: s.tools.map((t) => t.name), keyVar: s.tokenVar })),
       projects: projects.map((p) => ({ id: p.id, name: p.name })),
+    };
+  },
+  // Plugin catalog: ready-made look-up tools, and which are already added.
+  async catalog(store) {
+    const { rows, ready } = await savedConnectors(store);
+    const names = new Set(rows.map((r) => r.name));
+    return {
+      setupNeeded: !ready,
+      entries: CATALOG.map((c) => ({ id: c.id, category: c.category, title: c.title, blurb: c.blurb, host: new URL(c.spec.url).host, added: names.has(c.spec.name) })),
     };
   },
   // Asks an MCP server which tools it offers, so the owner can pick. Nothing is saved.
