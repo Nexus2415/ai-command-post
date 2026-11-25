@@ -7,7 +7,7 @@ import { BudgetStop, ModelError, estimateUsd, isPaid, mergeTurns, modelStatus, r
 import { pluginStatus, readyTools, runTool, urlsIn } from "./_lib/workspace-plugins.js";
 import { mcpStatus, mcpTools } from "./_lib/workspace-mcp.js";
 import { STOP_MARK, harmCheck, logRefusal, refusalText, textOf } from "./_lib/workspace-rules.js";
-import { CHANGED, sharedFor, sourcesLine, stillShared, stripSources } from "./_lib/workspace-shared.js";
+import { CHANGED, inheritedSources, sharedFor, sourcesLine, stillShared, stripSources } from "./_lib/workspace-shared.js";
 import { CRITIQUE_MARK, SYNTHESIS_MARK, critiquePrompt, estimateRounds, roundtableState, synthesisPrompt } from "./_lib/workspace-roundtable.js";
 
 // Vercel: model replies can take a while.
@@ -349,7 +349,8 @@ const ACTIONS = Object.freeze({
         .then((r) => ({ m, r }), (e) => { if (e instanceof ModelError) return { m, e }; throw e; })));
       const messages = [], failed = [];
       for (const { m, r, e } of results) {
-        if (r) { messages.push(await gatedReply(store, thread.id, m, r.text, r, `${CRITIQUE_MARK}\n`)); continue; }
+        // A critique built on answers that drew on other threads carries their "drew on" line too.
+        if (r) { messages.push(await gatedReply(store, thread.id, m, r.text, r, `${CRITIQUE_MARK}\n`, inheritedSources(state.answers))); continue; }
         await failedReply(m, e);
         failed.push({ model: m, error: e.message });
       }
@@ -380,7 +381,7 @@ const ACTIONS = Object.freeze({
         continue;
       }
       const footer = whoTookPart(args.models, state, m, failed);
-      const message = await gatedReply(store, thread.id, m, `${r.text}\n\n${footer}`, r, `${SYNTHESIS_MARK}\n`);
+      const message = await gatedReply(store, thread.id, m, `${r.text}\n\n${footer}`, r, `${SYNTHESIS_MARK}\n`, inheritedSources(state.answers));
       return { message, failed, lead: m, roundtableUsd: sumCost([...state.answers, ...state.critiques, message]) };
     }
     return { status: 502, body: { error: "No AI could write the conclusion. The first answers and critiques are saved.", failed } };

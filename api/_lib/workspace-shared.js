@@ -35,11 +35,30 @@ const words = (s) => new Set((String(s).toLowerCase().match(/[a-z0-9][a-z0-9'-]{
 export const isShared = (t) => Boolean(t) && t.private === false;
 
 // What one thread contributes: its latest roundtable conclusion if it has one, otherwise its newest messages.
+// An AI answer that drew on other threads carries the "drew on" line. Its text may repeat another thread's content,
+// so it is never passed on to a third thread: if that source later turns private, its content must not keep
+// travelling through copies. The owner still reads it in its own thread.
+export const isDerived = (m) => m?.role === "assistant" && typeof m.content === "string" && m.content.includes(SOURCES_LABEL);
+
+/** One "drew on" line covering every source named in `messages` (for roundtable rounds built on such answers). */
+export function inheritedSources(messages) {
+  const titles = new Set();
+  for (const m of messages) {
+    for (const line of String(m.content).match(SOURCES_LINE) ?? []) {
+      for (const t of line.replace(/^\n*Drew on other threads: /, "").match(/"[^"]*"/g) ?? []) titles.add(t);
+    }
+  }
+  return titles.size ? `\n\n${SOURCES_LABEL}${[...titles].join(", ")}` : "";
+}
+
 function excerpt(messages) {
-  const usable = messages
+  const all = messages
     .filter((m) => (m.role === "user" || m.role === "assistant") && typeof m.content === "string")
     .filter((m) => !isNotice(m) && !m.content.startsWith(FAILED))
     .sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+  // Conservative: once a thread's recent answers drew on other threads, its later AI answers may build on them too,
+  // so only the owner's own messages are quoted from it.
+  const usable = all.some(isDerived) ? all.filter((m) => m.role === "user") : all;
   const synth = usable.find((m) => m.role === "assistant" && m.content.startsWith(SYNTHESIS));
   const picked = synth ? [synth] : usable.slice(0, 4);
   const lines = [];

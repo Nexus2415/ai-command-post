@@ -252,3 +252,62 @@ test("stillShared fails closed on a read error and passes when nothing was drawn
   assert.equal(await stillShared(broken, t, { text: "x", sources: [{ id: "a", title: "A" }] }), false);
   assert.equal(await stillShared(broken, t, { text: "", sources: [] }), true);
 });
+
+// A provider that repeats everything it was sent, the worst case for copies: whatever reaches it ends up in its answer.
+function echoHarness() {
+  const store = createMemoryStore();
+  const sent: string[] = [];
+  const fakeFetch = (async (url: any, init: any) => {
+    const body = String(init?.body ?? "");
+    sent.push(`${url}\n${body}`);
+    // Leads with anything secret-looking it was sent, so the copy survives the per-message excerpt limit.
+    const echo = `Echo: ${(body.match(/ZEBRA-SECRET-\d+/g) ?? []).join(" ")} ${body.slice(0, 2_000)}`;
+    if (String(url).includes("anthropic")) return json({ content: [{ type: "text", text: echo }], usage: { input_tokens: 100, output_tokens: 50 } });
+    return json({ choices: [{ message: { content: echo } }], usage: { prompt_tokens: 100, completion_tokens: 50 } });
+  }) as typeof fetch;
+  const call = async (action: string, args: object = {}) =>
+    handle({ method: "POST", headers, body: { action, args } }, base, () => store, { fetch: fakeFetch, now }) as Promise<{ status: number; body: any }>;
+  return { sent, call, store };
+}
+
+test("copies don't travel: A shared, B's AI repeats A, A made private, C never sees A (chat and roundtable)", async () => {
+  for (const mode of ["chat", "roundtable"]) {
+    const { call, sent, store } = echoHarness();
+    const p = await project(call);
+    const a = await thread(call, p.id, "Launch budget source");
+    await seed(store, a.id, "Launch budget?", `Launch budget is ${SECRET}`);
+    const b = await thread(call, p.id, "Launch budget copy");
+    if (mode === "chat") {
+      const r = await call("chat", { threadId: b.id, content: "What is the launch budget?" });
+      assert.match(r.body.message.content, new RegExp(SECRET), "the echo provider repeated A into B");
+    } else {
+      const models = ["claude", "chatgpt"];
+      assert.equal((await call("roundtable", { step: "start", threadId: b.id, content: "What is the launch budget?", models })).status, 200);
+      assert.equal((await call("roundtable", { step: "critique", threadId: b.id })).status, 200);
+      const syn = await call("roundtable", { step: "synthesize", threadId: b.id, models });
+      assert.equal(syn.status, 200);
+      assert.match(syn.body.message.content, new RegExp(SOURCES_LABEL), "the conclusion names what its answers drew on");
+    }
+    assert.equal((await call("set_private", { threadId: a.id, private: true })).status, 200);
+    sent.length = 0;
+    const c = await thread(call, p.id, "Launch budget elsewhere");
+    const rc = await call("chat", { threadId: c.id, content: "What is the launch budget?" });
+    assert.equal(rc.status, 200);
+    assert.ok(sent.length > 0);
+    assert.deepEqual(leaked(sent, SECRET), [], `${mode}: A's text reached C through B's copy`);
+  }
+});
+
+test("long questions: the latest one always reaches the AI", async () => {
+  const { call, sent, store } = harness();
+  const p = await project(call);
+  const a = await thread(call, p.id, "Launch notes");
+  await seed(store, a.id, "Launch notes?", "Launch notes here.");
+  const b = await thread(call, p.id, "Long");
+  const q1 = "launch " + "x".repeat(31_000), q2 = "launch LATEST " + "y".repeat(31_000);
+  assert.equal((await call("chat", { threadId: b.id, content: q1 })).status, 200);
+  assert.equal((await call("chat", { threadId: b.id, content: q2 })).status, 200);
+  const messages = JSON.parse(sent.at(-1)!.split("\n").slice(1).join("\n")).messages;
+  assert.ok(messages.length > 0);
+  assert.match(String(messages.at(-1).content), /launch LATEST/);
+});
