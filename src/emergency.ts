@@ -22,7 +22,8 @@ export type EmergencyDecision = { allowed: true; permit: EmergencyPermit } | { a
 export class EmergencyGate {
   private highWater = 0;
   private observedMode: EmergencyMode | null = null;
-  constructor(private readonly read: EmergencyReader = async () => null) {}
+  private readonly read: EmergencyReader;
+  constructor(read: EmergencyReader = async () => null) { this.read = read; }
 
   private async current(): Promise<EmergencyState | null> {
     try {
