@@ -118,60 +118,84 @@ details.file pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:300px;ov
 </style>
 <link rel="stylesheet" href="ops-theme.css">
 <link rel="stylesheet" href="flow-view.css">
+<link rel="stylesheet" href="workspace-chat.css">
 <script src="ops-ui.js"></script>
 
-<div class="wrap">
-  <div class="bar">
-    <h1>Workspace</h1>
-    <div class="stopwrap" id="stopSwitch"></div>
-    <span class="grow"></span>
-    <span class="note mono" id="plugins"></span>
-    <span class="note mono" id="budget" aria-live="polite"></span>
-    <a href="/tools.html">Tools and connectors</a>
-    <a href="/">Back to Command Post</a>
-  </div>
-  <div id="pageMsg" class="msg" role="status" hidden></div>
-  <div class="ws">
-    <section class="panel col" aria-labelledby="pH">
+<div class="wrap app">
+  <h1 class="sr-only">Workspace</h1>
+  <aside class="side" id="side" aria-label="Projects and threads">
+    <div class="side-top"><span class="side-brand">Workspace</span><button class="iconbtn side-close" id="sideClose" type="button" aria-label="Close the list">&times;</button></div>
+    <section class="sect" aria-labelledby="pH">
       <header><h2 id="pH">Projects</h2><button class="btn ghost" id="pNew" type="button">New</button></header>
-      <div>
-        <form class="new" id="pForm" hidden><label class="note" for="pName">Project name</label><input id="pName" maxlength="120" required><div class="row"><button class="btn" type="submit">Create</button><button class="btn ghost" type="button" id="pCancel">Cancel</button></div></form>
-        <ul class="list" id="pList"><li class="empty">Loading…</li></ul>
-        <section id="notes" class="memory" aria-labelledby="nH" hidden>
-          <h3 id="nH" class="eyebrow">Project memory</h3>
-          <p class="note">Every AI in this project reads these notes. The AIs add facts you tell them in shared threads (never from private ones). Facts from replies that used the web or other threads wait here until you tap Keep.</p>
-          <ul class="list" id="nList"></ul>
-          <form id="nForm" class="row"><label class="note" for="nText" style="width:100%">New note</label><textarea id="nText" maxlength="2000" rows="2" required></textarea><button class="btn ghost" type="submit">Add note</button></form>
-        </section>
-      </div>
+      <form class="new" id="pForm" hidden><label class="note" for="pName">Project name</label><input id="pName" maxlength="120" required><div class="row"><button class="btn" type="submit">Create</button><button class="btn ghost" type="button" id="pCancel">Cancel</button></div></form>
+      <ul class="list" id="pList"><li class="empty">Loading…</li></ul>
     </section>
-    <section class="panel col" aria-labelledby="tH">
+    <section class="sect" aria-labelledby="tH">
       <header><h2 id="tH">Threads</h2><button class="btn ghost" id="tNew" type="button" disabled>New</button></header>
-      <div>
-        <form class="new" id="tForm" hidden><label class="note" for="tTitle">Thread title</label><input id="tTitle" maxlength="200" required>
-          <label class="note" for="tModel">AI model</label><select id="tModel" class="sel"><option value="claude">Claude</option><option value="chatgpt">ChatGPT</option><option value="gemini">Gemini</option><option value="perplexity">Perplexity</option></select>
-          <div class="row"><button class="btn" type="submit">Create</button><button class="btn ghost" type="button" id="tCancel">Cancel</button></div></form>
-        <ul class="list" id="tList"><li class="empty">Pick a project.</li></ul>
-      </div>
+      <form class="new" id="tForm" hidden><label class="note" for="tTitle">Thread title</label><input id="tTitle" maxlength="200" required>
+        <label class="note" for="tModel">AI model</label><select id="tModel" class="sel"><option value="claude">Claude</option><option value="chatgpt">ChatGPT</option><option value="gemini">Gemini</option><option value="perplexity">Perplexity</option></select>
+        <div class="row"><button class="btn" type="submit">Create</button><button class="btn ghost" type="button" id="tCancel">Cancel</button></div></form>
+      <ul class="list" id="tList"><li class="empty">Pick a project.</li></ul>
     </section>
-    <section class="panel convo" aria-labelledby="cH">
-      <header style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:12px 14px;border-bottom:1px solid var(--line)"><h2 id="cH">No thread open</h2><span style="display:flex;gap:8px;align-items:center"><button id="cPrivacy" class="chip privacy" type="button" hidden></button><span id="cModel" class="chip" hidden><span class="dot"></span><span></span></span></span></header>
+    <details id="notes" class="memory sect" hidden>
+      <summary><h3 id="nH" class="eyebrow">Project memory</h3></summary>
+      <p class="note">Every AI in this project reads these notes. The AIs add facts you tell them in shared threads (never from private ones). Facts from replies that used the web or other threads wait here until you tap Keep.</p>
+      <ul class="list" id="nList"></ul>
+      <form id="nForm" class="row"><label class="note" for="nText" style="width:100%">New note</label><textarea id="nText" maxlength="2000" rows="2" required></textarea><button class="btn ghost" type="submit">Add note</button></form>
+    </details>
+  </aside>
+  <div class="scrim" id="scrim" hidden></div>
+  <main class="convo" aria-labelledby="cH">
+    <div class="bar">
+      <button class="iconbtn menu" id="menuBtn" type="button" aria-label="Projects and threads" aria-controls="side" aria-expanded="false"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
+      <div class="titlebox"><h2 id="cH">No thread open</h2><span class="chips"><span id="cModel" class="chip" hidden><span class="dot"></span><span></span></span><button id="cPrivacy" class="chip privacy" type="button" hidden></button></span></div>
+      <div class="stopwrap" id="stopSwitch"></div>
+      <button class="iconbtn" id="moreBtn" type="button" aria-label="More options" aria-controls="morePanel" aria-expanded="false"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="2" fill="currentColor"/><circle cx="12" cy="12" r="2" fill="currentColor"/><circle cx="19" cy="12" r="2" fill="currentColor"/></svg></button>
+      <div class="more" id="morePanel" hidden>
+        <div class="more-row" id="viewSlot"><span class="note">Show this thread as</span></div>
+        <p class="note mono" id="budget" aria-live="polite"></p>
+        <p class="note mono" id="plugins"></p>
+        <a href="/tools.html">Tools and connectors</a>
+        <a href="/">Back to Command Post</a>
+      </div>
+    </div>
+    <div class="scroller" id="scroller">
       <div class="msgs" id="mList" aria-live="polite"></div>
+      <div class="welcome" id="welcome">
+        <p class="welcome-h">Ask the AI team anything.</p>
+        <p class="note">Pick a project and a thread, or start a new one. Your question goes in the box at the bottom, and the answer appears here.</p>
+        <button class="btn" id="welcomeOpen" type="button">Choose a thread</button>
+      </div>
       <section class="approvals" id="aPanel" aria-labelledby="aH" hidden>
         <h3 id="aH" class="eyebrow">Waiting for your approval</h3>
         <p class="note">An AI proposed these. Nothing happens unless you approve. Approve runs it once, exactly as shown.</p>
         <ul class="alist" id="aList"></ul>
       </section>
+    </div>
+    <div class="dock">
+      <div id="pageMsg" class="msg" role="status" hidden></div>
       <form class="composer" id="cForm" hidden>
-        <label class="note" for="cText">Message</label>
-        <textarea id="cText" maxlength="32000"></textarea>
-        <div class="row"><button class="btn ghost" type="button" id="cAttach">Attach text file</button><input type="file" id="cFile" multiple hidden accept=".txt,.md,.csv,.tsv,.json,.log,.xml,.yaml,.yml,.html,.css,.js,.ts,.py,.sql,.sh,text/plain,text/markdown,text/csv"><span class="row" id="cFiles"></span></div>
-        <fieldset class="row" id="cCompare" hidden><legend class="note">Also ask, side by side:</legend></fieldset>
-        <label class="row note" id="cRoundRow" hidden><input type="checkbox" id="cRound" style="width:auto"> Roundtable: the AIs answer, review each other's answers, and agree on one recommendation (3 steps)</label>
-        <div class="row"><button class="btn" type="submit" id="cSend">Send</button><button class="btn ghost" type="button" id="cRetry" hidden>Get reply</button><button class="btn ghost" type="button" id="cDiscuss" hidden>Finish roundtable</button><span class="note" id="cNote">Ctrl+Enter to send.</span></div>
+        <div class="row extra"><button class="btn ghost" type="button" id="cRetry" hidden>Get reply</button><button class="btn ghost" type="button" id="cDiscuss" hidden>Finish roundtable</button></div>
+        <div class="box">
+          <label class="sr-only" for="cText">Message</label>
+          <textarea id="cText" maxlength="32000" rows="1" placeholder="Ask a question…"></textarea>
+          <span class="row" id="cFiles"></span>
+          <div class="boxrow">
+            <button class="iconbtn" type="button" id="cAttach" aria-label="Attach text file" title="Attach text file"><svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
+            <input type="file" id="cFile" multiple hidden accept=".txt,.md,.csv,.tsv,.json,.log,.xml,.yaml,.yml,.html,.css,.js,.ts,.py,.sql,.sh,text/plain,text/markdown,text/csv">
+            <button class="linkbtn" type="button" id="cOptsBtn" aria-controls="cOpts" aria-expanded="false" hidden>Ask more AIs</button>
+            <span class="grow"></span>
+            <button class="sendbtn" type="submit" id="cSend" aria-label="Send"><svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7" stroke="currentColor" stroke-width="2.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          </div>
+          <div class="opts" id="cOpts" hidden>
+            <fieldset class="row" id="cCompare" hidden><legend class="note">Also ask, side by side:</legend></fieldset>
+            <label class="row note" id="cRoundRow" hidden><input type="checkbox" id="cRound" style="width:auto"> Roundtable: the AIs answer, review each other's answers, and agree on one recommendation (3 steps)</label>
+          </div>
+        </div>
+        <span class="note hint" id="cNote">Ctrl+Enter to send.</span>
       </form>
-    </section>
-  </div>
+    </div>
+  </main>
 </div>
 <script src="stop-switch.js"></script>
 <script src="flow-view.js"></script>

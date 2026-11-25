@@ -122,3 +122,21 @@ test("the workspace page renders untrusted text safely and keeps the password ou
   assert.match(html, /<script src="workspace\.js"><\/script>/);
   assert.match(readFileSync(new URL("../dashboard/index.html", import.meta.url), "utf8"), /href="\/workspace\.html"/);
 });
+
+test("the workspace reads like a chat: answers in one column, one question box at the bottom, extras one tap away", () => {
+  const html = readFileSync(new URL("../dashboard/workspace.html", import.meta.url), "utf8");
+  const css = readFileSync(new URL("../dashboard/workspace-chat.css", import.meta.url), "utf8");
+  // The chat layout loads last, so it wins over the older theme files.
+  assert.match(html, /flow-view\.css">\s*<link rel="stylesheet" href="workspace-chat\.css">/);
+  // Order in the conversation: header, the answers, then the question box docked underneath.
+  const main = html.slice(html.indexOf('<main class="convo"'));
+  const at = (s: string) => { const i = main.indexOf(s); assert.ok(i >= 0, s); return i; };
+  assert.ok(at('class="bar"') < at('id="mList"') && at('id="mList"') < at('class="dock"') && at('class="dock"') < at('id="cText"'));
+  // Every feature is still on the page: list, memory, stop switch, More menu (spend, plugins, tools), compare, roundtable, files.
+  for (const id of ["pList", "tList", "notes", "nForm", "stopSwitch", "moreBtn", "morePanel", "budget", "plugins", "cCompare", "cRound", "cDiscuss", "cRetry", "cAttach", "cFile", "aPanel", "cPrivacy", "cModel", "menuBtn"])
+    assert.match(html, new RegExp(`id="${id}"`), id);
+  assert.match(html, /href="\/tools\.html"/);
+  // Phones get the list as a drawer; the question box has a readable width.
+  assert.match(css, /@media \(max-width:900px\)[^]*\.side\{position:fixed/);
+  assert.match(css, /\.msgs\{max-width:768px/);
+});
