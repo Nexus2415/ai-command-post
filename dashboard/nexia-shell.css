@@ -109,3 +109,89 @@ h1,h2,h3 {font-family:var(--display);font-weight:650;letter-spacing:.01em}
 .nexia-planned li {flex-wrap:wrap;gap:3px 7px}
 .nexia-planned li small {margin-left:0}
 @media(max-width:420px){.nexia-links a {overflow-wrap:anywhere;font-size:10.5px}.nexia-links a small {font-size:10px}}
+
+/* Phone layout: a dedicated bottom navigation, not a scaled-down desktop rail.
+   No changes above 700px. Keep the existing emergency action and all user controls. */
+@media(max-width:700px){
+  :root:root:root:root {--nx-phone-nav:calc(72px + env(safe-area-inset-bottom,0px))}
+  body:has(> .nexia-nav) {padding-bottom:var(--nx-phone-nav);background-attachment:scroll}
+  .nexia-nav {position:fixed;inset:auto 0 0 0;width:auto;min-height:var(--nx-phone-nav);
+    padding:5px max(8px,env(safe-area-inset-right,0px)) calc(5px + env(safe-area-inset-bottom,0px)) max(8px,env(safe-area-inset-left,0px));
+    border:0;border-top:1px solid var(--line);background:#081522;z-index:65;box-shadow:0 -8px 24px #0004}
+  .nexia-brand,.nexia-planned {display:none}
+  .nexia-links {grid-template-columns:repeat(4,minmax(0,1fr));gap:4px}
+  .nexia-links a {min-height:60px;flex-direction:column;gap:3px;padding:5px 2px;font-size:11px;line-height:1.2}
+  .nexia-links svg {display:block;width:21px;height:21px}
+  .nexia-links a > span {font-size:0;gap:0}
+  .nexia-links a small {font-size:11px;font-weight:600;color:inherit;line-height:1.2}
+  .nexia-links a[aria-current="page"] {box-shadow:inset 0 2px 0 var(--accent)}
+  .nexia-command-body .wrap,.nexia-tools-body .wrap,.nexia-tree-body .page {padding:12px 12px 20px;gap:12px;width:100%;min-width:0}
+  .nexia-command-body .bar {position:sticky;top:0;z-index:55;background:var(--bg);padding:8px 0;
+    display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--line)}
+  .nexia-command-body .bar h1 {font-size:20px;line-height:1.2;flex:1 1 auto;min-width:0}
+  .nexia-command-body .bar h1::before {content:"NEXIA";display:block;color:var(--accent);font-size:10px;letter-spacing:.2em;margin-bottom:4px}
+  .nexia-command-body .bar .grow,.nexia-command-body .bar .clock {display:none}
+  .nexia-command-body .bar .stopwrap {margin-left:auto;max-width:100%}
+  .nexia-command-body .bar .stopbtn {min-height:44px;font-size:11px;padding:8px 10px}
+  .nexia-command-body .ops-beacon[data-state="working"] {position:static}
+  .nexia-overview {grid-template-columns:minmax(0,1fr);padding:14px}
+  .nexia-overview > .nexia-emblem {display:none}
+  .nexia-overview h2 {font-size:21px}
+  .nexia-overview p {font-size:13px}
+  .nexia-overview .nexia-quick {display:none} /* Same destinations in bottom nav. */
+  .nexia-safety {font-size:12px;line-height:1.5;overflow-wrap:anywhere}
+  .nexia-command-body .cgrid,.nexia-command-body .cmain,.nexia-command-body .console {min-width:0;gap:12px}
+  .nexia-command-body .console .left,.nexia-command-body .console .right {padding:14px;min-width:0}
+  .nexia-command-body #cIntent {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+  .nexia-command-body #cIntent button {justify-content:center;min-height:48px;padding:6px;font-size:14px;white-space:normal;text-align:center}
+  .nexia-command-body #cText {min-height:104px;font-size:16px}
+  .nexia-command-body #cSend {width:100%;min-height:48px;font-size:15px}
+  .nexia-command-body #cKeys {display:none} /* Desktop keyboard shortcut only. */
+  .nexia-command-body .ctabs {display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
+  .nexia-command-body .ctab {justify-content:space-between;min-height:44px;font-size:13px}
+  .nexia-command-body .lane ol {max-height:none}
+  .nexia-command-body .kv dd {overflow-wrap:anywhere;min-width:0}
+  .nexia-workspace-body {box-sizing:border-box;height:100vh;height:100dvh;min-height:0;overflow:hidden}
+  .nexia-workspace-body .wrap.app {flex:1 1 0;height:auto;min-height:0;overflow:hidden}
+  .nexia-workspace-body .convo {height:100%;min-height:0}
+  .nexia-workspace-body .side {bottom:var(--nx-phone-nav);visibility:hidden}
+  .nexia-workspace-body .side.open {visibility:visible}
+  .nexia-workspace-body .scrim {bottom:var(--nx-phone-nav)}
+  .nexia-workspace-body .bar .stopbtn {min-height:44px}
+  .nexia-workspace-body .chips .privacy {min-height:44px;white-space:normal}
+  .nexia-workspace-body .welcome {margin:5vh auto 0;padding:16px}
+  .nexia-workspace-body .msgs {padding:16px 12px;gap:20px}
+  .nexia-workspace-body .cmp {grid-template-columns:minmax(0,1fr)}
+  .nexia-workspace-body .dock {padding:6px 8px 8px}
+  .nexia-workspace-body .composer .box {padding:8px 10px}
+  .nexia-workspace-body .boxrow {display:flex;flex-wrap:wrap;margin-left:0;gap:4px}
+  .nexia-workspace-body .modes {order:-1;flex:1 0 100%;display:grid;grid-template-columns:repeat(3,minmax(0,1fr))}
+  .nexia-workspace-body .modes label,.nexia-workspace-body .modes span {min-width:0;justify-content:center}
+  .nexia-workspace-body .modes span {min-height:44px;width:100%;padding:4px 3px;font-size:12px}
+  .nexia-workspace-body .sendbtn,.nexia-workspace-body .linkbtn {min-height:44px}
+  .nexia-workspace-body .sendbtn {width:44px}
+  .nexia-workspace-body .hint {display:none}
+  .nexia-workspace-body .more {max-height:calc(100dvh - var(--nx-phone-nav) - 90px);overflow:auto}
+  .nexia-tree-body .top {text-align:center;gap:8px}
+  .nexia-tree-body .top > nav,.nexia-tree-body .steps {display:none}
+  .nexia-tree-body .top h1 {font-size:25px;letter-spacing:.04em}
+  .nexia-tree-body .right-meta {display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:8px}
+  .nexia-tree-body #clock {display:none}
+  .nexia-tree-body .grid,.nexia-tree-body .rail {grid-template-columns:minmax(0,1fr);gap:12px}
+  .nexia-tree-body .grid > main {order:0} /* Summary before individual AI branches on phones. */
+  .nexia-tree-body .orb {width:min(156px,50vw);margin:22px auto}
+  .nexia-tree-body .orb::before {inset:-8px}
+  .nexia-tree-body .orb::after {inset:-14px}
+  .nexia-tree-body .hud {padding:12px;min-width:0}
+  .nexia-tree-body .qt,.nexia-tree-body .at {white-space:normal;overflow-wrap:anywhere}
+  .nexia-tree-body .ahead {flex-wrap:wrap}
+  .nexia-tools-body .bar {gap:8px}
+  .nexia-tools-body .bar h1 {font-size:22px}
+  .nexia-tools-body .bar > a {display:none} /* Workspace is always one tap away. */
+  .nexia-tools-body .grid2 {grid-template-columns:minmax(0,1fr)}
+  .nexia-tools-body .field input,.nexia-tools-body .field select,.nexia-tools-body .field textarea {font-size:16px;min-height:44px}
+}
+@media(max-width:700px) and (max-height:550px){
+  .nexia-workspace-body .composer textarea {max-height:20dvh}
+  .nexia-workspace-body .welcome {margin-top:0}
+}
