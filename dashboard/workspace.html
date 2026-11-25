@@ -1,6 +1,6 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Command Post Workspace</title>
+<title>NEXIA | Workspace</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
@@ -121,6 +121,9 @@ details.file pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:300px;ov
 <link rel="stylesheet" href="workspace-chat.css">
 <script src="ops-ui.js"></script>
 
+<link rel="stylesheet" href="/nexia-shell.css">
+<body class="nexia-workspace-body">
+<nav class="nexia-nav" aria-label="NEXIA primary navigation"><a class="nexia-brand" href="/" aria-label="NEXIA home"><svg class="nexia-emblem" aria-hidden="true" viewBox="0 0 96 96" fill="none"><circle cx="48" cy="48" r="44" stroke="#4688a5" stroke-dasharray="2 5"/><circle cx="48" cy="48" r="35" stroke="#65d9fa" stroke-opacity=".7"/><ellipse cx="48" cy="48" rx="15" ry="35" transform="rotate(45 48 48)" stroke="#65d9fa"/><ellipse cx="48" cy="48" rx="15" ry="35" transform="rotate(-45 48 48)" stroke="#65d9fa"/><circle cx="48" cy="48" r="6" fill="#d9f8ff"/><path d="M48 7V15M48 81V89M7 48H15M81 48H89" stroke="#83e5ff" stroke-width="2"/><circle cx="24" cy="24" r="3" fill="#83e5ff"/><circle cx="72" cy="72" r="3" fill="#83e5ff"/></svg><span><strong>NEXIA</strong><small>Your personal AI command center</small></span></a><div class="nexia-links"><a href="/"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16v12H4z M7 10l3 2-3 2 M12 15h5"/></svg><span>Command<small>Assign work</small></span></a><a href="/workspace.html" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v12H9l-5 4z M8 9h8 M8 13h6"/></svg><span>Workspace<small>Talk to AI</small></span></a><a href="/command.html"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v6 M5 19v-5h14v5 M12 10v9 M10 4h4 M3 19h4 M10 19h4 M17 19h4"/></svg><span>Orchestrator<small>Track work</small></span></a><a href="/tools.html"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l9 5v8l-9 5-9-5V8z M3 8l9 5 9-5 M12 13v8"/></svg><span>Forge<small>Connect apps</small></span></a></div><aside class="nexia-planned" aria-label="Module availability"><h2>More features</h2><ul><li>Cortex <small>What AI remembers</small></li><li>Pulse <small>How work is going</small></li><li>Sentinel <small>AI safety · planned</small></li><li>Vault <small>Protect information · planned</small></li><li>Constitution <small>AI rules · planned</small></li></ul><div class="nexia-pending"><b>AEGIS / BLACKOUT</b><p>Advanced emergency controls are not ready yet. Use Stop Everything in Command.</p></div></aside></nav>
 <div class="wrap app">
   <h1 class="sr-only">Workspace</h1>
   <aside class="side" id="side" aria-label="Projects and threads">
@@ -131,14 +134,14 @@ details.file pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:300px;ov
       <ul class="list" id="pList"><li class="empty">Loading…</li></ul>
     </section>
     <section class="sect" aria-labelledby="tH">
-      <header><h2 id="tH">Threads</h2><button class="btn ghost" id="tNew" type="button" disabled>New</button></header>
-      <form class="new" id="tForm" hidden><label class="note" for="tTitle">Thread title</label><input id="tTitle" maxlength="200" required>
-        <label class="note" for="tModel">AI model</label><select id="tModel" class="sel"><option value="claude">Claude</option><option value="chatgpt">ChatGPT</option><option value="gemini">Gemini</option><option value="perplexity">Perplexity</option></select>
+      <header><h2 id="tH">Conversations</h2><button class="btn ghost" id="tNew" type="button" disabled>New</button></header>
+      <form class="new" id="tForm" hidden><label class="note" for="tTitle">Conversation name</label><input id="tTitle" maxlength="200" required>
+        <label class="note" for="tModel">Choose an AI</label><select id="tModel" class="sel"><option value="claude">Claude</option><option value="chatgpt">ChatGPT</option><option value="gemini">Gemini</option><option value="perplexity">Perplexity</option></select>
         <div class="row"><button class="btn" type="submit">Create</button><button class="btn ghost" type="button" id="tCancel">Cancel</button></div></form>
       <ul class="list" id="tList"><li class="empty">Pick a project.</li></ul>
     </section>
     <details id="notes" class="memory sect" hidden>
-      <summary><h3 id="nH" class="eyebrow">Project memory</h3></summary>
+      <summary><h3 id="nH" class="eyebrow">Cortex · what AI remembers</h3></summary>
       <p class="note">Every AI in this project reads these notes. The AIs add facts you tell them in shared threads (never from private ones). Facts from replies that used the web or other threads wait here until you tap Keep.</p>
       <ul class="list" id="nList"></ul>
       <form id="nForm" class="row"><label class="note" for="nText" style="width:100%">New note</label><textarea id="nText" maxlength="2000" rows="2" required></textarea><button class="btn ghost" type="submit">Add note</button></form>
@@ -148,7 +151,7 @@ details.file pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:300px;ov
   <main class="convo" aria-labelledby="cH">
     <div class="bar">
       <button class="iconbtn menu" id="menuBtn" type="button" aria-label="Projects and threads" aria-controls="side" aria-expanded="false"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
-      <div class="titlebox"><h2 id="cH">No thread open</h2><span class="chips"><span id="cModel" class="chip" hidden><span class="dot"></span><span></span></span><button id="cPrivacy" class="chip privacy" type="button" hidden></button></span></div>
+      <div class="titlebox"><h2 id="cH">No conversation open</h2><span class="chips"><span id="cModel" class="chip" hidden><span class="dot"></span><span></span></span><button id="cPrivacy" class="chip privacy" type="button" hidden></button></span></div>
       <div class="stopwrap" id="stopSwitch"></div>
       <button class="iconbtn" id="moreBtn" type="button" aria-label="More options" aria-controls="morePanel" aria-expanded="false"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="2" fill="currentColor"/><circle cx="12" cy="12" r="2" fill="currentColor"/><circle cx="19" cy="12" r="2" fill="currentColor"/></svg></button>
       <div class="more" id="morePanel" hidden>
@@ -163,7 +166,7 @@ details.file pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:300px;ov
       <div class="msgs" id="mList" aria-live="polite"></div>
       <div class="welcome" id="welcome">
         <p class="welcome-h">Ask the AI team anything.</p>
-        <p class="note">Pick a project and a thread, or start a new one. Your question goes in the box at the bottom, and the answer appears here.</p>
+        <p class="note">Choose a project and conversation, or start a new one. Type your question below to talk to your AI.</p>
         <button class="btn" id="welcomeOpen" type="button">Choose a thread</button>
       </div>
       <section class="approvals" id="aPanel" aria-labelledby="aH" hidden>
@@ -184,9 +187,9 @@ details.file pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:300px;ov
             <button class="iconbtn" type="button" id="cAttach" aria-label="Attach text file" title="Attach text file"><svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
             <input type="file" id="cFile" multiple hidden accept=".txt,.md,.csv,.tsv,.json,.log,.xml,.yaml,.yml,.html,.css,.js,.ts,.py,.sql,.sh,text/plain,text/markdown,text/csv">
             <div class="modes" id="cMode" role="radiogroup" aria-label="How to answer">
-              <label title="One AI answers. Cheapest: well under 1 cent a question."><input type="radio" name="cMode" value="single"><span>1 AI</span></label>
-              <label title="One AI answers and a second, cheaper AI checks it. About 1 cent; if the checker disagrees they discuss it (a few cents)."><input type="radio" name="cMode" value="check" checked><span>+ Checker</span></label>
-              <label title="Every chosen AI answers, they settle disagreements, then one agreed answer. A few cents; up to about 15 cents with 3 AIs."><input type="radio" name="cMode" value="discuss"><span>Discussion</span></label>
+              <label title="Get an answer from one AI. Cost depends on the AI and your question."><input type="radio" name="cMode" value="single"><span>1 AI</span></label>
+              <label title="One AI answers and another checks its work. This may cost more than one AI."><input type="radio" name="cMode" value="check" checked><span>+ Checker</span></label>
+              <label title="Several AIs discuss your question and produce a final answer. This may cost more."><input type="radio" name="cMode" value="discuss"><span>Discussion</span></label>
             </div>
             <button class="linkbtn" type="button" id="cOptsBtn" aria-controls="cOpts" aria-expanded="false" hidden>AIs</button>
             <span class="grow"></span>

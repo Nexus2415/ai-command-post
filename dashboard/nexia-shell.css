@@ -1,0 +1,197 @@
+/* ARN-139: shared NEXIA presentation. No runtime, permission, or telemetry changes. */
+:root:root:root:root {
+  --bg:#07111c; --bg-2:#0b1929; --panel:#102033; --panel-2:#0b1828; --line:#29445b;
+  --fg:#e8f4ff; --muted:#a8bccc; --accent:#83e5ff; --accent-fg:#08202d; --accent-soft:#18394c;
+  --sand:#83e5ff; --olive:#18394c; --grid:rgba(99,194,234,.045);
+  --good:#62deb3; --good-soft:#13392e; --warn:#f3c873; --warn-soft:#382c19;
+  --bad:#ff827e; --bad-soft:#3d2028; --amber:#f3c873; --signal:#b42d37; --idle:#95a7b8;
+  --display:system-ui,-apple-system,"Segoe UI",sans-serif;
+  --body:system-ui,-apple-system,"Segoe UI",sans-serif;
+  --nx-rail:202px; color-scheme:dark;
+}
+html {background:var(--bg)}
+body {
+  margin:0; color:var(--fg); background-color:var(--bg);
+  background-image:radial-gradient(ellipse at 48% 0%,#18374d 0%,transparent 52%),
+    linear-gradient(var(--grid) 1px,transparent 1px),linear-gradient(90deg,var(--grid) 1px,transparent 1px);
+  background-size:auto,32px 32px,32px 32px; background-attachment:fixed;
+}
+h1,h2,h3 {font-family:var(--display);font-weight:650;letter-spacing:.01em}
+.panel,.ops-beacon,.hud {border-radius:12px}
+.panel {background:linear-gradient(155deg,#12283c,var(--panel-2));box-shadow:0 12px 32px #0002}
+.panel::before,.panel::after {display:none}
+.btn,.seg button,.sel,.chip,textarea,input {border-radius:8px}
+.btn {font-family:var(--body);text-transform:none;letter-spacing:.01em}
+.btn.ghost {color:var(--accent);border-color:var(--line)}
+:focus-visible {outline:2px solid var(--accent);outline-offset:3px}
+.stopbtn {border-radius:8px;font-family:var(--body);font-weight:750;letter-spacing:.025em;
+  background:#a92d38;color:#fff;border:2px solid #ffaca8;box-shadow:0 0 0 2px #f36c7166}
+.resumebtn {border-radius:8px}
+.ops-beacon[data-state="working"] {background:#312719}
+.nexia-nav {box-sizing:border-box;display:flex;flex-direction:column;gap:12px;padding:14px 16px;
+  background:#081522;border-bottom:1px solid #29445b;position:relative;z-index:51;min-width:0}
+.nexia-brand {display:flex;align-items:center;gap:12px;color:var(--fg);text-decoration:none;min-height:44px}
+.nexia-brand strong {display:block;letter-spacing:.24em;color:var(--accent);font:750 20px/1 var(--body);letter-spacing:.24em}
+.nexia-brand small {display:block;font-size:11px;color:var(--muted);margin-top:4px}
+.nexia-emblem {width:38px;height:38px;flex:none;filter:drop-shadow(0 0 9px #55c9ff55)}
+.nexia-links {display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}
+.nexia-links a {display:flex;align-items:center;gap:8px;min-height:44px;border:1px solid transparent;padding:7px 8px;
+  text-decoration:none;border-radius:8px;color:var(--muted);font-weight:600;font-size:12px;justify-content:center;text-align:center}
+.nexia-links a:hover {background:#122a3c;color:var(--fg)}
+.nexia-links a[aria-current="page"] {color:var(--accent);background:#143247;border-color:#37637e}
+.nexia-links svg {width:18px;height:18px;flex:none;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.nexia-planned {display:none;color:var(--muted);font-size:12px;line-height:1.5}
+.nexia-planned h2 {font:600 11px var(--mono);text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin:0 0 8px}
+.nexia-planned ul {list-style:none;padding:0;margin:0;display:grid;gap:9px}
+.nexia-planned li {display:flex;align-items:center;gap:7px}
+.nexia-planned small {margin-left:auto;font-size:10px;color:var(--muted)}
+.nexia-planned .nexia-pending {margin-top:14px;border:1px solid var(--line);border-radius:8px;padding:10px}
+.nexia-planned .nexia-pending b {color:var(--warn);font-size:12px}
+.nexia-planned .nexia-pending p {margin:5px 0 0}
+.nexia-overview {display:grid;grid-template-columns:112px minmax(0,1fr);gap:22px;align-items:center;
+  border:1px solid var(--line);border-radius:14px;background:linear-gradient(125deg,#132c42,#0b1828);padding:20px}
+.nexia-overview .nexia-emblem {width:100%;height:auto;max-width:112px}
+.nexia-overview h2 {font-size:clamp(20px,2.8vw,30px);margin:4px 0 6px;line-height:1.2}
+.nexia-overview p {margin:0;color:var(--muted);font-size:14px;max-width:56ch}
+.nexia-overview .eyebrow {color:var(--accent)}
+.nexia-overview .nexia-quick {display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.nexia-overview .nexia-quick a {display:inline-flex;min-height:44px;align-items:center;padding:6px 12px;border:1px solid var(--line);border-radius:8px;color:var(--accent);text-decoration:none}
+.nexia-overview .nexia-quick a:hover {background:var(--accent-soft)}
+.nexia-safety {margin:0;color:var(--muted);font-size:12px}
+.nexia-safety b {color:var(--warn)}
+.nexia-workspace-body {display:flex;flex-direction:column;min-height:100vh;min-height:100dvh}
+.nexia-workspace-body .wrap.app {width:100%;flex:1 1 0;min-height:0;height:auto}
+.nexia-workspace-body .convo {height:100%;min-height:0}
+.nexia-workspace-body .side {min-height:0}
+.nexia-workspace-body .side .list button {min-height:44px}
+.nexia-workspace-body .welcome-h {font-weight:650}
+@media(min-width:1350px){
+  body:has(> .nexia-nav) {padding-left:var(--nx-rail)}
+  .nexia-nav {position:fixed;inset:0 auto 0 0;width:var(--nx-rail);border-bottom:0;border-right:1px solid var(--line);padding:22px 12px;overflow:auto}
+  .nexia-brand {padding:0 5px;margin-bottom:15px}
+  .nexia-links {grid-template-columns:1fr;gap:6px}
+  .nexia-links a {justify-content:flex-start;text-align:left;font-size:14px}
+  .nexia-planned {display:block;margin-top:18px;padding:10px 6px;border-top:1px solid var(--line)}
+  .nexia-workspace-body .wrap.app {height:100dvh}
+  .nexia-tree-body .grid {grid-template-columns:220px minmax(0,1fr) 250px}
+  .nexia-tree-body .top h1 {font-size:clamp(22px,2.4vw,36px)}
+}
+@media(min-width:1350px) and (max-width:1599px){
+  .nexia-tree-body .grid {grid-template-columns:repeat(2,minmax(0,1fr))}
+  .nexia-tree-body .grid > main {grid-column:1/-1;grid-row:1}
+}
+@media(max-width:1349px){
+  .nexia-nav {padding:8px 12px;gap:5px}
+  .nexia-brand {min-height:38px}
+  .nexia-brand .nexia-emblem {width:30px;height:30px}
+  .nexia-brand strong {font-size:18px}
+  .nexia-links a {font-size:12px}
+}
+@media(max-width:420px){
+  .nexia-nav {padding:7px 8px}
+  .nexia-links {gap:3px}
+  .nexia-links a {font-size:11px;gap:4px;padding:6px 3px}
+  .nexia-links svg {display:none}
+  .nexia-overview {grid-template-columns:64px minmax(0,1fr);gap:10px;padding:12px}
+  .nexia-overview .nexia-quick {gap:6px}
+  .nexia-overview .nexia-quick a {min-height:44px}
+  .nexia-command-body .bar {gap:8px}
+  .nexia-command-body .bar h1 {font-size:23px}
+  .nexia-overview .nexia-quick a {font-size:12px;padding:5px 8px}
+  .nexia-workspace-body .boxrow {flex-wrap:wrap}
+  .nexia-workspace-body .modes {max-width:100%}
+}
+@media(prefers-reduced-motion:reduce){.nexia-emblem *{animation:none!important;transition:none!important}}
+
+/* Plain-language captions are visible on desktop and phone. */
+.nexia-links a > span {min-width:0;display:grid;gap:3px;line-height:1.25}
+.nexia-links a small {display:block;font-size:10px;font-weight:400;color:var(--muted)}
+.nexia-planned li {flex-wrap:wrap;gap:3px 7px}
+.nexia-planned li small {margin-left:0}
+@media(max-width:420px){.nexia-links a {overflow-wrap:anywhere;font-size:10.5px}.nexia-links a small {font-size:10px}}
+
+/* Phone layout: a dedicated bottom navigation, not a scaled-down desktop rail.
+   No changes above 700px. Keep the existing emergency action and all user controls. */
+@media(max-width:700px){
+  :root:root:root:root {--nx-phone-nav:calc(72px + env(safe-area-inset-bottom,0px))}
+  body:has(> .nexia-nav) {padding-bottom:var(--nx-phone-nav);background-attachment:scroll}
+  .nexia-nav {position:fixed;inset:auto 0 0 0;width:auto;min-height:var(--nx-phone-nav);
+    padding:5px max(8px,env(safe-area-inset-right,0px)) calc(5px + env(safe-area-inset-bottom,0px)) max(8px,env(safe-area-inset-left,0px));
+    border:0;border-top:1px solid var(--line);background:#081522;z-index:65;box-shadow:0 -8px 24px #0004}
+  .nexia-brand,.nexia-planned {display:none}
+  .nexia-links {grid-template-columns:repeat(4,minmax(0,1fr));gap:4px}
+  .nexia-links a {min-height:60px;flex-direction:column;gap:3px;padding:5px 2px;font-size:11px;line-height:1.2}
+  .nexia-links svg {display:block;width:21px;height:21px}
+  .nexia-links a > span {font-size:0;gap:0}
+  .nexia-links a small {font-size:11px;font-weight:600;color:inherit;line-height:1.2}
+  .nexia-links a[aria-current="page"] {box-shadow:inset 0 2px 0 var(--accent)}
+  .nexia-command-body .wrap,.nexia-tools-body .wrap,.nexia-tree-body .page {padding:12px 12px 20px;gap:12px;width:100%;min-width:0}
+  .nexia-command-body .bar {position:sticky;top:0;z-index:55;background:var(--bg);padding:8px 0;
+    display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--line)}
+  .nexia-command-body .bar h1 {font-size:20px;line-height:1.2;flex:1 1 auto;min-width:0}
+  .nexia-command-body .bar h1::before {content:"NEXIA";display:block;color:var(--accent);font-size:10px;letter-spacing:.2em;margin-bottom:4px}
+  .nexia-command-body .bar .grow,.nexia-command-body .bar .clock {display:none}
+  .nexia-command-body .bar .stopwrap {margin-left:auto;max-width:100%}
+  .nexia-command-body .bar .stopbtn {min-height:44px;font-size:11px;padding:8px 10px}
+  .nexia-command-body .ops-beacon[data-state="working"] {position:static}
+  .nexia-overview {grid-template-columns:minmax(0,1fr);padding:14px}
+  .nexia-overview > .nexia-emblem {display:none}
+  .nexia-overview h2 {font-size:21px}
+  .nexia-overview p {font-size:13px}
+  .nexia-overview .nexia-quick {display:none} /* Same destinations in bottom nav. */
+  .nexia-safety {font-size:12px;line-height:1.5;overflow-wrap:anywhere}
+  .nexia-command-body .cgrid,.nexia-command-body .cmain,.nexia-command-body .console {min-width:0;gap:12px}
+  .nexia-command-body .console .left,.nexia-command-body .console .right {padding:14px;min-width:0}
+  .nexia-command-body #cIntent {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+  .nexia-command-body #cIntent button {justify-content:center;min-height:48px;padding:6px;font-size:14px;white-space:normal;text-align:center}
+  .nexia-command-body #cText {min-height:104px;font-size:16px}
+  .nexia-command-body #cSend {width:100%;min-height:48px;font-size:15px}
+  .nexia-command-body #cKeys {display:none} /* Desktop keyboard shortcut only. */
+  .nexia-command-body .ctabs {display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
+  .nexia-command-body .ctab {justify-content:space-between;min-height:44px;font-size:13px}
+  .nexia-command-body .lane ol {max-height:none}
+  .nexia-command-body .kv dd {overflow-wrap:anywhere;min-width:0}
+  .nexia-workspace-body {box-sizing:border-box;height:100vh;height:100dvh;min-height:0;overflow:hidden}
+  .nexia-workspace-body .wrap.app {flex:1 1 0;height:auto;min-height:0;overflow:hidden}
+  .nexia-workspace-body .convo {height:100%;min-height:0}
+  .nexia-workspace-body .side {bottom:var(--nx-phone-nav);visibility:hidden}
+  .nexia-workspace-body .side.open {visibility:visible}
+  .nexia-workspace-body .scrim {bottom:var(--nx-phone-nav)}
+  .nexia-workspace-body .bar .stopbtn {min-height:44px}
+  .nexia-workspace-body .chips .privacy {min-height:44px;white-space:normal}
+  .nexia-workspace-body .welcome {margin:5vh auto 0;padding:16px}
+  .nexia-workspace-body .msgs {padding:16px 12px;gap:20px}
+  .nexia-workspace-body .cmp {grid-template-columns:minmax(0,1fr)}
+  .nexia-workspace-body .dock {padding:6px 8px 8px}
+  .nexia-workspace-body .composer .box {padding:8px 10px}
+  .nexia-workspace-body .boxrow {display:flex;flex-wrap:wrap;margin-left:0;gap:4px}
+  .nexia-workspace-body .modes {order:-1;flex:1 0 100%;display:grid;grid-template-columns:repeat(3,minmax(0,1fr))}
+  .nexia-workspace-body .modes label,.nexia-workspace-body .modes span {min-width:0;justify-content:center}
+  .nexia-workspace-body .modes span {min-height:44px;width:100%;padding:4px 3px;font-size:12px}
+  .nexia-workspace-body .sendbtn,.nexia-workspace-body .linkbtn {min-height:44px}
+  .nexia-workspace-body .sendbtn {width:44px}
+  .nexia-workspace-body .hint {display:none}
+  .nexia-workspace-body .more {max-height:calc(100dvh - var(--nx-phone-nav) - 90px);overflow:auto}
+  .nexia-tree-body .top {text-align:center;gap:8px}
+  .nexia-tree-body .top > nav,.nexia-tree-body .steps {display:none}
+  .nexia-tree-body .top h1 {font-size:25px;letter-spacing:.04em}
+  .nexia-tree-body .right-meta {display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:8px}
+  .nexia-tree-body #clock {display:none}
+  .nexia-tree-body .grid,.nexia-tree-body .rail {grid-template-columns:minmax(0,1fr);gap:12px}
+  .nexia-tree-body .grid > main {order:0} /* Summary before individual AI branches on phones. */
+  .nexia-tree-body .orb {width:min(156px,50vw);margin:22px auto}
+  .nexia-tree-body .orb::before {inset:-8px}
+  .nexia-tree-body .orb::after {inset:-14px}
+  .nexia-tree-body .hud {padding:12px;min-width:0}
+  .nexia-tree-body .qt,.nexia-tree-body .at {white-space:normal;overflow-wrap:anywhere}
+  .nexia-tree-body .ahead {flex-wrap:wrap}
+  .nexia-tools-body .bar {gap:8px}
+  .nexia-tools-body .bar h1 {font-size:22px}
+  .nexia-tools-body .bar > a {display:none} /* Workspace is always one tap away. */
+  .nexia-tools-body .grid2 {grid-template-columns:minmax(0,1fr)}
+  .nexia-tools-body .field input,.nexia-tools-body .field select,.nexia-tools-body .field textarea {font-size:16px;min-height:44px}
+}
+@media(max-width:700px) and (max-height:550px){
+  .nexia-workspace-body .composer textarea {max-height:20dvh}
+  .nexia-workspace-body .welcome {margin-top:0}
+}
