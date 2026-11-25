@@ -47,3 +47,17 @@ test("plain-language descriptions accompany the branded feature names", () => {
   assert.match(consoleScript, /cannot confirm that it is on/);
   assert.match(home, /Work already sent to another service may continue/);
 });
+
+test("phone layout reserves bottom navigation space and retains thumb-accessible controls", () => {
+  const css = read("nexia-shell.css");
+  const phone = css.slice(css.indexOf("/* Phone layout:"));
+  assert.match(phone, /@media\(max-width:700px\)/);
+  assert.match(phone, /safe-area-inset-bottom/);
+  assert.match(phone, /\.nexia-nav \{position:fixed;inset:auto 0 0 0/);
+  assert.match(phone, /padding-bottom:var\(--nx-phone-nav\)/);
+  assert.match(phone, /\.nexia-command-body \.bar \{position:sticky;top:0/);
+  assert.match(phone, /#cSend \{width:100%;min-height:48px/);
+  assert.match(phone, /\.nexia-workspace-body \.wrap\.app \{flex:1 1 0;height:auto;min-height:0/);
+  assert.match(phone, /\.nexia-workspace-body \.sendbtn,\.nexia-workspace-body \.linkbtn \{min-height:44px/);
+  assert.doesNotMatch(phone, /(?:stopwrap|stopbtn)\s*\{[^}]*display\s*:\s*none/);
+});
