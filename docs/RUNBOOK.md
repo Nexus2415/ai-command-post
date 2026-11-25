@@ -9,6 +9,7 @@
   - `ACP_DRY_RUN` — `true` (default) plans but writes nothing to Linear/GitHub; `false` = live writes.
   - `ACP_MONTHLY_BUDGET_USD` — spend cap, default `0` (free tiers only).
   - `ACP_ALLOW_PULL_REQUESTS` — default `false`; engine PRs are always draft.
+- Each AI can act on GitHub as its own GitHub App instead of the shared `ACP_GITHUB_TOKEN` (`src/identity.ts`), so GitHub records which AI did what. Per AI (`CLAUDE`, `CHATGPT`, `PERPLEXITY`): repo variables `ACP_GH_APP_<AI>_ID`, `ACP_GH_APP_<AI>_INSTALLATION`, `ACP_GH_APP_<AI>_SLUG` and repo secret `ACP_GH_APP_<AI>_KEY` (the app's .pem). An AI with none set uses the shared token as before; a partly set one is refused, and a refused app token fails the call instead of falling back to the shared account. The run's first log line lists who acts as its own app.
 - The first log line of a run states the mode, e.g. `ACTIVE · live writes · cap $0 · agents online: Gemini`. "Online" means a key is configured, not that the provider was reachable; reachability shows only when a call succeeds or fails in that run.
 
 ## Provider errors

@@ -14,6 +14,8 @@ export interface ToolResult {
 
 export interface ToolEnv {
   githubToken?: string;
+  /** This AI's own GitHub token (its GitHub App, src/identity.ts); used instead of githubToken when present. */
+  githubAuth?: () => Promise<string | undefined>;
   firecrawlKey?: string;
   vercelToken?: string;
   dryRun: boolean;
@@ -129,12 +131,13 @@ export function gitRef(v: unknown, fallback: string): string {
 }
 
 async function gh(env: ToolEnv, path: string, init: RequestInit = {}): Promise<any> {
-  if (!env.githubToken) throw new Error("GITHUB_TOKEN is not set");
+  const token = env.githubAuth ? await env.githubAuth() : env.githubToken;
+  if (!token) throw new Error("GITHUB_TOKEN is not set");
   const res = await (env.f ?? fetch)(`https://api.github.com${path}`, {
     ...init,
     headers: {
       accept: "application/vnd.github+json",
-      authorization: `Bearer ${env.githubToken}`,
+      authorization: `Bearer ${token}`,
       "x-github-api-version": "2022-11-28",
       ...(init.body ? { "content-type": "application/json" } : {}),
     },

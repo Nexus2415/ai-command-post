@@ -38,6 +38,19 @@ jobs:
           ACP_LINEAR_TEAM_KEY: ${{ vars.ACP_LINEAR_TEAM_KEY || 'ARN' }}
           ACP_DEFAULT_LEAD: ${{ vars.ACP_DEFAULT_LEAD || 'claude' }}
           ACP_GITHUB_REPOS: ${{ vars.ACP_GITHUB_REPOS }}
+          # Each AI's own GitHub App (src/identity.ts). Unset = that AI uses ACP_GITHUB_TOKEN as before.
+          ACP_GH_APP_CLAUDE_ID: ${{ vars.ACP_GH_APP_CLAUDE_ID }}
+          ACP_GH_APP_CLAUDE_INSTALLATION: ${{ vars.ACP_GH_APP_CLAUDE_INSTALLATION }}
+          ACP_GH_APP_CLAUDE_SLUG: ${{ vars.ACP_GH_APP_CLAUDE_SLUG }}
+          ACP_GH_APP_CLAUDE_KEY: ${{ secrets.ACP_GH_APP_CLAUDE_KEY }}
+          ACP_GH_APP_CHATGPT_ID: ${{ vars.ACP_GH_APP_CHATGPT_ID }}
+          ACP_GH_APP_CHATGPT_INSTALLATION: ${{ vars.ACP_GH_APP_CHATGPT_INSTALLATION }}
+          ACP_GH_APP_CHATGPT_SLUG: ${{ vars.ACP_GH_APP_CHATGPT_SLUG }}
+          ACP_GH_APP_CHATGPT_KEY: ${{ secrets.ACP_GH_APP_CHATGPT_KEY }}
+          ACP_GH_APP_PERPLEXITY_ID: ${{ vars.ACP_GH_APP_PERPLEXITY_ID }}
+          ACP_GH_APP_PERPLEXITY_INSTALLATION: ${{ vars.ACP_GH_APP_PERPLEXITY_INSTALLATION }}
+          ACP_GH_APP_PERPLEXITY_SLUG: ${{ vars.ACP_GH_APP_PERPLEXITY_SLUG }}
+          ACP_GH_APP_PERPLEXITY_KEY: ${{ secrets.ACP_GH_APP_PERPLEXITY_KEY }}
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.ACP_GITHUB_TOKEN }}
           FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
