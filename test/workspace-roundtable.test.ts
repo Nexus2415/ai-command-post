@@ -70,6 +70,8 @@ test("a full roundtable: answers, anonymised critiques, one conclusion, all save
   assert.match(prompt, /Answer A:\nPlan one \(call 1\)/);
   assert.match(prompt, /Answer B:\nPlan three \(call 1\)/);
   assert.doesNotMatch(prompt, /Claude|ChatGPT|Perplexity/);
+  assert.match(prompt, /\nConflicts: every point where the answers contradict each other/, "disagreements are named and settled");
+  assert.match(prompt, /\nRevised answer: /);
   for (const c of round2) assert.equal(c.body.messages.length, c.model === "claude" ? 1 : 2, "only the roundtable prompt is sent (plus the system message)");
 
   const syn = await call("roundtable", { step: "synthesize", threadId: t.id, models: ALL });
@@ -81,8 +83,10 @@ test("a full roundtable: answers, anonymised critiques, one conclusion, all save
   const lead = calls.at(-1)!;
   assert.equal(lead.model, "claude");
   const p3 = lastUser(lead.body);
-  assert.match(p3, /Recommendation:/);
-  assert.match(p3, /Main disagreement:/);
+  assert.match(p3, /First settle every conflict/);
+  assert.match(p3, /not on how many AIs held it/);
+  assert.match(p3, /\nAnswer: /);
+  assert.match(p3, /\nConflicts settled: /);
   assert.match(p3, /From the author of Answer B:\nPlan two \(call 2\)/);
   assert.doesNotMatch(p3, /\[Roundtable/, "markers are stripped from quoted text");
   assert.doesNotMatch(p3, /Claude|ChatGPT|Perplexity/);
@@ -197,5 +201,14 @@ test("the page uses the same round markers as the server and offers the roundtab
   assert.match(html, /id="cRound"/);
   assert.match(html, /id="cDiscuss"/);
   assert.match(js, /post\("roundtable_estimate"/);
+  // Default: every question goes to the roundtable (this thread's AI plus one more), with no pop-up per question;
+  // the server's budget check still refuses anything over the caps.
+  assert.match(html, /id="cRound"[^>]*checked/);
+  assert.match(js, /picks = null, roundOn = true/);
+  assert.match(js, /others\.slice\(0, 1\)/);
+  assert.doesNotMatch(js, /window\.confirm\("Run a roundtable/);
+  // A finished roundtable shows the agreed answer, with each AI's own answer and the conflict round folded under it.
+  assert.match(js, /Each AI's own answer \(/);
+  assert.match(js, /How they settled their disagreements/);
   assert.doesNotMatch(js, /innerHTML/, "messages are untrusted text");
 });

@@ -55,9 +55,12 @@ export function critiquePrompt(question, own, others) {
     `The question:\n${cut(question, QUESTION_CHARS)}`,
     `Your earlier answer:\n${cut(own, QUOTE_CHARS)}`,
     ...others.map((t, i) => `Answer ${LETTERS[i]}:\n${cut(t, QUOTE_CHARS)}`),
-    "Now:\n1. Where do you agree with the other answers, and why?\n2. Where do you disagree, and why? Point out any " +
-      "mistakes or missing risks.\n3. Give your revised answer. Change your position where another answer convinced " +
-      "you, and say so; keep it where you still think you're right.\nBe concise: about 300 words.",
+    "Now, under these three headings:\nAgreements: where the answers agree.\n" +
+      "Conflicts: every point where the answers contradict each other (facts, numbers, recommendations or steps). " +
+      "For each one, say which position is right and why, with the evidence or reasoning that settles it. If your " +
+      "own answer was wrong, say so plainly. If it can't be settled from what you know, say what would settle it. " +
+      "If there are no conflicts, write \"None.\"\n" +
+      "Revised answer: your best answer now, changed where another answer convinced you.\nBe concise: about 300 words.",
   ].join("\n\n");
 }
 
@@ -71,10 +74,14 @@ export function synthesisPrompt(question, answers, critiques) {
     critiques.length
       ? "Critiques and revised answers:\n\n" + critiques.map((c) => `From ${label.get(c.model) ? "the author of Answer " + label.get(c.model) : "another AI"}:\n${cut(body(c), QUOTE_CHARS)}`).join("\n\n")
       : "(No critique round: only first answers are available.)",
-    "Write one synthesis for the owner in plain language a non-technical reader understands, with these headings:\n" +
-      "Recommendation: what to do, in one or two sentences.\nMain disagreement: where the AIs differed, and why.\n" +
-      "Risks: the main risks of the recommendation.\nNext step: the single next action.\n" +
-      "Base it on the strongest arguments, not on a vote. Be concise: about 250 words.",
+    "First settle every conflict: wherever the answers or critiques contradict each other, decide which position " +
+      "is right on the strength of the evidence and reasoning, not on how many AIs held it. Then write the one " +
+      "concluded answer for the owner, built from the best parts of every answer, in plain language a non-technical " +
+      "reader understands, with these headings:\n" +
+      "Answer: the full best answer to the question (not a summary of the discussion).\n" +
+      "Conflicts settled: each point the AIs disagreed on, which way it was decided, and why. If they agreed " +
+      "throughout, write \"None: the AIs agreed.\" If one can't be settled, say so and what would settle it.\n" +
+      "Risks: the main risks of the answer.\nNext step: the single next action.\nBe concise: about 350 words.",
   ].join("\n\n");
 }
 

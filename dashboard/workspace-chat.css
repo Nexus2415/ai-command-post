@@ -70,6 +70,11 @@ body{background-image:none;font-size:15px}
 .cmp .m.assistant{border:1px solid var(--line);border-top:3px solid var(--ag,var(--line));border-radius:10px;padding:12px 14px;background:var(--panel)}
 .m.synth{border:2px solid var(--sand,var(--accent));border-radius:10px;padding:14px 16px;background:var(--panel)}
 .round{margin-bottom:-14px}
+/* A finished roundtable: each AI's own answer and the disagreement round fold under the agreed answer. */
+.rt-fold{border:1px solid var(--line);border-radius:10px;padding:0 12px;background:var(--panel)}
+.rt-fold summary{cursor:pointer;min-height:40px;display:flex;align-items:center;color:var(--muted);font:500 13px var(--mono)}
+.rt-fold[open]{padding-bottom:12px}
+.rt-fold .cmp{margin-top:4px}
 .empty{text-align:center}
 
 /* No thread open yet. */
@@ -115,3 +120,4 @@ body{background-image:none;font-size:15px}
   .dock{padding-inline:10px}
   .hint{display:none}
 }
+#cRoundRow{flex-wrap:nowrap;align-items:flex-start}
