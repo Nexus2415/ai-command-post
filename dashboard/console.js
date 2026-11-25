@@ -342,9 +342,9 @@
     intent = k;
     document.querySelectorAll("#cIntent button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.intent === k)));
     $("cIntentNote").textContent = k === "question"
-      ? QUESTION_EXPLANATION
-      : "Command · filed in Linear as a new command. The engine works it on a later run only while the engine is switched on; this page can't confirm that.";
-    $("cSend").textContent = k === "question" ? "Ask question" : "Send command";
+      ? "Your question is saved for an answer. It does not start AI work or allow changes. For a live conversation, use Workspace."
+      : "Your task is added to the work list. AI can start it only when automatic work is turned on. This page cannot confirm that it is on.";
+    $("cSend").textContent = k === "question" ? "Send question" : "Assign task";
   }
   async function send() {
     if (busy) return;
@@ -362,8 +362,8 @@
       }
       const ref = j.identifier;
       pendingKey = null;
-      setMsg($("cSendMsg"), (intent === "question" ? "Question received" : "Command received") + (ref ? " as " + ref : "") + (j && j.duplicate ? " (already filed earlier)" : "") + "." +
-        (intent === "question" ? "" : " Issue created; AI execution not verified yet."), "ok");
+      setMsg($("cSendMsg"), (intent === "question" ? "Question saved" : "Task saved") + (ref ? " as " + ref : "") + (j && j.duplicate ? " (already filed earlier)" : "") + "." +
+        (intent === "question" ? "" : " Work has not been confirmed as started."), "ok");
       if (api.isIssueId(ref)) {
         const b = el("button", "link", "Check status of " + ref); b.type = "button"; b.onclick = () => openThread(ref);
         $("cSendMsg").appendChild(b);
