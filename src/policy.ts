@@ -22,7 +22,7 @@ export const TOOL_TIERS: Record<string, Tier> = {
 };
 
 /** Words that mark a requested action as owner-only no matter which tool is asked for. */
-const RED_PATTERNS: RegExp[] = [
+export const RED_PATTERNS: readonly RegExp[] = [
   /\bmerge\b/i,
   /\bforce[- ]?push\b/i,
   /\bdelete\b|\bdrop table\b|\btruncate\b/i,

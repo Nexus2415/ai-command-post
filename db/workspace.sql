@@ -99,3 +99,25 @@ create table if not exists ws_connectors (
 create unique index if not exists ws_connectors_name_idx on ws_connectors (name);
 alter table ws_connectors enable row level security;
 revoke all on ws_connectors from anon, authenticated;
+
+-- Approval gate (2026-11-25): actions an AI PROPOSES (create or comment on a Linear issue). Nothing runs until the
+-- owner approves it on the workspace page; see api/_lib/workspace-actions.js. `fingerprint` is the hash of the exact
+-- payload the owner was shown; approving claims the row (proposed -> running) in one conditional update, so an action
+-- runs at most once. A missing table only means no proposals: chat carries on without them.
+create table if not exists ws_actions (
+  id uuid primary key default gen_random_uuid(),
+  thread_id uuid not null references ws_threads(id) on delete cascade,
+  kind text not null check (kind in ('linear_create_issue', 'linear_comment')),
+  payload jsonb not null check (octet_length(payload::text) <= 12000),
+  fingerprint text not null check (fingerprint ~ '^[0-9a-f]{32}$'),
+  status text not null default 'proposed' check (status in ('proposed', 'running', 'done', 'failed', 'rejected')),
+  proposed_by text check (proposed_by in ('claude', 'chatgpt', 'gemini', 'perplexity')),
+  result text check (char_length(result) <= 2000),
+  result_url text check (char_length(result_url) <= 500),
+  created_at timestamptz not null default now(),
+  expires_at timestamptz not null,
+  decided_at timestamptz
+);
+create index if not exists ws_actions_thread_idx on ws_actions (thread_id, created_at desc);
+alter table ws_actions enable row level security;
+revoke all on ws_actions from anon, authenticated;
