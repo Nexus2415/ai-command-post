@@ -1,0 +1,22 @@
+name: NEXIA responsive layout
+on:
+  pull_request:
+    paths:
+      - 'dashboard/**'
+      - 'test/nexia-layout-browser.mjs'
+      - '.github/workflows/nexia-responsive.yml'
+permissions:
+  contents: read
+jobs:
+  layout:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Verify Chrome is available
+        run: google-chrome --version
+      - name: Check phone and desktop layout with local synthetic HTML
+        run: node test/nexia-layout-browser.mjs
