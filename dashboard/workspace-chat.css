@@ -98,6 +98,10 @@ body{background-image:none;font-size:15px}
 .boxrow .grow{flex:1 1 auto}
 .linkbtn{border:1px solid var(--line);background:transparent;color:var(--muted);border-radius:999px;padding:4px 12px;font:500 12px var(--mono);cursor:pointer;min-height:32px}
 .linkbtn[aria-expanded="true"]{color:var(--fg);border-color:var(--accent)}
+.linkbtn.smart{display:inline-flex;align-items:center;gap:4px;padding:4px 10px}
+.linkbtn.smart[aria-pressed="true"]{color:var(--fg);border-color:var(--accent)}
+.linkbtn.smart[aria-pressed="false"]{text-decoration:line-through}
+@media (max-width:420px){.linkbtn.smart .lbl{display:none}}
 .sendbtn{flex:none;width:40px;height:40px;border-radius:50%;border:0;background:var(--accent);color:var(--accent-fg);display:grid;place-items:center;cursor:pointer}
 .sendbtn:disabled{opacity:.45;cursor:default}
 .opts{display:grid;gap:8px;border-top:1px solid var(--line);padding-top:8px}
