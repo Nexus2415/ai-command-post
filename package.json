@@ -11,6 +11,7 @@
     "start": "node src/cli.ts run",
     "test": "node --test test/*.test.ts",
     "typecheck": "tsc -p tsconfig.json",
+    "eval": "node src/eval.ts",
     "validate": "npm test && npm run typecheck"
   },
   "devDependencies": {
