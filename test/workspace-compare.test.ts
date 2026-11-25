@@ -49,8 +49,59 @@ test("one message goes to several AIs and each answer is saved with its AI and c
   assert.equal(body.messages[0].cost_usd, 0.007);
   assert.deepEqual(body.failed, []);
   assert.equal(calls.length, 3);
-  for (const c of calls) assert.equal(c.body.tools, undefined, "plugins stay off when comparing");
+  // Only the read-only web tools are offered in a discussion: no connectors, no Linear/GitHub, no proposals.
+  for (const c of calls) {
+    const names = (c.body.tools ?? []).map((t: any) => t.name ?? t.function?.name).sort();
+    assert.ok(names.every((n: string) => n === "web_read_page" || n === "web_search"), `only web tools: ${names}`);
+  }
+  assert.equal(calls.filter((c) => c.url.includes("firecrawl")).length, 0, "no web call unless an AI asks for one");
+});
+
+test("a discussion AI can look something up on the web: metered, audited under its answer, other tools stay off", async () => {
+  const env = { ...base, LINEAR_API_KEY: "synthetic-linear" };
+  let claudeCalls = 0;
+  const { call, calls } = harness(env, (u) => {
+    if (u.endsWith("/v2/search")) return json({ data: { web: [{ title: "NWS Fort Lauderdale", url: "https://weather.example/fll", description: "71°F now" }] } });
+    if (u.includes("anthropic")) {
+      return claudeCalls++ === 0
+        ? json({ content: [{ type: "tool_use", id: "t1", name: "web_search", input: { query: "Fort Lauderdale temperature now" } }], usage: { input_tokens: 100, output_tokens: 20 } })
+        : json({ content: [{ type: "text", text: "It is about 71°F in Fort Lauderdale right now." }], usage: { input_tokens: 100, output_tokens: 20 } });
+    }
+    return json({ choices: [{ message: { content: "ChatGPT says" } }], usage: { prompt_tokens: 100, completion_tokens: 50 } });
+  });
+  const t = await thread(call);
+  const out = await call("compare", { threadId: t.id, content: "What's the temperature in Fort Lauderdale?", models: ["claude", "chatgpt"] });
+  assert.equal(out.status, 200);
+  const [claude, chatgpt] = (out.body as any).messages;
+  assert.match(claude.content, /^It is about 71°F/);
+  assert.match(claude.content, /Web activity \(audit[^\n]*\n- \d\d:\d\d:\d\d search: "Fort Lauderdale temperature now" \(\$0\.010\)/);
+  assert.ok(claude.cost_usd >= 0.01, "the search is counted in the answer's cost");
+  assert.doesNotMatch(chatgpt.content, /Web activity/);
+  for (const c of calls.filter((c) => !c.url.includes("firecrawl"))) {
+    const names = (c.body.tools ?? []).map((t: any) => t.name ?? t.function?.name);
+    assert.ok(!names.includes("linear_search_issues"), "Linear stays off in a discussion");
+  }
+  // The search result reached Claude as untrusted data.
+  assert.match(JSON.stringify(calls.filter((c) => c.url.includes("anthropic"))[1]!.body), /UNTRUSTED WEB CONTENT/);
+});
+
+test("a discussion web search that would go over the thread cap is refused before it runs", async () => {
+  const env = { ...base, ACP_WORKSPACE_THREAD_BUDGET_USD: "0.03" };
+  let n = 0;
+  const { call, calls } = harness(env, (u) => {
+    if (u.includes("anthropic")) {
+      return n++ === 0
+        // A long first step: what it cost plus the search would pass the thread's cap.
+        ? json({ content: [{ type: "tool_use", id: "t1", name: "web_search", input: { query: "q" } }], usage: { input_tokens: 1000, output_tokens: 2000 } })
+        : json({ content: [{ type: "text", text: "Couldn't search." }], usage: { input_tokens: 10, output_tokens: 5 } });
+    }
+    return json({ choices: [{ message: { content: "ChatGPT says" } }], usage: { prompt_tokens: 10, completion_tokens: 5 } });
+  });
+  const t = await thread(call);
+  const out = await call("compare", { threadId: t.id, content: "Q", models: ["claude", "chatgpt"] });
+  assert.equal(out.status, 200);
   assert.equal(calls.filter((c) => c.url.includes("firecrawl")).length, 0);
+  assert.match((out.body as any).messages[0].content, /refused \(cap\): web_search/);
 });
 
 test("a later message sends the side-by-side answers back labelled, as one turn", async () => {

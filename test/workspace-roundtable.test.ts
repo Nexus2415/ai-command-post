@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { handle } from "../api/workspace.js";
 import { createMemoryStore } from "../api/_lib/workspace-store.js";
-import { CHECK_MARK, CRITIQUE_MARK, SYNTHESIS_MARK, checkerDisagrees, estimateRounds, roundtableState } from "../api/_lib/workspace-roundtable.js";
+import { CHECK_MARK, CRITIQUE_MARK, SYNTHESIS_MARK, checkPrompt, checkerDisagrees, critiquePrompt, estimateRounds, roundtableState } from "../api/_lib/workspace-roundtable.js";
 
 // Roundtable mode: the AIs read each other's answers, critique them, and a lead writes one conclusion.
 // Fake fetch only; no real model is ever called.
@@ -263,4 +263,10 @@ test("the checker's verdict is read from its first word only", () => {
   assert.equal(checkerDisagrees("**Disagree**: wrong price"), true);
   assert.equal(checkerDisagrees("AGREE\nI don't disagree."), false);
   assert.equal(checkerDisagrees("Looks right."), false);
+});
+
+test("checker and critique prompts don't count live web facts as wrong just because the reader can't see the web", () => {
+  for (const p of [checkPrompt("Temp now?", "71°F"), critiquePrompt("Temp now?", "71°F", ["I can't check live data."])]) {
+    assert.match(p, /never call an answer wrong only because you can't check current or live information yourself/);
+  }
 });

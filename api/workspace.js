@@ -507,8 +507,8 @@ const ACTIONS = Object.freeze({
       memoryLine + sourcesLine(shared.sources) + webAuditText(webLog) + proposalsText(gate.made));
     return { saved, message };
   },
-  // Side-by-side answers: one message goes to 2-3 AIs at once and each answer is saved with its AI. Plugins stay
-  // off here, so the budget check before the calls covers everything they can spend.
+  // Side-by-side answers: one message goes to 2-3 AIs at once and each answer is saved with its AI. Only the web
+  // tools are on here; each web call is checked against the caps when it is made (see runRound1).
   async compare(store, args, env, deps) {
     const p = await askSeveral(store, args, env);
     if (p.status) return p;
@@ -595,13 +595,13 @@ const ACTIONS = Object.freeze({
       const why = over(isPaid(env, m) ? estimateUsd(m, [...sent, { content: shared.text }], env) : 0);
       if (why) return error(402, why);
       if (!(await stillShared(store, thread, shared))) return error(409, CHANGED);
-      let r;
-      try { r = await runChat(env, m, sent, { f: deps.fetch, notes, shared: shared.text }); } catch (e) {
+      let r, log;
+      try { ({ r, log } = await answerWithWeb(store, env, deps, { thread, shared, notes, question: state.question.content, sent }, m)); } catch (e) {
         if (!(e instanceof ModelError)) throw e;
         await failedReply(m, e);
         return { status: 502, body: { error: e.message, failed: [{ model: m, error: e.message }] } };
       }
-      const message = await gatedReply(store, thread.id, m, r.text, r, "", sourcesLine(shared.sources));
+      const message = await gatedReply(store, thread.id, m, r.text, r, "", sourcesLine(shared.sources) + webAuditText(log));
       return { message, roundtableUsd: sumCost([...state.answers, ...state.checks, message]) };
     }
 
@@ -719,17 +719,42 @@ async function planCheck(store, env, deps, p) {
   return { estimate, why };
 }
 
+// One discussion answer (round 1, or a checker joining), with web access: read-only web_search / web_read_page only
+// (no connectors, no proposals), so a question about live facts gets a looked-up answer from every AI, not "I can't
+// check that". Each web call is checked against the caps before it starts, exactly as in a one-AI reply, and
+// listed under that AI's answer. Returns { r, log }; a ModelError is thrown as usual.
+const WEB_TOOLS = new Set(["web_search", "web_read_page"]);
+async function answerWithWeb(store, env, deps, { thread, shared, notes, question, sent }, m) {
+  const webTools = readyTools(env).filter((t) => WEB_TOOLS.has(t.name));
+  const overWeb = await budgetCheck(store, env, deps, thread.id, true);
+  const allowedUrls = new Set(urlsIn(question));
+  const log = [];
+  const ctx = (soFar) => ({
+    allowedUrls, charge: async (usd) => overWeb(soFar + usd),
+    audit: (kind, target, usd) => log.push({ at: deps.now().toISOString(), kind, target: String(target).slice(0, 300), usd }),
+  });
+  const r = await runChat(env, m, sent, {
+    f: deps.fetch, notes, shared: shared.text, tools: webTools,
+    runTool: gatedRunTool(store, thread.id, (name, a, soFar = 0) => runTool(env, webTools, name, a, deps.fetch, ctx(soFar))),
+    beforeCall: async (_est, soFar) => {
+      if (soFar > 0 && await stopReason(store)) throw new BudgetStop(`${STOP_MARK} The reply was cut short; no further steps ran.`);
+      if (soFar > 0 && !(await stillShared(store, thread, shared))) throw new BudgetStop("Stopped: a thread this answer drew on was just made private.");
+    },
+  });
+  return { r, log };
+}
+
 async function runRound1(store, env, deps, { thread, content, models, sent, shared }) {
   const rule = harmCheck(content);
   if (rule) return refusedRequest(rule, await refuse(store, thread.id, "request", rule));
   if (!(await stillShared(store, thread, shared))) return error(409, CHANGED);
   const saved = await store.addMessage(thread.id, { role: "user", content });
   const notes = await memoryFor(store, thread.project_id);
-  const results = await Promise.all(models.map((m) => runChat(env, m, sent, { f: deps.fetch, notes, shared: shared.text })
-    .then((r) => ({ m, r }), (e) => { if (e instanceof ModelError) return { m, e }; throw e; })));
+  const results = await Promise.all(models.map((m) => answerWithWeb(store, env, deps, { thread, shared, notes, question: content, sent }, m)
+    .then(({ r, log }) => ({ m, r, log }), (e) => { if (e instanceof ModelError) return { m, e, log: [] }; throw e; })));
   const messages = [], failed = [];
-  for (const { m, r, e } of results) {
-    if (r) { messages.push(await gatedReply(store, thread.id, m, r.text, r, "", sourcesLine(shared.sources))); continue; }
+  for (const { m, r, e, log } of results) {
+    if (r) { messages.push(await gatedReply(store, thread.id, m, r.text, r, "", sourcesLine(shared.sources) + webAuditText(log))); continue; }
     // Calls made before the failure still cost money, so they are recorded.
     if (e.usage?.costUsd > 0) await reply(store, thread.id, m, `(The AI provider failed partway through this reply: ${e.message})`, e.usage);
     failed.push({ model: m, error: e.message });

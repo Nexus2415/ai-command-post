@@ -423,7 +423,7 @@
   const MODE_HINT = {
     single: "One AI answers. Cheapest: well under 1¢.",
     check: "One AI answers, a cheaper AI checks it: about 1¢. If they disagree, they discuss it (a few ¢).",
-    discuss: "Each AI answers, they settle disagreements, then one agreed answer: a few ¢ (up to ~15¢ with 3 AIs).",
+    discuss: "Each AI answers, they settle disagreements, then one agreed answer: a few ¢ (up to ~15¢ with 3 AIs, plus about 1¢ per web search).",
   };
   // Remembered per project while the page is open. Kept in memory only: this page never writes browser storage.
   const modes = new Map();
