@@ -171,5 +171,8 @@ create table if not exists ws_agents (
   check ((cadence = 'weekly') = (weekday is not null))
 );
 create index if not exists ws_agents_project_idx on ws_agents (project_id, created_at);
+-- Checkpoints: the short note a finished run leaves for the next one (api/_lib/workspace-agents.js). Safe to run again.
+alter table ws_agents add column if not exists checkpoint text check (char_length(checkpoint) <= 1200);
+alter table ws_agents add column if not exists checkpoint_at timestamptz;
 alter table ws_agents enable row level security;
 revoke all on ws_agents from anon, authenticated;

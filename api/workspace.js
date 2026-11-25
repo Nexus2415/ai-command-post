@@ -23,7 +23,8 @@ import {
 
 import { CATALOG, catalogEntry } from "./_lib/workspace-catalog.js";
 import {
-  AgentProblem, MAX_AGENTS, RUN_NOW_GAP_MS, checkAgent, cronReady, dayStart, describeSchedule, isDue, monthKey, runMessage, threadTitle,
+  AgentProblem, MAX_AGENTS, RUN_NOW_GAP_MS, checkAgent, cronReady, dayStart, describeSchedule, extractCheckpoint, isDue, monthKey,
+  runMessage, threadTitle,
 } from "./_lib/workspace-agents.js";
 
 // Vercel: model replies can take a while.
@@ -296,7 +297,15 @@ const ACTIONS = Object.freeze({
     if (!isId(args.projectId)) return error(400, "Unknown project.");
     if (!(await store.getProject(args.projectId))) return error(404, "Unknown project.");
     try {
-      return { cronReady: cronReady(env), agents: (await store.listAgents(args.projectId)).map(describeAgent) };
+      const agents = (await store.listAgents(args.projectId)).map(describeAgent);
+      // Checkpoints are optional: before their columns exist the list still loads, without them.
+      const cps = await store.listAgentCheckpoints(args.projectId).catch(() => []);
+      for (const a of agents) {
+        const c = cps.find((x) => x.id === a.id);
+        a.checkpoint = c?.checkpoint ?? null;
+        a.checkpointAt = c?.checkpoint_at ?? null;
+      }
+      return { cronReady: cronReady(env), agents };
     } catch (e) {
       if (e instanceof StoreError) return { cronReady: cronReady(env), agents: [], setupNeeded: true };
       throw e;
@@ -326,6 +335,16 @@ const ACTIONS = Object.freeze({
     if (!isId(args.id) || typeof args.enabled !== "boolean") return error(400, "Say which agent, and on or off.");
     const row = await store.updateAgent(args.id, { enabled: args.enabled });
     return row ? { agent: describeAgent(row) } : error(404, "Unknown agent.");
+  },
+  // The owner clears an agent's checkpoint: its next run starts fresh.
+  async clear_agent_checkpoint(store, args) {
+    if (!isId(args.id)) return error(400, "Unknown agent.");
+    try {
+      return (await store.setAgentCheckpoint(args.id, null, null)) ? { cleared: true } : error(404, "Unknown agent.");
+    } catch (e) {
+      if (e instanceof StoreError) return error(503, "Checkpoints need a one-time database update first.");
+      throw e;
+    }
   },
   async delete_agent(store, args) {
     if (!isId(args.id)) return error(400, "Unknown agent.");
@@ -798,8 +817,15 @@ async function runAgent(store, env, deps, agent, before) {
       threadId = (await store.createThread(claimed.project_id, threadTitle(claimed, now), claimed.model)).id;
       await store.updateAgent(claimed.id, { thread_id: threadId, thread_month: month });
     }
-    const out = await ACTIONS.chat(store, { threadId, content: runMessage(claimed, now), routing: true }, env, deps);
+    // The last finished run's checkpoint, if any (unreadable = start fresh).
+    const checkpoint = await store.getAgentCheckpoint(claimed.id).catch(() => null);
+    const out = await ACTIONS.chat(store, { threadId, content: runMessage(claimed, now, checkpoint), routing: true }, env, deps);
     status = out.status ? `Didn't finish: ${out.body.error}` : `Done. Cost $${Number(out.message.cost_usd || 0).toFixed(3)}.`;
+    // Only a finished run moves the checkpoint forward; a note the rules gate refuses keeps the old one.
+    if (!out.status) {
+      const note = extractCheckpoint(out.message.content);
+      if (note && !harmCheck(note)) await store.setAgentCheckpoint(claimed.id, note, now.toISOString()).catch(() => null);
+    }
   } catch (e) {
     if (!(e instanceof StoreError || e?.name === "TimeoutError" || e instanceof TypeError)) throw e;
     status = "Didn't run: workspace storage was unavailable.";

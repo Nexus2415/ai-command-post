@@ -152,6 +152,8 @@
       const row = el("li", "nrow" + (a.enabled ? "" : " off"));
       row.append(el("span", null, a.name + " · " + (MODEL_NAMES[a.model] || a.model)));
       row.append(el("span", "note ntag", (a.enabled ? a.schedule : "Off") + (a.lastStatus ? " · Last run: " + a.lastStatus : " · Not run yet")));
+      // Where the agent picks up next time: the AI's own note from its last finished run.
+      if (a.checkpoint) row.append(el("span", "note ntag", "Picks up from (" + String(a.checkpointAt || "").slice(0, 10) + "): " + a.checkpoint));
       const actions = el("span", "row nact");
       const btn = (label, aria, fn) => {
         const b = el("button", null, label); b.type = "button"; b.setAttribute("aria-label", aria + ": " + a.name);
@@ -165,6 +167,7 @@
         if (r.run.threadId) await openThread(r.run.threadId);
       });
       if (a.threadId) btn("Open", "Open this agent's thread", async () => openThread(a.threadId));
+      if (a.checkpoint) btn("Start fresh", "Clear this agent's checkpoint", async () => { await post("clear_agent_checkpoint", { id: a.id }); await loadAgents(); });
       btn(a.enabled ? "Turn off" : "Turn on", a.enabled ? "Turn this agent off" : "Turn this agent on", async () => {
         await post("set_agent_enabled", { id: a.id, enabled: !a.enabled }); await loadAgents();
       });
