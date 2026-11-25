@@ -55,8 +55,9 @@ const rateFor = (model, tier) => (tier === "light" && hasLight(model) ? LIGHT_RA
 
 // Which tier a question needs, decided here for free (no extra AI call). Light only when the question is short and
 // plain: no attached files, no long conversation, and none of the words that usually mean real work. Anything in
-// doubt gets the full model.
-const HEAVY = /\b(analy[sz]\w*|strateg\w*|plan(?:s|ning)?|code|coding|debug\w*|review\w*|contract\w*|legal|law|compare|comparison|evaluat\w*|design\w*|architect\w*|draft\w*|proposal\w*|essay|report|step[- ]by[- ]step|calculat\w*|financ\w*|forecast\w*|budget\w*|tax\w*|bid|rfq|rfp|invest\w*|research\w*|pros and cons|trade-?offs?|why)\b/i;
+// doubt gets the full model. The word list is checked against eval/cases.json (`node src/eval.ts`): no case that
+// needs real work may route light.
+const HEAVY = /\b(analy[sz]\w*|strateg\w*|plan(?:s|ning)?|code|coding|debug\w*|review\w*|contract\w*|legal|law|compare|comparison|evaluat\w*|design\w*|architect\w*|draft\w*|proposal\w*|essay|report|step[- ]by[- ]step|calculat\w*|financ\w*|forecast\w*|budget\w*|tax\w*|bid|rfq|rfp|invest\w*|research\w*|pros and cons|trade-?offs?|why|should|better|best|secur\w*|risk\w*|email\w*|write|send|priorit\w*|recommend\w*|matters? most)\b/i;
 export const LIGHT_MAX_QUESTION = 280;
 export const LIGHT_MAX_HISTORY = 6_000;
 export function routeTier(model, question, { historyChars = 0, files = false } = {}) {
