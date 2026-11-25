@@ -9,6 +9,7 @@
   - `ACP_DRY_RUN` — `true` (default) plans but writes nothing to Linear/GitHub; `false` = live writes.
   - `ACP_MONTHLY_BUDGET_USD` — spend cap, default `0` (free tiers only).
   - `ACP_ALLOW_PULL_REQUESTS` — default `false`; engine PRs are always draft.
+- The "Independent review" check on each PR (`.github/workflows/independent-review.yml`, `src/review-check.ts`) shows whether a DIFFERENT AI's GitHub App approved the PR's current commit, using GitHub's record of the reviewer, never a "— Name" line. The owner's own account never counts as an AI review. It reads the AI logins from repo variables `ACP_GH_APP_<AI>_SLUG`. It only reports until repo variable `ACP_REQUIRE_INDEPENDENT_REVIEW` is `true`; then a PR without an independent approval shows a red check. It never comments, approves or merges.
 - The first log line of a run states the mode, e.g. `ACTIVE · live writes · cap $0 · agents online: Gemini`. "Online" means a key is configured, not that the provider was reachable; reachability shows only when a call succeeds or fails in that run.
 
 ## Provider errors
