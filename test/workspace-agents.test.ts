@@ -31,7 +31,7 @@ function harness(env: Record<string, string> = base, opts: object = {}) {
   const deps = { fetch: fakeFetch, now };
   const call = (action: string, args: object = {}) =>
     handle({ method: "POST", headers, body: { action, args } }, env, () => store, deps);
-  const cron = (req: any = cronReq, e = env) => handleCron(req, e, () => store, deps);
+  const cron = (req: any = cronReq, e = env): Promise<any> => handleCron(req, e, () => store, deps);
   return { calls, call, cron, store, setNow: (iso: string) => { clock = new Date(iso); } };
 }
 async function project(call: any) {
