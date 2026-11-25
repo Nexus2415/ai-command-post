@@ -140,3 +140,22 @@ test("the workspace reads like a chat: answers in one column, one question box a
   assert.match(css, /@media \(max-width:900px\)[^]*\.side\{position:fixed/);
   assert.match(css, /\.msgs\{max-width:768px/);
 });
+
+test("the main address opens the chat; the older console stays one tap away", () => {
+  const v = JSON.parse(readFileSync(new URL("../vercel.json", import.meta.url), "utf8"));
+  assert.deepEqual(v.redirects, [{ source: "/", destination: "/workspace.html", permanent: false }]);
+  const html = readFileSync(new URL("../dashboard/workspace.html", import.meta.url), "utf8");
+  assert.match(html, /href="\/index\.html"/);
+  assert.doesNotMatch(html, /href="\/"/);
+});
+
+test("sending empties the box at once, shows the message with a thinking line, and gives the text back if it never arrived", () => {
+  const js = readFileSync(new URL("../dashboard/workspace.js", import.meta.url), "utf8");
+  const send = js.slice(js.indexOf('$("cForm").addEventListener("submit"'), js.indexOf('$("cRetry").addEventListener'));
+  const cleared = send.indexOf('$("cText").value = ""'), asked = send.indexOf('post("chat"');
+  assert.ok(cleared > 0 && asked > 0 && cleared < asked, "the box is emptied before the AI is asked");
+  assert.ok(send.indexOf("showPending(") < asked, "the message shows in the conversation before the AI is asked");
+  assert.match(send, /restore\(\)/);
+  assert.match(js, /lastUserSaved !== before/);
+  assert.match(js, /"m assistant thinking"/);
+});
