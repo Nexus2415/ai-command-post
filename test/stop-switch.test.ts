@@ -56,6 +56,8 @@ test("Stop everything halts every kind of AI work at once, and reading still wor
     ["roundtable", { step: "start", threadId: t.id, content: "Q", models: ["claude", "chatgpt"] }],
     ["roundtable", { step: "critique", threadId: t.id }],
     ["roundtable", { step: "synthesize", threadId: t.id }],
+    ["check", { threadId: t.id }],
+    ["roundtable", { step: "join", threadId: t.id, model: "chatgpt" }],
   ] as const) {
     const out = await call(action, args);
     assert.equal(out.status, 423, `${action} ${JSON.stringify(args)}`);

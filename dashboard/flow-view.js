@@ -8,6 +8,8 @@
   // Same markers as api/_lib/workspace-rules.js and api/_lib/workspace-roundtable.js (checked by test/flow-view.test.ts).
   const REFUSAL_MARK = "[Rules gate: refused]", STOP_MARK = "[Stopped by the owner]";
   const CRITIQUE_MARK = "[Roundtable round 2: critique and revised answer]", SYNTHESIS_MARK = "[Roundtable final answer]";
+  // A second AI's quick check of one answer (AI + checker mode) is drawn with the reviews.
+  const CHECK_MARK = "[Checked by a second AI]";
   const FAILED_PREFIX = "(The AI provider failed";
   const NAMES = { claude: "Claude", chatgpt: "ChatGPT", gemini: "Gemini", perplexity: "Perplexity" };
   const STATE_WORDS = { done: "Done", working: "Working", waiting: "Waiting", refused: "Refused", failed: "Failed", stopped: "Stopped", passed: "Passed" };
@@ -44,11 +46,11 @@
     const c = String(m.content || "");
     if (c.startsWith(REFUSAL_MARK) || c.startsWith(STOP_MARK)) return "notice";
     if (c.startsWith(SYNTHESIS_MARK)) return "synthesis";
-    if (c.startsWith(CRITIQUE_MARK)) return "critique";
+    if (c.startsWith(CRITIQUE_MARK) || c.startsWith(CHECK_MARK)) return "critique";
     if (c.startsWith(FAILED_PREFIX)) return "failed";
     return "answer";
   };
-  const bodyOf = (c) => String(c).replace(/^\[Roundtable[^\]\n]*\]\n?/, "").trim();
+  const bodyOf = (c) => String(c).replace(/^\[(Roundtable|Checked by)[^\]\n]*\]\n?/, "").trim();
 
   /**
    * Groups a thread's messages into questions ("turns"): the owner's message and every AI message after it.
