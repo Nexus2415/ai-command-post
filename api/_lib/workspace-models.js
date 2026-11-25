@@ -5,6 +5,7 @@
 // USD per million tokens plus any flat per-request fee. Same values and sources as DEFAULT_RATES in src/budget.ts.
 import { REFUSAL_MARK, STOP_MARK } from "./workspace-rules.js";
 import { stripSources } from "./workspace-shared.js";
+import { fileTokens, hasPdf, toAnthropic, toOpenAi, withoutFileData } from "./workspace-files.js";
 
 export const RATES = Object.freeze({
   claude: { inputPerM: 2, outputPerM: 10, freeTier: false },
@@ -100,10 +101,14 @@ export function costUsd(model, inputTokens, outputTokens, tier = "full") {
 
 // Worst case for one reply, used before the call: about one token per 3 characters (tokens usually cover ~4),
 // and the full output allowance.
+// Attached images and PDFs add their own token figures (workspace-files.js).
 export function estimateUsd(model, history, env = {}, tier = "full") {
   const chars = history.reduce((n, m) => n + m.content.length, 0);
-  return costUsd(model, Math.ceil(chars / 3) + 50, MAX_OUTPUT_TOKENS, tier) * feeFor(env, model);
+  const files = history.reduce((n, m) => n + fileTokens(m.files), 0);
+  return costUsd(model, Math.ceil(chars / 3) + files + 50, MAX_OUTPUT_TOKENS, tier) * feeFor(env, model);
 }
+// Which AIs can open attached images and PDFs. Perplexity searches the web and takes text only; Gemini is suspended.
+export const readsFiles = (model) => model === "claude" || model === "chatgpt";
 
 const NAMES = { claude: "Claude", chatgpt: "ChatGPT", gemini: "Gemini", perplexity: "Perplexity" };
 export const isNotice = (m) => m.role === "assistant" && (m.content.startsWith(REFUSAL_MARK) || m.content.startsWith(STOP_MARK));
@@ -199,14 +204,16 @@ async function step(env, model, convo, tools, allowCalls, f, system, tier = "ful
   if (status.via === "openrouter") {
     if (!openRouterIdOk(model, status.id)) throw new ModelError("That OpenRouter model isn't allowed.");
     return chatCompletions(f, OPENROUTER_URL, String(env.OPENROUTER_API_KEY).trim(), { "x-title": "AI Command Post" },
-      { model: status.id, max_tokens: MAX_OUTPUT_TOKENS }, model !== "perplexity", convo, tools, allowCalls, system);
+      // PDFs are read by OpenRouter's free text parser (no OCR charge); the model gets the text.
+      { model: status.id, max_tokens: MAX_OUTPUT_TOKENS, ...(hasPdf(convo) ? { plugins: [{ id: "file-parser", pdf: { engine: "pdf-text" } }] } : {}) },
+      model !== "perplexity", convo, tools, allowCalls, system);
   }
   const key = String(env[KEY_VARS[model]]).trim();
   if (model === "claude") {
     const j = await postJson(f, "https://api.anthropic.com/v1/messages",
       { "x-api-key": key, "anthropic-version": "2023-06-01" },
       {
-        model: status.id, max_tokens: MAX_OUTPUT_TOKENS, system, messages: convo,
+        model: status.id, max_tokens: MAX_OUTPUT_TOKENS, system, messages: convo.map((m) => (m.files ? toAnthropic(m) : m)),
         // Tools stay listed once offered (earlier tool turns need them); the last round may only answer in text.
         ...(tools.length ? {
           tools: tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters })),
@@ -234,7 +241,7 @@ async function step(env, model, convo, tools, allowCalls, f, system, tier = "ful
     { "x-goog-api-key": key },
     {
       systemInstruction: { parts: [{ text: system }] },
-      contents: convo.map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] })),
+      contents: convo.map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] })), // text only
       generationConfig: { maxOutputTokens: MAX_OUTPUT_TOKENS },
     });
   return {
@@ -247,7 +254,7 @@ async function step(env, model, convo, tools, allowCalls, f, system, tier = "ful
 async function chatCompletions(f, url, key, headers, params, toolsAllowed, convo, tools, allowCalls, system) {
   const useTools = toolsAllowed && tools.length;
   const j = await postJson(f, url, { authorization: `Bearer ${key}`, ...headers }, {
-    ...params, messages: [{ role: "system", content: system }, ...convo],
+    ...params, messages: [{ role: "system", content: system }, ...convo.map((m) => (m.files ? toOpenAi(m) : m))],
     ...(useTools ? {
       tools: tools.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: t.parameters } })),
       ...(allowCalls ? {} : { tool_choice: "none" }),
@@ -289,7 +296,9 @@ export async function runChat(env, model, history, { f = fetch, tools = [], runT
   const fee = feeFor(env, model);
   const started = now();
   const system = systemPrompt(notes, shared, remember);
-  const convo = history.map((m) => ({ role: m.role, content: m.content }));
+  // Attached files ride along on their turn (workspace-files.js) for AIs that can read them; never for the others.
+  const convo = history.map((m) => (m.files?.length && readsFiles(model) ? { role: m.role, content: m.content, files: m.files } : { role: m.role, content: m.content }));
+  const fileToks = convo.reduce((n, m) => n + fileTokens(m.files), 0);
   const used = [];
   let inputTokens = 0, outputTokens = 0, cost = 0, text = "", note = "";
   const usage = () => ({ inputTokens, outputTokens, costUsd: cost, toolsUsed: used });
@@ -297,7 +306,8 @@ export async function runChat(env, model, history, { f = fetch, tools = [], runT
     const allowCalls = round < MAX_TOOL_ROUNDS;
     try {
       // The system prompt (project notes and the shared background) is counted too.
-      await beforeCall(costUsd(model, Math.ceil((JSON.stringify(convo).length + system.length) / 3) + 50, MAX_OUTPUT_TOKENS, tier) * fee, cost);
+      // File contents are counted by their token figures, not their base64 length.
+      await beforeCall(costUsd(model, Math.ceil((withoutFileData(convo).length + system.length) / 3) + fileToks + 50, MAX_OUTPUT_TOKENS, tier) * fee, cost);
     } catch (e) {
       if (!(e instanceof BudgetStop)) throw e;
       note = e.message;

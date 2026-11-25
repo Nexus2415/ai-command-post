@@ -3,7 +3,8 @@
 // budget checks.
 import { hasSitePassword, isSameOrigin } from "./_lib/site-auth.js";
 import { MODELS, StoreError, createSupabaseStore, isId, workspaceConfigured } from "./_lib/workspace-store.js";
-import { BudgetStop, LIGHT_NAMES, ModelError, estimateUsd, isPaid, mergeTurns, modelStatus, routeTier, runChat, trimHistory } from "./_lib/workspace-models.js";
+import { BudgetStop, LIGHT_NAMES, ModelError, estimateUsd, isPaid, mergeTurns, modelStatus, readsFiles, routeTier, runChat, trimHistory } from "./_lib/workspace-models.js";
+import { FileProblem, MAX_FILES_PER_THREAD, MAX_UPLOAD_BODY, checkUpload, fileTokens, markersFor, withFiles } from "./_lib/workspace-files.js";
 import { pluginStatus, readyTools, runTool, urlsIn } from "./_lib/workspace-plugins.js";
 import { mcpServers, mcpStatus, mcpTools } from "./_lib/workspace-mcp.js";
 import {
@@ -42,7 +43,8 @@ const usd = (n) => "$" + n.toFixed(2);
 // Text files attached to a message are folded into it, marked by name, so the 32,000-character limit covers them.
 const MAX_FILES = 3;
 const NOT_A_MESSAGE = "A message of 1 to 32,000 characters is required.";
-function userMessage(args) {
+// `markers` names the images and PDFs sent with the message (workspace-files.js markersFor).
+function userMessage(args, markers = "") {
   const files = args.attachments ?? [];
   if (!Array.isArray(files) || files.length > MAX_FILES) return { error: `Attach at most ${MAX_FILES} files.` };
   if (args.content !== undefined && typeof args.content !== "string") return { error: NOT_A_MESSAGE };
@@ -54,10 +56,21 @@ function userMessage(args) {
     if (typeof f.text !== "string" || !f.text.trim() || f.text.includes("\u0000")) return { error: `${name} isn't a text file, or it's empty.` };
     parts.push(`<<<file: ${name}>>>\n${f.text.replace(/\s+$/, "")}\n<<<end of file>>>`);
   }
+  if (markers) parts.push(markers);
   const content = parts.join("\n\n");
   if (!content) return { error: NOT_A_MESSAGE };
   if (content.length > 32_000) return { error: "The message and its files are over 32,000 characters. Attach a shorter file." };
   return { content };
+}
+// The typed message plus its text files and its images/PDFs, checked. Returns { content } or { error }.
+async function ownerMessage(store, threadId, args) {
+  let markers = "";
+  try { markers = await markersFor(store, threadId, args.files); } catch (e) {
+    if (e instanceof FileProblem) return { error: e.message };
+    if (e instanceof StoreError) return { error: "Images and PDFs need a one-time database update first." };
+    throw e;
+  }
+  return userMessage(args, markers);
 }
 // Side-by-side answers: how many AIs one message may go to.
 const MAX_COMPARE = 3;
@@ -240,10 +253,31 @@ const ACTIONS = Object.freeze({
   },
   async add_message(store, args) {
     if (!isId(args.threadId)) return error(400, "Unknown thread.");
-    const { content, error: bad } = userMessage(args);
-    if (bad) return error(400, bad);
     if (!(await store.getThread(args.threadId))) return error(404, "Unknown thread.");
+    const { content, error: bad } = await ownerMessage(store, args.threadId, args);
+    if (bad) return error(400, bad);
     return { message: await store.addMessage(args.threadId, { role: "user", content }) };
+  },
+  // Uploads one image or PDF to a thread. Nothing goes to any AI until the owner sends a message with it.
+  async upload_file(store, args) {
+    if (!isId(args.threadId)) return error(400, "Unknown thread.");
+    let f;
+    try { f = checkUpload(args); } catch (e) { if (e instanceof FileProblem) return error(400, e.message); throw e; }
+    if (!(await store.getThread(args.threadId))) return error(404, "Unknown thread.");
+    try {
+      if ((await store.countFiles(args.threadId)) >= MAX_FILES_PER_THREAD) return error(409, `A thread can hold ${MAX_FILES_PER_THREAD} images and PDFs. Start a new thread.`);
+      const row = await store.addFile({ thread_id: args.threadId, name: f.name, mime: f.mime, bytes: f.bytes, pages: f.pages, data: f.data });
+      return { file: { id: row.id, name: row.name, mime: row.mime, bytes: row.bytes, pages: row.pages } };
+    } catch (e) {
+      if (e instanceof StoreError) return error(503, "Images and PDFs need a one-time database update first.");
+      throw e;
+    }
+  },
+  // One file back to the page, to show it. Only from its own thread.
+  async get_file(store, args) {
+    if (!isId(args.threadId) || !isId(args.fileId)) return error(400, "Unknown file.");
+    const [f] = await store.getFiles(args.threadId, [args.fileId]).catch(() => []);
+    return f ? { file: { id: f.id, name: f.name, mime: f.mime, data: f.data } } : error(404, "Unknown file.");
   },
   // Private threads: hidden from every other thread's AI until the owner makes them shared again.
   async set_private(store, args) {
@@ -422,11 +456,11 @@ const ACTIONS = Object.freeze({
   // Sends the user's message (or, with no content, retries the reply to the last one) to the thread's model.
   async chat(store, args, env, deps) {
     if (!isId(args.threadId)) return error(400, "Unknown thread.");
-    const retry = args.content === undefined && args.attachments === undefined;
-    const { content = null, error: bad } = retry ? {} : userMessage(args);
-    if (bad) return error(400, bad);
+    const retry = args.content === undefined && args.attachments === undefined && args.files === undefined;
     const thread = await store.getThread(args.threadId);
     if (!thread) return error(404, "Unknown thread.");
+    const { content = null, error: bad } = retry ? {} : await ownerMessage(store, thread.id, args);
+    if (bad) return error(400, bad);
     const halt = await stopReason(store);
     if (halt) return stopped(halt);
     const model = thread.model;
@@ -442,10 +476,13 @@ const ACTIONS = Object.freeze({
     const asked = content ?? stored.at(-1).content;
     const rule = harmCheck(asked);
     if (rule) return refusedRequest(rule, await refuse(store, thread.id, "request", rule));
-    const sent = trimHistory(mergeTurns(history));
+    // The thread's newest images and PDFs go along with the turns that sent them (counted in every estimate).
+    const sent = await withFiles(store, thread.id, trimHistory(mergeTurns(history)), readsFiles(model));
     // Smart routing (the owner's toggle, sent as routing: true): a short, plain question goes to the same vendor's
-    // light model. Decided here for free; anything in doubt gets the full model.
-    const tier = args.routing === true ? routeTier(model, asked, { historyChars: sent.reduce((n, m) => n + m.content.length, 0) - asked.length }) : "full";
+    // light model. Decided here for free; anything in doubt (including any image or PDF in play) gets the full model.
+    const tier = args.routing === true ? routeTier(model, asked, {
+      historyChars: sent.reduce((n, m) => n + m.content.length, 0) - asked.length, files: sent.some((m) => m.files?.length),
+    }) : "full";
     const routeLine = tier === "light" ? `\n\n${ROUTE_LABEL}${LIGHT_NAMES[model]}. For the full model, turn Smart routing off and ask again.` : "";
     // Background from the project's other shared threads (bounded; private threads are never read).
     const shared = await sharedFor(store, thread, asked);
@@ -533,7 +570,10 @@ const ACTIONS = Object.freeze({
     if (state.checks.length) return error(409, "This answer has already been checked.");
     const answer = state.answers[0];
     const prompt = checkPrompt(state.question.content, stripSources(answer.content));
-    const cost = (m) => (isPaid(env, m) ? estimateUsd(m, [{ content: prompt }], env) : 0);
+    // The checker sees the same images and PDFs the question came with.
+    const [{ files = undefined } = {}] = await withFiles(store, thread.id, [{ role: "user", content: state.question.content }]);
+    const asking = [{ role: "user", content: prompt, ...(files ? { files } : {}) }];
+    const cost = (m) => (isPaid(env, m) ? estimateUsd(m, asking, env) : 0);
     const asked = MODELS.includes(args.model) ? [args.model] : MODELS;
     const choices = asked.filter((m) => m !== answer.model && modelStatus(env, m).ready).sort((a, b) => cost(a) - cost(b));
     if (!choices.length) return error(409, "No second AI is available to check this answer.");
@@ -542,7 +582,7 @@ const ACTIONS = Object.freeze({
     if (why) return error(402, why);
     const notes = await memoryFor(store, thread.project_id);
     let r;
-    try { r = await runChat(env, m, [{ role: "user", content: prompt }], { f: deps.fetch, notes }); } catch (e) {
+    try { r = await runChat(env, m, asking, { f: deps.fetch, notes }); } catch (e) {
       if (!(e instanceof ModelError)) throw e;
       if (e.usage?.costUsd > 0) await reply(store, thread.id, m, `(The AI provider failed partway through this reply: ${e.message})`, e.usage);
       return { status: 502, body: { error: e.message, failed: [{ model: m, error: e.message }] } };
@@ -594,7 +634,7 @@ const ACTIONS = Object.freeze({
       const m = args.model;
       if (!MODELS.includes(m) || !ready(m)) return error(409, "That AI isn't available.");
       if (state.critiques.length || state.answers.some((a) => a.model === m)) return error(409, "That AI has already answered.");
-      const sent = trimHistory(mergeTurns([...state.before, state.question]));
+      const sent = await withFiles(store, thread.id, trimHistory(mergeTurns([...state.before, state.question])));
       const shared = await sharedFor(store, thread, state.question.content);
       const why = over(isPaid(env, m) ? estimateUsd(m, [...sent, { content: shared.text }], env) : 0);
       if (why) return error(402, why);
@@ -693,14 +733,14 @@ function whoTookPart(selected, state, lead, leadFailed) {
 // Checks shared by side-by-side answers and a roundtable's first round. Returns an error response, or the plan.
 async function askSeveral(store, args, env) {
   if (!isId(args.threadId)) return error(400, "Unknown thread.");
-  const { content, error: bad } = userMessage(args);
-  if (bad) return error(400, bad);
   const models = Array.isArray(args.models) ? [...new Set(args.models)] : [];
   if (models.length < 2 || models.length > MAX_COMPARE || !models.every((m) => MODELS.includes(m))) {
     return error(400, `Pick 2 to ${MAX_COMPARE} AIs to compare.`);
   }
   const thread = await store.getThread(args.threadId);
   if (!thread) return error(404, "Unknown thread.");
+  const { content, error: bad } = await ownerMessage(store, thread.id, args);
+  if (bad) return error(400, bad);
   const halt = await stopReason(store);
   if (halt) return stopped(halt);
   for (const m of models) {
@@ -709,7 +749,7 @@ async function askSeveral(store, args, env) {
   }
   const before = mergeTurns(await store.listMessages(thread.id));
   const history = [...before, { role: "user", content }];
-  const sent = trimHistory(mergeTurns(history));
+  const sent = await withFiles(store, thread.id, trimHistory(mergeTurns(history)));
   const lead = models.includes(thread.model) ? thread.model : models[0];
   const shared = await sharedFor(store, thread, content);
   return { thread, content, models, sent, shared, lead, paid: models.filter((m) => isPaid(env, m)) };
@@ -717,7 +757,8 @@ async function askSeveral(store, args, env) {
 
 // The worst case for all three rounds of a roundtable, and why it would go over a cap (or null).
 async function planCheck(store, env, deps, p) {
-  const chars = p.sent.reduce((n, m) => n + m.content.length, 0) + p.shared.text.length;
+  // Images and PDFs are counted as their token figures (about 3 characters a token, as in every estimate).
+  const chars = p.sent.reduce((n, m) => n + m.content.length + fileTokens(m.files) * 3, 0) + p.shared.text.length;
   const estimate = estimateRounds(env, p.models, p.lead, chars - p.content.length, p.content.length, (m) => isPaid(env, m));
   const why = (await budgetCheck(store, env, deps, p.thread.id, p.paid.length > 0))(estimate.total);
   return { estimate, why };
@@ -779,10 +820,12 @@ export async function handle(req, env, makeStore = createSupabaseStore, deps = {
 
   let body;
   try {
-    if (typeof req.body === "string" && Buffer.byteLength(req.body) > MAX_BODY) return error(413, "Request too large.");
+    // Uploads (one image or PDF) may be larger; every other action keeps the small limit.
+    if (typeof req.body === "string" && Buffer.byteLength(req.body) > MAX_UPLOAD_BODY) return error(413, "Request too large.");
     body = typeof req.body === "string" ? JSON.parse(req.body || "{}") : req.body || {};
     if (!body || typeof body !== "object" || Array.isArray(body)) return error(400, "Invalid request.");
-    if (Buffer.byteLength(JSON.stringify(body)) > MAX_BODY) return error(413, "Request too large.");
+    const size = Buffer.byteLength(JSON.stringify(body));
+    if (size > (body.action === "upload_file" ? MAX_UPLOAD_BODY : MAX_BODY)) return error(413, "Request too large.");
   } catch { return error(400, "Invalid JSON."); }
 
   if (typeof body.action !== "string" || !Object.hasOwn(ACTIONS, body.action)) return error(400, "Unknown action.");

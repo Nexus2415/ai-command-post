@@ -97,7 +97,18 @@ test("the page has the Smart toggle, on by default, and sends it with every one-
   const js = readFileSync(new URL("../dashboard/workspace.js", import.meta.url), "utf8");
   const html = readFileSync(new URL("../dashboard/workspace.html", import.meta.url), "utf8");
   assert.match(html, /id="cSmart" aria-pressed="true"/);
-  assert.match(js, /post\("chat", \{ threadId, content: text, attachments, routing: smart\(\) \}/);
+  assert.match(js, /post\("chat", \{ threadId, content: text, attachments, files: picked, routing: smart\(\) \}/);
   assert.match(js, /post\("chat", \{ threadId, routing: smart\(\) \}/);
   assert.doesNotMatch(js, /localStorage|sessionStorage/);
+});
+
+test("with an image in the thread, even a short follow-up gets the full model", async () => {
+  const { call, calls } = harness();
+  const t = await thread(call);
+  const png = Buffer.concat([Buffer.from([0x89]), Buffer.from("PNG\r\n\x1a\n", "latin1"), Buffer.alloc(40, 7)]).toString("base64");
+  const f = (await call("upload_file", { threadId: t.id, name: "a.png", mime: "image/png", data: png })).body.file;
+  await call("chat", { threadId: t.id, content: "Hi", files: [f.id], routing: true });
+  const out = await call("chat", { threadId: t.id, content: "What color is it?", routing: true });
+  assert.equal((out.body as any).tier, "full");
+  assert.deepEqual(calls.map((c) => c.body.model), ["anthropic/claude-sonnet-5.5", "anthropic/claude-sonnet-5.5"]);
 });
