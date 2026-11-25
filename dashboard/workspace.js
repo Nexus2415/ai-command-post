@@ -214,6 +214,7 @@
         : kind === "check" ? "Checked by " + name + (/^\W*disagree\b/i.test(body) ? " · disagrees" : " · agrees")
         : kind === "synthesis" ? "Concluded answer · agreed by the AIs, written by " + name : name));
       showContent(box, kind === "critique" || kind === "synthesis" || kind === "check" ? body : m.content);
+      if (m.role === "assistant" && window.speechSynthesis) box.firstChild.append(speakButton(box));
       return box;
     };
     const rowOf = (ms, kind) => { const r = el("div", "cmp"); r.dataset.kind = kind; for (const m of ms) r.append(boxOf(m, kind)); return r; };
@@ -405,6 +406,7 @@
       x.addEventListener("click", () => { uploads.splice(i, 1); showFiles(); });
       chip.append(x); row.append(chip);
     });
+    syncMic();
     // What the files add to each reply, at the dearest AI's rates (Claude): an image ~0.3¢, a PDF page up to ~0.4¢.
     if (uploads.length) {
       const pages = uploads.reduce((n, u) => n + (u.pages || 0), 0), imgs = uploads.filter((u) => !u.pages).length;
@@ -670,10 +672,69 @@
   // The flow chart's Chat / Flow chart switch lives in the More menu, out of the reading path.
   const moveToggle = () => { const t = document.querySelector(".bar .fv-toggle"); if (t) $("viewSlot").append(t); };
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", moveToggle); else moveToggle();
-  const grow = () => { const t = $("cText"); t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight, window.innerHeight * 0.4) + "px"; };
+  const grow = () => { const t = $("cText"); t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight, window.innerHeight * 0.4) + "px"; syncMic(); };
   $("cText").addEventListener("input", grow);
   new MutationObserver(grow).observe($("cForm"), { attributes: true, attributeFilter: ["hidden"] });
   $("cText").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) $("cForm").requestSubmit(); });
+
+  // Voice. Talk: the browser turns speech into text in the question box (Chrome sends the audio to Google's speech
+  // service, Safari to Apple's); you still check it and press send. Listen: an answer is read aloud by the device's
+  // own voice. Both are free, nothing is recorded or stored here, and neither sends anything to the AIs by itself.
+  const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let rec = null;
+  // The microphone takes the send button's place while the box is empty, as in other chat apps.
+  function syncMic() {
+    const mic = $("cMic");
+    if (!Recognition) { mic.hidden = true; $("cSend").hidden = false; return; }
+    const empty = !$("cText").value.trim() && !files.length && !uploads.length;
+    mic.hidden = !(empty || rec);
+    $("cSend").hidden = !mic.hidden;
+  }
+  $("cMic").addEventListener("click", () => {
+    if (rec) { rec.stop(); return; }
+    const before = $("cText").value.trim() ? $("cText").value.replace(/\s*$/, " ") : "";
+    rec = new Recognition();
+    rec.lang = navigator.language || "en-US"; rec.interimResults = true; rec.continuous = true;
+    rec.onresult = (e) => { let t = ""; for (const r of e.results) t += r[0].transcript; $("cText").value = before + t.trimStart(); grow(); };
+    rec.onerror = (e) => {
+      if (e.error === "not-allowed" || e.error === "service-not-allowed") say("The microphone is blocked. Allow it for this site in the browser's settings, then tap the microphone again.", "err");
+      else if (e.error !== "aborted" && e.error !== "no-speech") say("Talking didn't work this time (" + e.error + "). Try again, or type.", "err");
+    };
+    rec.onend = () => {
+      rec = null; $("cMic").classList.remove("on"); $("cMic").setAttribute("aria-pressed", "false");
+      if ($("pageMsg").textContent.startsWith("Listening")) say("");
+      syncMic(); $("cText").focus();
+    };
+    try { rec.start(); } catch (e) { rec = null; say("Talking isn't available right now. Type instead.", "err"); return; }
+    $("cMic").classList.add("on"); $("cMic").setAttribute("aria-pressed", "true");
+    say("Listening… tap the microphone again when you're done. Check the text, then send.", "warn");
+  });
+  // Read aloud: the answer's own text (not the name line or notes under it), in short pieces so long answers aren't
+  // cut off by the browser. Tapping again, or another answer's button, stops it.
+  let speaking = null;
+  function speakButton(box) {
+    const b = el("button", "speak", "▶ Listen"); b.type = "button";
+    b.setAttribute("aria-label", "Read this answer aloud"); b.setAttribute("aria-pressed", "false");
+    b.addEventListener("click", () => {
+      const synth = window.speechSynthesis;
+      const was = speaking;
+      synth.cancel();
+      if (was) { was.setAttribute("aria-pressed", "false"); was.textContent = "▶ Listen"; speaking = null; }
+      if (was === b) return;
+      const parts = [...box.childNodes].filter((n) => !(n.nodeType === 1 && (n.classList.contains("who") || n.classList.contains("drew") || n.classList.contains("attached"))))
+        .map((n) => n.textContent).join(" ").replace(/\s+/g, " ").trim();
+      const chunks = parts.match(/[^.!?]{1,220}[.!?]*|[^.!?]+/g) || [];
+      chunks.forEach((c, i) => {
+        const u = new SpeechSynthesisUtterance(c.trim());
+        u.lang = navigator.language || "en-US";
+        if (i === chunks.length - 1) u.onend = u.onerror = () => { if (speaking === b) { b.setAttribute("aria-pressed", "false"); b.textContent = "▶ Listen"; speaking = null; } };
+        synth.speak(u);
+      });
+      speaking = b; b.setAttribute("aria-pressed", "true"); b.textContent = "■ Stop";
+    });
+    return b;
+  }
+  syncMic();
 
   guard(async () => { await loadStatus(); await loadProjects(); })();
 })();

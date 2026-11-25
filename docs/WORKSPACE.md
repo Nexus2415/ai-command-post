@@ -148,6 +148,13 @@ Claude and ChatGPT threads can use the public web through Firecrawl (Perplexity 
 - A light answer ends with a small "⚡ Light model" note. Turn Smart off and ask again for the full model. Discussion mode always uses the full models; Perplexity has no light model.
 - Light models can be changed with `ACP_OPENROUTER_MODEL_CLAUDE_LIGHT` / `ACP_OPENROUTER_MODEL_CHATGPT_LIGHT` (same-vendor only) or `ACP_MODEL_CLAUDE_LIGHT` / `ACP_MODEL_CHATGPT_LIGHT` with direct keys. Costs use the light rates in `api/_lib/workspace-models.js` (or OpenRouter's reported cost, whichever is higher).
 
+## Phone and voice
+
+- **Add to home screen:** the workspace has a web-app manifest and icons, so on a phone "Add to Home Screen" opens it like an app.
+- **Talk:** when the question box is empty, the send button becomes a microphone. Speech is turned into text in the box by the browser (Chrome uses Google's speech service, Safari uses Apple's); nothing is sent until you press send, and nothing is recorded or stored here. Free.
+- **Listen:** each answer has a "▶ Listen" button that reads it aloud with the device's own voice. Free.
+- Form fields are 16px on touch screens so iPhones don't zoom in when you tap them.
+
 ## Plugin catalog
 - The Tools page now opens with **Catalog: ready-made tools**: weather, currency rates, Wikipedia, Hacker News, GitHub projects and npm packages. All free, read-only, no key.
 - **Review** shows the same plain-language summary as a tool you build yourself; **Confirm and turn on** adds it for every project. The server uses its own copy of the entry (`api/_lib/workspace-catalog.js`), so only the project scope comes from the page. Once added it is an ordinary look-up tool: switchable, metered (~0.1¢ a call), stopped by Stop everything.

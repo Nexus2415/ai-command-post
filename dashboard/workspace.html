@@ -1,6 +1,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Command Post Workspace</title>
+<meta name="theme-color" content="#0f1512">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Command Post">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
@@ -215,6 +222,7 @@ details.file pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:300px;ov
             <button class="linkbtn smart" type="button" id="cSmart" aria-pressed="true" title="Smart routing is on: short, simple questions go to a light model (Claude Haiku or GPT-5 nano), about 20 times cheaper. Anything harder still gets the full model. Click to always use the full model."><span aria-hidden="true">⚡</span><span class="lbl">Smart</span></button>
             <button class="linkbtn" type="button" id="cOptsBtn" aria-controls="cOpts" aria-expanded="false" hidden>AIs</button>
             <span class="grow"></span>
+            <button class="sendbtn mic" type="button" id="cMic" aria-label="Talk: speak your question" aria-pressed="false" title="Talk instead of typing. Your browser turns speech into text (Chrome uses Google's service, Safari uses Apple's); nothing is recorded here." hidden><svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3" fill="currentColor"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg></button>
             <button class="sendbtn" type="submit" id="cSend" aria-label="Send"><svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7" stroke="currentColor" stroke-width="2.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
           </div>
           <div class="opts" id="cOpts" hidden>
