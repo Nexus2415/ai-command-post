@@ -65,3 +65,12 @@ test("read aloud starts one chunk per callback and surfaces errors or silent sta
   const late = utterances.at(-1); button.click(); late.onend();
   assert.equal(button.textContent,"▶ Listen","late callbacks cannot restart stopped playback");
 });
+
+
+test("audio test uses the same playback handler before any workspace API initialization", () => {
+  assert.match(read("workspace.html"), /id="audioTest"/);
+  const js = read("workspace.js");
+  assert.match(js, /const sample = el\("div", null, "This is a NEXIA audio test\./);
+  assert.ok(js.indexOf('$("audioTest").append(speakButton(sample))') < js.indexOf("guard(async () => { await loadStatus(); await loadProjects(); })()"));
+  assert.ok(js.includes('$("audioTest").append(speakButton(sample))'));
+});
