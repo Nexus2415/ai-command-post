@@ -15,6 +15,10 @@ import { CHANGED, inheritedSources, sharedFor, sourcesLine, stillShared, stripSo
 import { MAX_NOTES, REMEMBER_PROMPT, extractFacts, memoryFor, saveFacts } from "./_lib/workspace-memory.js";
 import { isShared } from "./_lib/workspace-shared.js";
 import { CRITIQUE_MARK, SYNTHESIS_MARK, critiquePrompt, estimateRounds, roundtableState, synthesisPrompt } from "./_lib/workspace-roundtable.js";
+import {
+  ACTION_KINDS, ACTION_MARK, ActionError, MAX_PENDING_PER_THREAD, MAX_PROPOSALS_PER_REPLY, actionsReady, approvalProblem,
+  buildProposal, describeAction, isProposalTool, proposalTools, runAction,
+} from "./_lib/workspace-actions.js";
 
 // Vercel: model replies can take a while.
 export const config = { maxDuration: 120 };
@@ -121,6 +125,46 @@ function webAuditText(log) {
   const total = log.reduce((n, e) => n + e.usd, 0);
   return `\n\nWeb activity (audit, times UTC, total $${total.toFixed(3)}):\n` +
     log.map((e) => `- ${e.at.slice(11, 19)} ${e.kind}: ${e.target}${e.usd ? ` ($${e.usd.toFixed(3)})` : ""}`).join("\n");
+}
+
+// Approval gate: a line under the reply listing what the AI proposed, so the owner sees it waits for them.
+function proposalsText(list) {
+  if (!list.length) return "";
+  return `\n\n${ACTION_MARK} Waiting for your approval (nothing has happened yet):\n` +
+    list.map((a) => `- ${a.label}: ${a.where}`).join("\n");
+}
+// Saves an AI's proposed action (never runs it). Returns a tool result for the model.
+function proposer(store, thread, model, deps) {
+  const made = [];
+  const no = (text) => ({ ok: false, text, usd: 0 });
+  async function propose(name, args) {
+    if (made.length >= MAX_PROPOSALS_PER_REPLY) return no(`Not proposed: at most ${MAX_PROPOSALS_PER_REPLY} proposals per reply.`);
+    let row;
+    try { row = buildProposal(name, args, { threadId: thread.id, model, now: deps.now() }); } catch (e) {
+      if (e instanceof ActionError) return no(`Not proposed: ${e.message}`);
+      throw e;
+    }
+    let saved;
+    try {
+      const now = deps.now().getTime();
+      const waiting = (await store.listActions(thread.id)).filter((a) => a.status === "proposed" && Date.parse(a.expires_at) > now).length;
+      if (waiting >= MAX_PENDING_PER_THREAD) return no(`Not proposed: ${waiting} proposals already wait for the owner in this thread. Wait for those to be decided.`);
+      saved = await store.addAction(row);
+    } catch (e) {
+      if (e instanceof StoreError) return no("Not proposed: proposals aren't set up on this workspace yet (a one-time database step). Nothing was saved.");
+      throw e;
+    }
+    const shown = describeAction(saved, deps.now());
+    made.push(shown);
+    console.warn(JSON.stringify({ event: "action_proposed", kind: saved.kind, id: saved.id }));
+    return { ok: true, usd: 0, text: `Proposed. It has NOT happened: it waits for the owner to approve it on the workspace page ` +
+      `(expires in 24 hours). Tell the owner what you proposed and why. Do not claim it was done.` };
+  }
+  return { propose, made };
+}
+// A workspace note in the thread (approval gate results). Never stops the response if it can't be saved.
+async function gateNote(store, threadId, text) {
+  try { await store.addMessage(threadId, { role: "assistant", content: `${ACTION_MARK} ${text}`.slice(0, 32_000), model: null }); } catch { /* recorded in ws_actions anyway */ }
 }
 
 const reply = (store, threadId, model, text, r) => store.addMessage(threadId, {
@@ -301,6 +345,62 @@ const ACTIONS = Object.freeze({
     const why = await stopReason(store);
     return { stopped: Boolean(why), reason: why };
   },
+  // Approval gate: this thread's proposed actions, newest first, with what each will do and where.
+  async list_actions(store, args, env, deps) {
+    if (!isId(args.threadId)) return error(400, "Unknown thread.");
+    if (!(await store.getThread(args.threadId))) return error(404, "Unknown thread.");
+    try {
+      return { ready: actionsReady(env), actions: (await store.listActions(args.threadId)).map((a) => describeAction(a, deps.now())) };
+    } catch (e) {
+      if (e instanceof StoreError) return { ready: actionsReady(env), actions: [], setupNeeded: true };
+      throw e;
+    }
+  },
+  // Only the owner, behind the site password, can decide. No AI has a tool for this, and no text counts as approval.
+  // Approve runs the action exactly as shown (`confirm` must match), once; every check fails closed.
+  async decide_action(store, args, env, deps) {
+    if (!isId(args.id)) return error(400, "Unknown action.");
+    if (args.decision !== "approve" && args.decision !== "reject") return error(400, 'Say "approve" or "reject".');
+    let row;
+    try { row = await store.getAction(args.id); } catch (e) {
+      if (e instanceof StoreError) return error(503, "Approvals need a one-time database update first. Nothing was run.");
+      throw e;
+    }
+    if (!row) return error(404, "Unknown action.");
+    const now = deps.now();
+    const label = ACTION_KINDS[row.kind]?.label ?? "Unknown action";
+    if (args.decision === "reject") {
+      const moved = row.status === "proposed" ? await store.moveAction(row.id, "proposed", { status: "rejected", decided_at: now.toISOString() }) : null;
+      if (!moved) return error(409, "This action was already decided.");
+      console.warn(JSON.stringify({ event: "action_rejected", kind: row.kind, id: row.id }));
+      await gateNote(store, row.thread_id, `Rejected by the owner: ${label}. Nothing was sent.`);
+      return { action: describeAction(moved, now) };
+    }
+    const halt = await stopReason(store);
+    if (halt) return stopped(halt);
+    const why = approvalProblem(row, args.confirm, env, now);
+    if (why) return error(409, why);
+    // Claim it: only one request can move it from proposed to running.
+    const claimed = await store.moveAction(row.id, "proposed", { status: "running", decided_at: now.toISOString() });
+    if (!claimed) return error(409, "This action was already decided.");
+    // A stop pressed while claiming still wins.
+    const late = await stopReason(store);
+    if (late) {
+      await store.moveAction(row.id, "running", { status: "failed", result: "Not run: Stop everything was pressed." });
+      return stopped(late);
+    }
+    console.warn(JSON.stringify({ event: "action_approved", kind: row.kind, id: row.id }));
+    let out;
+    try { out = await runAction(env, claimed, deps.fetch); } catch (e) {
+      const msg = e instanceof ActionError ? e.message : "The action failed.";
+      const failed = await store.moveAction(row.id, "running", { status: "failed", result: msg.slice(0, 2_000) });
+      await gateNote(store, row.thread_id, `Approved, but it failed: ${label}. ${msg}`);
+      return { status: 502, body: { error: msg, action: describeAction(failed ?? { ...claimed, status: "failed", result: msg }, now) } };
+    }
+    const done = await store.moveAction(row.id, "running", { status: "done", result: out.text.slice(0, 2_000), result_url: out.url });
+    await gateNote(store, row.thread_id, `Done, approved by the owner: ${out.text}${out.url ? ` ${out.url}` : ""}`);
+    return { action: describeAction(done ?? { ...claimed, status: "done", result: out.text, result_url: out.url }, now) };
+  },
   // Which models can answer, and the budget so far.
   async models(store, args, env, deps) {
     const threadId = isId(args.threadId) ? args.threadId : null;
@@ -358,7 +458,10 @@ const ACTIONS = Object.freeze({
     const tools = [...readyTools(env), ...(model === "perplexity" ? [] : [
       ...await mcpTools(env, deps.fetch),
       ...await connectorTools(env, (await savedConnectors(store)).rows, thread.project_id, deps.net).catch(() => []),
+      // Approval gate: the AI may PROPOSE an outward action; only the owner's tap runs it (decide_action).
+      ...proposalTools(env),
     ])];
+    const gate = proposer(store, thread, model, deps);
     // Web access for this reply: pages the owner linked may be read; search results add more. Each web call is
     // checked against the caps first (web calls are always paid) and listed under the reply.
     const allowedUrls = new Set(urlsIn(asked));
@@ -368,7 +471,7 @@ const ACTIONS = Object.freeze({
       allowedUrls, charge: async (usd) => overWeb(soFar + usd),
       audit: (kind, target, usd) => webLog.push({ at: deps.now().toISOString(), kind, target: String(target).slice(0, 300), usd }),
     });
-    const record = (text, r) => reply(store, thread.id, model, (text + webAuditText(webLog)).slice(0, 32_000), r);
+    const record = (text, r) => reply(store, thread.id, model, (text + webAuditText(webLog) + proposalsText(gate.made)).slice(0, 32_000), r);
     let out;
     try {
       out = await runChat(env, model, sent, {
@@ -376,7 +479,8 @@ const ACTIONS = Object.freeze({
         notes: await memoryFor(store, thread.project_id),
         // Only a shared thread may add to project memory (re-checked on the server when saving).
         remember: isShared(thread) ? REMEMBER_PROMPT : "",
-        runTool: gatedRunTool(store, thread.id, (name, a, soFar = 0) => runTool(env, tools, name, a, deps.fetch, webCtx(soFar))),
+        runTool: gatedRunTool(store, thread.id, (name, a, soFar = 0) => (isProposalTool(name) && tools.some((t) => t.name === name)
+          ? gate.propose(name, a) : runTool(env, tools, name, a, deps.fetch, webCtx(soFar)))),
         // Every later round of tool use is checked again: the stop switch, and the caps counting what this reply
         // has already cost (web calls included).
         beforeCall: async (est, soFar) => {
@@ -400,7 +504,7 @@ const ACTIONS = Object.freeze({
       stopReason: () => stopReason(store), harmCheck, trusted: !out.toolsUsed?.length && !shared.sources.length,
     });
     const message = await gatedReply(store, thread.id, model, answer || "(The AI sent an empty reply.)", out, "",
-      memoryLine + sourcesLine(shared.sources) + webAuditText(webLog));
+      memoryLine + sourcesLine(shared.sources) + webAuditText(webLog) + proposalsText(gate.made));
     return { saved, message };
   },
   // Side-by-side answers: one message goes to 2-3 AIs at once and each answer is saved with its AI. Plugins stay

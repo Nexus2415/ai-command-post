@@ -61,6 +61,7 @@ The placeholder value only satisfies the startup check; the proxy replaces the h
 4. ~~**Paid-agent rates**~~ Updated 2026-10-20 to list prices for the default models (`src/budget.ts`), including Perplexity's per-request search fee. Re-check before raising the cap. Third-party sources say Perplexity's Sonar Chat Completions endpoint (used by `src/providers.ts`) was only supported until 2026-09-27; verify before keying Perplexity.
 5. **Gemini free tier:** Google may use free-tier prompts to improve its products. Don't route client or personal data through the free tier. This matters for Arnexyia work; its AGENTS.md forbids raw client data in shared tools.
 6. Approval flow is one-way: the engine posts "Owner approval needed" and stops. A reply-to-approve handshake isn't built and shouldn't be until the owner asks for it.
+7. **Workspace approval gate (2026-11-25).** In the workspace, an AI can only PROPOSE an outward action (`propose_linear_issue`, `propose_linear_comment`); the owner approves the exact payload on the workspace page and it runs once (`api/_lib/workspace-actions.js`, table `ws_actions`). Fails closed on the stop switch, unknown type, expiry (24 h), changed payload, harm rules and the red-tier words (`RED_PATTERNS`, kept identical to `src/policy.ts`). Not built yet: email drafts and draft PRs as action types, and standing per-project permissions. This is separate from the engine, which stays off.
 
 ## Rules for whoever works on this
 

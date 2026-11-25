@@ -136,6 +136,7 @@
     $("cModel").hidden = true;
     $("cPrivacy").hidden = true;
     $("cForm").hidden = true;
+    $("aPanel").hidden = true;
     $("mList").replaceChildren();
     if (window.ACPFlow) window.ACPFlow.clear();
   }
@@ -156,7 +157,7 @@
       const kind = kindOf(m);
       const box = el("div", "m " + (m.role === "assistant" ? "assistant" : "user") + (kind === "synthesis" ? " synth" : ""));
       if (m.model) box.dataset.model = m.model;
-      const name = m.role === "assistant" ? (MODEL_NAMES[m.model] || "AI") : "You";
+      const name = m.role === "assistant" ? (m.model ? MODEL_NAMES[m.model] || "AI" : m.content.startsWith("[Approval gate]") ? "Workspace" : "AI") : "You";
       box.append(el("span", "who", kind === "critique" ? name + " · review and revised answer"
         : kind === "synthesis" ? "Recommendation · written by " + name : name));
       showContent(box, kind === "critique" || kind === "synthesis" ? m.content.replace(/^\[Roundtable[^\]\n]*\]\n?/, "") : m.content);
@@ -201,7 +202,46 @@
     // A side-by-side answer (or a roundtable that stopped part way) can be taken through the remaining rounds.
     $("cDiscuss").hidden = !(lastState && lastState.answers >= 2 && !lastState.done);
     $("cDiscuss").textContent = lastState && lastState.critiques ? "Finish roundtable" : "Discuss these answers (roundtable)";
-    await Promise.all([loadThreads(), loadStatus()]);
+    await Promise.all([loadThreads(), loadStatus(), loadActions()]);
+  }
+
+  // Approval gate: actions an AI proposed in this thread. Pending ones get Approve and Reject; the last few decided
+  // ones are listed with their outcome. Approve sends back the code of exactly what is shown here.
+  const ACTION_STATUS = { done: "Done", failed: "Failed", rejected: "Rejected", expired: "Expired", running: "Running" };
+  async function loadActions() {
+    const panel = $("aPanel"), list = $("aList");
+    if (!threadId) { panel.hidden = true; return; }
+    let out;
+    try { out = await post("list_actions", { threadId }); } catch { panel.hidden = true; return; }
+    const pending = out.actions.filter((a) => a.status === "proposed");
+    const recent = out.actions.filter((a) => a.status !== "proposed").slice(0, 3);
+    list.replaceChildren();
+    panel.hidden = !pending.length && !recent.length;
+    $("aH").textContent = pending.length ? "Waiting for your approval (" + pending.length + ")" : "Recent actions";
+    for (const a of [...pending, ...recent]) {
+      const li = el("li", "acard"); li.dataset.status = a.status;
+      li.append(el("span", "what", a.label + (a.status === "proposed" ? "" : " · " + (ACTION_STATUS[a.status] || a.status))));
+      li.append(el("span", "note", a.where + " · proposed by " + (MODEL_NAMES[a.proposedBy] || "an AI") + " · " + when(a.createdAt)));
+      li.append(el("pre", "", a.text));
+      if (a.result) li.append(el("span", "note", a.result + (a.resultUrl ? " " + a.resultUrl : "")));
+      if (a.status === "proposed") {
+        const row = el("div", "row");
+        const yes = el("button", "btn", "Approve"); yes.type = "button";
+        const no = el("button", "btn reject", "Reject"); no.type = "button";
+        yes.disabled = halted;
+        yes.addEventListener("click", guard(async () => {
+          if (!window.confirm("Approve this?\n\n" + a.label + "\n" + a.where + "\n\n" + a.text.slice(0, 600))) return;
+          try { await post("decide_action", { id: a.id, decision: "approve", confirm: a.confirm }); }
+          finally { await openThread(threadId); }
+        }));
+        no.addEventListener("click", guard(async () => {
+          try { await post("decide_action", { id: a.id, decision: "reject" }); } finally { await openThread(threadId); }
+        }));
+        row.append(yes, no, el("span", "note", "Expires " + when(a.expiresAt)));
+        li.append(row);
+      }
+      list.append(li);
+    }
   }
 
   // Shared or private, at a glance. Shared: other threads' AIs in this project may draw on this thread. Private:
@@ -383,6 +423,7 @@
     $("cSend").disabled = halted;
     $("cRetry").disabled = halted;
     $("cDiscuss").disabled = halted;
+    for (const b of $("aList").querySelectorAll(".btn:not(.reject)")) b.disabled = halted;
   }
   const stopSwitch = window.ACPStopSwitch.mount($("stopSwitch"), { post, onChange: setHalted });
   function currentModel() { return $("cModel").dataset.model || null; }

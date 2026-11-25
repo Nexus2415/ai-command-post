@@ -93,7 +93,8 @@ test("Claude can call a plugin, read the result and answer; every round's cost i
   assert.equal(out.message.input_tokens, 400);
   assert.equal(out.message.cost_usd, (400 * 2 + 70 * 10) / 1e6 + 0.01, "the web search's cost is part of the reply's");
   const [first, , second] = calls;
-  assert.equal(first!.body.tools.length, 5);
+  // 5 read tools plus the 2 approval-gate propose tools (they only save a proposal; see approval-gate.test.ts).
+  assert.equal(first!.body.tools.length, 7);
   assert.equal(second!.body.messages.at(-1).content[0].type, "tool_result");
   assert.equal(second!.body.messages.at(-1).content[0].tool_use_id, "tu1");
   assert.match(second!.body.messages.at(-1).content[0].content, /FSM tools https:\/\/ex\.com/);

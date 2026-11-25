@@ -107,6 +107,13 @@ details.file pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:300px;ov
 .privacy[data-state="shared"]{color:var(--accent);border-color:var(--accent)}
 .privacy[data-state="private"]{color:var(--bad);border-color:var(--bad)}
 .privacy:disabled{cursor:default;opacity:.7}
+.approvals{display:grid;gap:8px;padding:12px 14px;border-top:1px solid var(--line);background:var(--warn-soft)}
+.alist{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.acard{background:var(--panel);border:1px solid var(--warn);border-radius:8px;padding:10px 12px;display:grid;gap:6px;min-width:0}
+.acard .what{font-weight:600}
+.acard pre{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.45 var(--mono);max-height:220px;overflow:auto;background:var(--panel-2);border-radius:6px;padding:8px}
+.acard .btn.reject{background:var(--panel);color:var(--bad);border-color:var(--bad)}
+.acard[data-status]:not([data-status="proposed"]){border-color:var(--line);opacity:.85}
 .m .drew{margin-top:8px;padding-top:6px;border-top:1px dashed var(--line);font:500 11px var(--mono);color:var(--muted)}
 </style>
 <link rel="stylesheet" href="ops-theme.css">
@@ -150,6 +157,11 @@ details.file pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:300px;ov
     <section class="panel convo" aria-labelledby="cH">
       <header style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:12px 14px;border-bottom:1px solid var(--line)"><h2 id="cH">No thread open</h2><span style="display:flex;gap:8px;align-items:center"><button id="cPrivacy" class="chip privacy" type="button" hidden></button><span id="cModel" class="chip" hidden><span class="dot"></span><span></span></span></span></header>
       <div class="msgs" id="mList" aria-live="polite"></div>
+      <section class="approvals" id="aPanel" aria-labelledby="aH" hidden>
+        <h3 id="aH" class="eyebrow">Waiting for your approval</h3>
+        <p class="note">An AI proposed these. Nothing happens unless you approve. Approve runs it once, exactly as shown.</p>
+        <ul class="alist" id="aList"></ul>
+      </section>
       <form class="composer" id="cForm" hidden>
         <label class="note" for="cText">Message</label>
         <textarea id="cText" maxlength="32000"></textarea>
