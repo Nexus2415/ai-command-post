@@ -22,7 +22,7 @@ export const SOURCES_LABEL = "Drew on other threads: ";
 const SOURCES_LINE = /\n*Drew on other threads: [^\n]*/g;
 // The project-memory lines written under a reply (workspace-memory.js) are owner-only too: a fact still waiting for
 // the owner's review must never reach a model through history or another thread's background.
-const MEMORY_LINES = /\n*(?:Saved to project memory: |Waiting for you to keep or delete \(Project memory\): |Project memory is full \()[^\n]*/g;
+const MEMORY_LINES = /\n*(?:Saved to project memory: |Waiting for you to keep or delete \(Project memory\): |Memory change waiting for you \(Project memory\): |Project memory is full \()[^\n]*/g;
 // The smart-routing note under a light-model answer (api/workspace.js) is for the owner too.
 export const ROUTE_LABEL = "Answered by the light model (smart routing): ";
 const ROUTE_LINE = /\n*Answered by the light model \(smart routing\): [^\n]*/g;
