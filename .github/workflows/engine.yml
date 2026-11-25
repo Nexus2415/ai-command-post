@@ -38,6 +38,7 @@ jobs:
           ACP_LINEAR_TEAM_KEY: ${{ vars.ACP_LINEAR_TEAM_KEY || 'ARN' }}
           ACP_DEFAULT_LEAD: ${{ vars.ACP_DEFAULT_LEAD || 'claude' }}
           ACP_GITHUB_REPOS: ${{ vars.ACP_GITHUB_REPOS }}
+          ACP_PROVENANCE_SECRET: ${{ secrets.ACP_PROVENANCE_SECRET }}
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.ACP_GITHUB_TOKEN }}
           FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}

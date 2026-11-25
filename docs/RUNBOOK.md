@@ -9,6 +9,7 @@
   - `ACP_DRY_RUN` — `true` (default) plans but writes nothing to Linear/GitHub; `false` = live writes.
   - `ACP_MONTHLY_BUDGET_USD` — spend cap, default `0` (free tiers only).
   - `ACP_ALLOW_PULL_REQUESTS` — default `false`; engine PRs are always draft.
+- Repo secret `ACP_PROVENANCE_SECRET` (any 32+ random characters, Settings → Secrets and variables → Actions → Secrets) signs every claim and result the engine writes in Linear (`src/provenance.ts`). With it set, a typed or pasted "ACP executor: acp:…" or "## Result (…)" that the engine didn't sign is ignored: a forged claim keeps the engine OFF that task, and a forged result never completes a command. Without it the engine refuses to run live (`ACP_ACTIVE=true` with `ACP_DRY_RUN=false`); dry runs still work. Changing the secret makes earlier signatures stop verifying, so only rotate it between commands. The run's first log line says `claims signed` or `claims UNSIGNED`.
 - The first log line of a run states the mode, e.g. `ACTIVE · live writes · cap $0 · agents online: Gemini`. "Online" means a key is configured, not that the provider was reachable; reachability shows only when a call succeeds or fails in that run.
 
 ## Provider errors
