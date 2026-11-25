@@ -21,5 +21,12 @@
       "path": "/api/cron",
       "schedule": "0 12 * * *"
     }
+  ],
+  "redirects": [
+    {
+      "source": "/",
+      "destination": "/workspace.html",
+      "permanent": false
+    }
   ]
 }
