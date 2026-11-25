@@ -826,6 +826,9 @@
   }
   window.addEventListener("pagehide", () => stopSpeaking());
   syncMic();
+  // The same playback path, with fixed synthetic text, works even if the preview has no database.
+  const sample = el("div", null, "This is a NEXIA audio test. If you can hear this, read aloud is working.");
+  $("audioTest").append(speakButton(sample));
 
   guard(async () => { await loadStatus(); await loadProjects(); })();
 })();
