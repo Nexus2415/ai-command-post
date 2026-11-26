@@ -1,5 +1,6 @@
 // Runtime configuration. Every value comes from the environment; nothing secret lives in the repo.
 import { appSettingFor, type AppSetting } from "./identity.ts";
+import { provenanceSecret } from "./provenance.ts";
 
 export type AgentKey = "claude" | "chatgpt" | "gemini" | "perplexity";
 
@@ -22,6 +23,9 @@ export interface Config {
   ledgerPath: string;
   /** ACP_LEDGER_RESET=YYYY-MM: owner acknowledges that a lost ledger may restart at $0 for that month only. */
   ledgerResetMonth: string | undefined;
+  /** ACP_PROVENANCE_SECRET (32+ characters): signs the engine's claims and results so a typed marker can't pass for
+   *  one (src/provenance.ts). Unset = unsigned, and the engine refuses to run live. */
+  provenanceSecret: string | undefined;
   keys: {
     linear?: string;
     github?: string;
@@ -87,6 +91,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     allowPullRequests: bool(env["ACP_ALLOW_PULL_REQUESTS"], false),
     ledgerPath: env["ACP_LEDGER_PATH"] ?? ".acp/ledger.json",
     ledgerResetMonth: opt("ACP_LEDGER_RESET"),
+    provenanceSecret: provenanceSecret(env["ACP_PROVENANCE_SECRET"]),
     keys: {
       linear: opt("LINEAR_API_KEY"),
       github: opt("GITHUB_TOKEN"),

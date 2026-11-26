@@ -1,3 +1,4 @@
+import { signComment, verifierFor, type SignedKind, type Verifier } from "./provenance.ts";
 import { createHash } from "node:crypto";
 import { statusContent } from "../api/_lib/engine-status.js";
 import { AGENTS, AGENT_LIST, agentFor, titleFor } from "./agents.ts";
@@ -22,6 +23,11 @@ export const EXECUTOR_MARKER = "ACP executor:";
 const MAX_SUBTASKS = 6;
 const PLAN_TOKENS = 2_000;
 const STEP_TOKENS = 2_500;
+
+/** The comment body, signed when ACP_PROVENANCE_SECRET is set (src/provenance.ts). */
+function signed(d: Deps, kind: SignedKind, issueId: string, body: string): string {
+  return d.cfg.provenanceSecret ? signComment(d.cfg.provenanceSecret, kind, issueId, body) : body;
+}
 
 export interface Deps {
   cfg: Config;
@@ -96,7 +102,13 @@ export function runnableClients(clients: Deps["clients"]): Deps["clients"] {
  */
 export type ExecutorClaim = { executor: string; source: "comment" | "label" };
 
-export function claimsOn(labels: string[], comments: { body: string; createdAt?: string }[]): ExecutorClaim[] {
+// With signing on, an ACP claim counts only if its signature verifies for this issue (src/provenance.ts). An unsigned
+// or forged "acp:" claim is still a claim, but a foreign one ("unverified"), so ACP never acts on a task it can't
+// prove it claimed. Other executors' claims (manual, eve, labels) need no signature: they only fence work off.
+export const UNVERIFIED = "unverified";
+export function claimsOn(labels: string[], comments: { body: string; createdAt?: string }[], verify?: Verifier): ExecutorClaim[] {
+  const acp = (executor: string, body: string): string =>
+    !verify || !executor.startsWith("acp:") || verify("claim", body) ? executor : UNVERIFIED;
   const out: ExecutorClaim[] = [];
   for (const l of labels) {
     const m = /^executor:\s*(\S+)$/i.exec(l.trim());
@@ -113,12 +125,12 @@ export function claimsOn(labels: string[], comments: { body: string; createdAt?:
   for (const c of sorted) {
     const m = new RegExp(`^${EXECUTOR_MARKER}\\s*(\\S+)`, "m").exec(c.body);
     if (m) {
-      out.push({ executor: m[1]!.toLowerCase(), source: "comment" });
+      out.push({ executor: acp(m[1]!.toLowerCase(), c.body), source: "comment" });
       continue;
     }
     const legacy = new RegExp(`^${CLAIM_MARKER} (.+?) \\(AI Command Post\\)`).exec(c.body);
     const key = legacy ? AGENT_LIST.find((a) => a.name === legacy[1])?.key : undefined;
-    if (key) out.push({ executor: `acp:${key}`, source: "comment" });
+    if (key) out.push({ executor: acp(`acp:${key}`, c.body), source: "comment" });
   }
   return out;
 }
@@ -132,7 +144,7 @@ export function claimsOn(labels: string[], comments: { body: string; createdAt?:
 async function commandLead(d: Deps, cmd: Issue, report: TickReport, input = cmd.description): Promise<AgentKey | null> {
   let { lead } = activeLead(d, cmd);
   const labels = d.store.getLabels ? await d.store.getLabels(cmd.id) : cmd.labels;
-  const claims = claimsOn(labels, await d.store.getComments(cmd.id));
+  const claims = claimsOn(labels, await d.store.getComments(cmd.id), verifierFor(d.cfg.provenanceSecret, cmd.id));
   // A command keeps the ACP lead that claimed it, even if the active lead has since changed (fallback recovery).
   const winner = claims.find((c) => c.source === "comment") ?? claims.find((c) => c.source === "label" && c.executor.startsWith("acp:"));
   const recorded = winner?.executor.startsWith("acp:") && !claims.some((c) => c.source === "label" && c.executor !== winner.executor);
@@ -146,7 +158,7 @@ async function commandLead(d: Deps, cmd: Issue, report: TickReport, input = cmd.
   // Claim only when the lead can actually plan now, so a budget-blocked or offline lead never leaves a stale claim.
   const canPlan = !!d.clients[lead] && d.budget.check(lead, estimateTokens(input) + 1_000, PLAN_TOKENS).ok;
   if (status === "free" && canPlan) {
-    await d.store.comment(cmd.id, `${EXECUTOR_MARKER} acp:${lead}\n\n${CLAIM_MARKER} ${AGENTS[lead].name} (AI Command Post), as lead.`);
+    await d.store.comment(cmd.id, signed(d, "claim", cmd.id, `${EXECUTOR_MARKER} acp:${lead}\n\n${CLAIM_MARKER} ${AGENTS[lead].name} (AI Command Post), as lead.`));
     // Any earlier claim but this lead's own wins, another ACP agent's included (two engine runs racing on one command).
     // Proceed only on a read-back that shows our own claim; a read that shows none is unconfirmed, not ownership.
     const after = claimStatus(await claimsAfterWrite(d, cmd), lead);
@@ -164,7 +176,7 @@ async function commandLead(d: Deps, cmd: Issue, report: TickReport, input = cmd.
 /** Claims as they stand right after ACP wrote its own, read fresh so a racing executor's earlier claim shows. */
 async function claimsAfterWrite(d: Deps, issue: Issue): Promise<ExecutorClaim[]> {
   const labels = d.store.getLabels ? await d.store.getLabels(issue.id) : issue.labels;
-  return claimsOn(labels, await d.store.getComments(issue.id));
+  return claimsOn(labels, await d.store.getComments(issue.id), verifierFor(d.cfg.provenanceSecret, issue.id));
 }
 
 export function claimStatus(claims: ExecutorClaim[], agent: AgentKey): "own" | "foreign" | "free" {
@@ -260,13 +272,13 @@ export async function work(d: Deps, task: Issue, agent: AgentKey, report: TickRe
 
   // Re-read claims immediately before writing ours, to narrow (not close) the race window.
   const labels = d.store.getLabels ? await d.store.getLabels(task.id) : task.labels;
-  const status = claimStatus(claimsOn(labels, await d.store.getComments(task.id)), agent);
+  const status = claimStatus(claimsOn(labels, await d.store.getComments(task.id), verifierFor(d.cfg.provenanceSecret, task.id)), agent);
   if (status === "foreign") {
     report.waiting.push(`${task.identifier}: claimed by another executor; ACP will not run it`);
     return;
   }
   if (status === "free") {
-    await d.store.comment(task.id, `${EXECUTOR_MARKER} acp:${agent}\n\n${CLAIM_MARKER} ${profile.name} (AI Command Post).`);
+    await d.store.comment(task.id, signed(d, "claim", task.id, `${EXECUTOR_MARKER} acp:${agent}\n\n${CLAIM_MARKER} ${profile.name} (AI Command Post).`));
     const after = claimStatus(await claimsAfterWrite(d, task), agent);
     if (after !== "own") {
       report.waiting.push(after === "foreign"
@@ -291,7 +303,7 @@ export async function work(d: Deps, task: Issue, agent: AgentKey, report: TickRe
         const priorRetries = permanent ? 0 : (await d.store.getComments(task.id)).filter((c) => c.body.startsWith(RETRY_MARKER)).length;
         if (permanent || priorRetries >= MAX_PROVIDER_RETRIES) {
           const why = permanent ? "Permanent provider error" : `Provider still failing after ${MAX_PROVIDER_RETRIES} retries`;
-          await d.store.comment(task.id, `${RESULT_MARKER} (${profile.name}, blocked)\n\n${why}; not retrying automatically. Error: ${reason}`);
+          await d.store.comment(task.id, signed(d, "result", task.id, `${RESULT_MARKER} (${profile.name}, blocked)\n\n${why}; not retrying automatically. Error: ${reason}`));
           await d.store.setState(task.id, d.cfg.linearTeamKey, "canceled");
           report.worked.push(`${task.identifier} blocked: ${why.toLowerCase()}`);
           return;
@@ -303,7 +315,7 @@ export async function work(d: Deps, task: Issue, agent: AgentKey, report: TickRe
         return;
       }
       // A tool may already have created durable state. Fail closed rather than replaying it automatically.
-      await d.store.comment(task.id, `${RESULT_MARKER} (${profile.name}, blocked)\n\nModel/provider failure after a tool call; automatic replay was stopped to avoid duplicating side effects. Error: ${reason}`);
+      await d.store.comment(task.id, signed(d, "result", task.id, `${RESULT_MARKER} (${profile.name}, blocked)\n\nModel/provider failure after a tool call; automatic replay was stopped to avoid duplicating side effects. Error: ${reason}`));
       await d.store.setState(task.id, d.cfg.linearTeamKey, "canceled");
       report.worked.push(`${task.identifier} blocked after tool call`);
       return;
@@ -314,7 +326,7 @@ export async function work(d: Deps, task: Issue, agent: AgentKey, report: TickRe
         report.waiting.push(`${task.identifier}: ${out.blocked}`);
         return;
       }
-      await d.store.comment(task.id, `${RESULT_MARKER} (${profile.name}, blocked)\n\nExecution became blocked after a tool call; automatic replay was stopped to avoid duplicating side effects. Reason: ${out.blocked}`);
+      await d.store.comment(task.id, signed(d, "result", task.id, `${RESULT_MARKER} (${profile.name}, blocked)\n\nExecution became blocked after a tool call; automatic replay was stopped to avoid duplicating side effects. Reason: ${out.blocked}`));
       await d.store.setState(task.id, d.cfg.linearTeamKey, "canceled");
       report.worked.push(`${task.identifier} blocked after tool call`);
       return;
@@ -323,7 +335,7 @@ export async function work(d: Deps, task: Issue, agent: AgentKey, report: TickRe
     const j = extractJson(out);
     if (j && typeof j["final"] === "string") {
       const status = j["status"] === "blocked" ? "blocked" : "done";
-      await d.store.comment(task.id, `${RESULT_MARKER} (${profile.name}, ${status})\n\n${j["final"]}`);
+      await d.store.comment(task.id, signed(d, "result", task.id, `${RESULT_MARKER} (${profile.name}, ${status})\n\n${j["final"]}`));
       // A blocked task is closed as canceled so its command can still be summarized; move it back to Todo to retry.
       await d.store.setState(task.id, d.cfg.linearTeamKey, status === "done" ? "completed" : "canceled");
       report.worked.push(`${task.identifier} ${status} by ${profile.name}`);
@@ -338,7 +350,7 @@ export async function work(d: Deps, task: Issue, agent: AgentKey, report: TickRe
     }
     messages.push({ role: "user", content: "Your reply was not valid JSON in the required shape. Reply with JSON only." });
   }
-  await d.store.comment(task.id, `${RESULT_MARKER} (${profile.name}, blocked)\n\nStopped after ${d.cfg.maxStepsPerTask} steps without a final report. Raise ACP_MAX_STEPS or narrow the task.`);
+  await d.store.comment(task.id, signed(d, "result", task.id, `${RESULT_MARKER} (${profile.name}, blocked)\n\nStopped after ${d.cfg.maxStepsPerTask} steps without a final report. Raise ACP_MAX_STEPS or narrow the task.`));
   await d.store.setState(task.id, d.cfg.linearTeamKey, "canceled");
   report.worked.push(`${task.identifier} hit step limit`);
 }
@@ -352,11 +364,13 @@ const RESULT_LINE = new RegExp(`^${RESULT_MARKER} \\([^,()\\n]+, (done|blocked)\
  * by parsed creation time; a result without a readable time, or two different results at the same newest time,
  * makes the outcome unknowable and throws rather than picking one.
  */
-export function latestResult(comments: { body: string; createdAt?: string }[], where: string): string | undefined {
+export function latestResult(comments: { body: string; createdAt?: string }[], where: string, verify?: Verifier): string | undefined {
   let best: { at: number; body: string } | undefined;
   let conflict = false;
   for (const c of comments) {
     if (typeof c?.body !== "string" || !RESULT_LINE.test(c.body.split("\n", 1)[0]!)) continue;
+    // With signing on, a result header nobody can prove the engine wrote is not a result.
+    if (verify && !verify("result", c.body)) continue;
     const at = typeof c.createdAt === "string" ? Date.parse(c.createdAt) : NaN;
     if (Number.isNaN(at)) throw new Error(`${where} has a result without a readable time, so its latest result can't be chosen`);
     if (!best || at > best.at) {
@@ -381,7 +395,7 @@ function resultStatus(body: string): string | undefined {
 async function childResults(d: Deps, children: Issue[]): Promise<string[]> {
   const results: string[] = [];
   for (const c of children) {
-    const last = latestResult(await d.store.getComments(c.id), c.identifier);
+    const last = latestResult(await d.store.getComments(c.id), c.identifier, verifierFor(d.cfg.provenanceSecret, c.id));
     if (c.stateType === "completed" && (!last || resultStatus(last) !== "done")) {
       throw new Error(`${c.identifier} is marked Done but its newest result ${last ? "says blocked" : "is missing"}, so the command's outcome is unknown`);
     }
@@ -527,7 +541,7 @@ export async function tick(deps: Deps): Promise<TickReport> {
     if (!agent || busy.has(agent) || !d.clients[agent]) continue;
     let claim: "own" | "foreign" | "free";
     try {
-      claim = claimStatus(claimsOn(t.labels, await d.store.getComments(t.id)), agent);
+      claim = claimStatus(claimsOn(t.labels, await d.store.getComments(t.id), verifierFor(d.cfg.provenanceSecret, t.id)), agent);
     } catch (e) {
       report.errors.push(`${t.identifier}: ${(e as Error).message}`);
       continue;
