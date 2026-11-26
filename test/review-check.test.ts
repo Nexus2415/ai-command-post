@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { appLogins, independentReview, readPull, type PullFacts } from "../src/review-check.ts";
+import { appLogins, independentReview, readPull, withSlugs, type PullFacts } from "../src/review-check.ts";
 
 // Independent review from GitHub's own record of who posted (src/review-check.ts). Fake GitHub only.
 const logins = appLogins({
@@ -79,4 +79,13 @@ test("reading refuses a review list it can't prove complete, or a PR that moved 
     ? new Response(JSON.stringify({ user: { login: "x" }, head: { sha: reads++ ? OLD : HEAD } }))
     : new Response(JSON.stringify([review]))) as typeof fetch;
   await assert.rejects(readPull("acme/app", 7, "t", moving), /changed while it was being read/);
+});
+
+test("an AI's app login is looked up from its App ID and key when no slug is set", async () => {
+  const { generateKeyPairSync } = await import("node:crypto");
+  const pem = generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+  const f = (async () => new Response(JSON.stringify({ slug: "arnexyia-claude-bot" }))) as typeof fetch;
+  const found = await withSlugs({ ACP_GH_APP_CLAUDE_ID: "5929819", ACP_GH_APP_CLAUDE_KEY: pem, ACP_GH_APP_PERPLEXITY_SLUG: "arnexyia-perplexity-bot", ACP_GH_APP_CHATGPT_ID: "1" }, ["claude", "chatgpt", "perplexity"], f);
+  assert.deepEqual([...appLogins(found.env, ["claude", "chatgpt", "perplexity"])], [["arnexyia-claude-bot[bot]", "claude"], ["arnexyia-perplexity-bot[bot]", "perplexity"]]);
+  assert.match(found.notes[0]!, /only partly set up/, "a half-set AI is reported, not guessed");
 });

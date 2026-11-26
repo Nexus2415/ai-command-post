@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createVerify, generateKeyPairSync } from "node:crypto";
 import { loadConfig } from "../src/config.ts";
-import { appJwt, appSettingFor, createTokenSource, type GitHubApp } from "../src/identity.ts";
+import { appJwt, appSettingFor, appSlug, createTokenSource, type GitHubApp } from "../src/identity.ts";
 import { runTool, type ToolEnv } from "../src/tools.ts";
 
 // Each AI's own GitHub App (src/identity.ts). A throwaway key made in the test and a fake GitHub only.
@@ -86,4 +86,37 @@ test("GitHub tools use the AI's own token when it has one", async () => {
   await runTool({ tool: "github.search_issues", input: { repo: "acme/app", query: "x" } }, ["github.search_issues"], { ...base, githubAuth: async () => "ghs_own" });
   await runTool({ tool: "github.search_issues", input: { repo: "acme/app", query: "x" } }, ["github.search_issues"], base);
   assert.deepEqual(seen, ["Bearer ghs_own", "Bearer ghp_shared"]);
+});
+
+test("only the App ID and key are needed: the installation is looked up once, and a partial setup is still refused", async () => {
+  const apps = loadConfig({ ACP_GH_APP_CLAUDE_ID: "12345", ACP_GH_APP_CLAUDE_KEY: PEM }).githubApps;
+  assert.equal((apps.claude as GitHubApp).installationId, undefined);
+  const urls: string[] = [];
+  const f = (async (url: any) => {
+    urls.push(String(url));
+    if (String(url).includes("/app/installations?")) return new Response(JSON.stringify([{ id: 991 }]));
+    return new Response(JSON.stringify({ token: "ghs_found", expires_at: "2026-11-25T13:00:00Z" }));
+  }) as typeof fetch;
+  const tokens = createTokenSource({ apps, f, now: () => Date.parse("2026-11-25T12:00:00Z") });
+  assert.equal(await tokens.tokenFor("claude"), "ghs_found");
+  assert.equal(urls[1], "https://api.github.com/app/installations/991/access_tokens");
+  assert.match((appSettingFor({ ACP_GH_APP_CLAUDE_KEY: PEM }, "claude") as any).error, /ARNEXYIA_CLAUDE_BOT/);
+  // Not installed, or installed in more than one place: refuse rather than guess.
+  for (const [list, why] of [[[], /isn't installed/], [[{ id: 1 }, { id: 2 }], /installed in 2 places/]] as const) {
+    const g = (async () => new Response(JSON.stringify(list))) as typeof fetch;
+    await assert.rejects(createTokenSource({ apps, f: g, sharedToken: "ghp_shared" }).tokenFor("claude"), why);
+  }
+});
+
+test("the app's name is read from GitHub with its own key", async () => {
+  const app = appSettingFor({ ACP_GH_APP_CLAUDE_ID: "12345", ACP_GH_APP_CLAUDE_KEY: PEM }, "claude") as GitHubApp;
+  let auth = "";
+  const f = (async (url: any, init: any) => { auth = init.headers.authorization; assert.equal(String(url), "https://api.github.com/app"); return new Response(JSON.stringify({ slug: "arnexyia-claude-bot" })); }) as typeof fetch;
+  assert.equal(await appSlug(app, f), "arnexyia-claude-bot");
+  assert.match(auth, /^Bearer [\w-]+\.[\w-]+\.[\w-]+$/);
+  await assert.rejects(appSlug(app, (async () => new Response("{}", { status: 401 })) as typeof fetch), /wouldn't say/);
+});
+
+test("the provenance secret is also read under the spelling ACP_PROVENCE_SECRET", () => {
+  assert.ok(loadConfig({ ACP_PROVENCE_SECRET: "x".repeat(40) }).provenanceSecret);
 });

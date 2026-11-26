@@ -7,7 +7,7 @@
 // "arnexyia-perplexity[bot]". This module reads that record:
 //
 // A review counts as an independent review only when ALL of these hold:
-// - its author is one of the AIs' app logins (`<slug>[bot]`, from ACP_GH_APP_<AI>_SLUG): GitHub-verified identity;
+// - its author is one of the AIs' app logins (`<slug>[bot]`, the slug looked up from the app itself): GitHub-verified identity;
 // - that AI is not the PR's author (an app can't review its own work, and a PR opened from the owner's account
 //   counts as the owner's);
 // - it was made on the PR's CURRENT head commit (a review of older code doesn't cover new pushes);
@@ -16,6 +16,7 @@
 //
 // This is the "verified review receipt" the planner work (opsdesk ARN-142/143) said it needed.
 import type { AgentKey } from "./config.ts";
+import { appSettingFor, appSlug } from "./identity.ts";
 
 type Fetch = typeof fetch;
 export interface PullFacts {
@@ -70,6 +71,24 @@ export function independentReview(pr: PullFacts, logins: Map<string, AgentKey>):
   return { status: "missing", notes };
 }
 
+/**
+ * Fills in ACP_GH_APP_<AI>_SLUG for each AI that has an App ID and key but no slug, by asking GitHub the app's name
+ * with the app's own key. An AI whose lookup fails is left out (and said so), never guessed.
+ */
+export async function withSlugs(env: Record<string, string | undefined>, agents: readonly AgentKey[], f: Fetch = fetch): Promise<{ env: Record<string, string | undefined>; notes: string[] }> {
+  const out = { ...env };
+  const notes: string[] = [];
+  for (const a of agents) {
+    const key = `ACP_GH_APP_${a.toUpperCase()}_SLUG`;
+    if (out[key]?.trim()) continue;
+    const s = appSettingFor(env, a);
+    if (!s) continue;
+    if ("error" in s) { notes.push(s.error); continue; }
+    try { out[key] = await appSlug(s, f); } catch (e) { notes.push(`${a}: ${(e as Error).message}`); }
+  }
+  return { env: out, notes };
+}
+
 /** Reads a PR's author, head and reviews from GitHub (read-only; any token that can read the repo). */
 export async function readPull(repo: string, pr: number, token: string, f: Fetch = fetch): Promise<PullFacts> {
   if (!/^[\w.-]+\/[\w.-]+$/.test(repo) || !Number.isSafeInteger(pr) || pr < 1) throw new Error("Give the PR as owner/repo#number");
@@ -100,7 +119,8 @@ export async function readPull(repo: string, pr: number, token: string, f: Fetch
   };
 }
 
-// `node src/review-check.ts owner/repo#N` (GITHUB_TOKEN to read; ACP_GH_APP_<AI>_SLUG for the AI logins).
+// `node src/review-check.ts owner/repo#N` (GITHUB_TOKEN to read; the AI logins come from ACP_GH_APP_<AI>_SLUG, or are
+// looked up from each AI's App ID and key).
 // Prints the verdict. Exit code 1 only when ACP_REQUIRE_INDEPENDENT_REVIEW=true and there is no independent approval,
 // so the check is informational until the owner chooses to require it.
 if (import.meta.url === `file://${process.argv[1]}`) {
@@ -108,12 +128,15 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   if (!m) throw new Error("Usage: node src/review-check.ts owner/repo#number");
   const token = process.env["GITHUB_TOKEN"];
   if (!token) throw new Error("GITHUB_TOKEN is required to read the PR");
-  const logins = appLogins(process.env, ["claude", "chatgpt", "perplexity"]) // Gemini is suspended;
+  const ais: AgentKey[] = ["claude", "chatgpt", "perplexity"]; // Gemini is suspended
+  const found = await withSlugs(process.env, ais);
+  const logins = appLogins(found.env, ais);
   const v = independentReview(await readPull(m[1]!, Number(m[2]), token), logins);
+  v.notes.unshift(...found.notes);
   const line = v.status === "approved" ? `Independent review: approved by ${v.by}'s app.`
     : v.status === "changes_requested" ? `Independent review: ${v.by} requested changes.`
     : logins.size ? "Independent review: none yet from another AI's app on the current commit."
-    : "Independent review: no AI app identities are set up yet (ACP_GH_APP_<AI>_SLUG), so none can be verified.";
+    : "Independent review: no AI app identities are set up yet (variable and secret ARNEXYIA_<AI>_BOT), so none can be verified.";
   console.log([line, ...v.notes.map((n) => `- ${n}`)].join("\n"));
   if (process.env["GITHUB_STEP_SUMMARY"]) {
     const { appendFileSync } = await import("node:fs");
