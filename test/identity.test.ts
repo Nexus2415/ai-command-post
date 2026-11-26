@@ -146,3 +146,12 @@ test("a refused app key says what it looks like without showing it", () => {
   assert.match(e("-----BEGIN RSA PRIVATE KEY-----\nzzzz\n-----END RSA PRIVATE KEY-----"), /text between them is damaged/);
   assert.doesNotMatch(e("SHA256:abcdEFGH1234"), /abcdEFGH/);
 });
+
+test("a key pasted without its BEGIN and END lines is still accepted", () => {
+  const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048, privateKeyEncoding: { type: "pkcs1", format: "pem" }, publicKeyEncoding: { type: "spki", format: "pem" } });
+  const body = privateKey.split("\n").filter((l) => l && !l.startsWith("-----")).join("\n");
+  const s = appSettingFor(env({ ACP_GH_APP_CLAUDE_ID: "1", ACP_GH_APP_CLAUDE_KEY: body }), "claude") as any;
+  assert.equal(s.error, undefined);
+  assert.match(s.privateKey, /^-----BEGIN RSA PRIVATE KEY-----/);
+  assert.match((appSettingFor(env({ ACP_GH_APP_CLAUDE_ID: "1", ACP_GH_APP_CLAUDE_KEY: "QUJDRA==" }), "claude") as any).error, /not a readable private key/);
+});

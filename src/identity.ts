@@ -42,13 +42,23 @@ export function appSettingFor(env: Record<string, string | undefined>, agent: Ag
   if (!appId || !rawKey) return { error: `${agent}'s GitHub App is only partly set up: its App ID (variable ARNEXYIA_${agent.toUpperCase()}_BOT) and private key (secret ARNEXYIA_${agent.toUpperCase()}_BOT) are both needed` };
   if (!/^\d{1,12}$/.test(appId) || (installationId !== undefined && !/^\d{1,15}$/.test(installationId))) return { error: `${agent}'s GitHub App ID and installation id must be numbers` };
   if (slug !== undefined && !/^[a-z0-9][a-z0-9-]{0,38}$/.test(slug)) return { error: `${varName(agent, "SLUG")} must be the app's URL name` };
-  const privateKey = normalizePem(rawKey!);
-  try { createPrivateKey(privateKey); } catch {
+  const privateKey = readableKey(rawKey!);
+  if (!privateKey) {
     return { error: `${agent}'s GitHub App key (secret ARNEXYIA_${agent.toUpperCase()}_BOT, or ACP_GH_APP_${agent.toUpperCase()}_KEY if that secret exists, which wins) is not a readable private key (${keyShape(rawKey!)}): paste the whole downloaded .pem file, from -----BEGIN to the END----- line` };
   }
   return { appId, privateKey, ...(installationId ? { installationId } : {}), ...(slug ? { slug } : {}) };
 }
 
+/** The key as a PEM node can read, or undefined. A paste of only the lines between BEGIN and END (no header lines) is accepted too: GitHub App keys are RSA, so the header is added back. */
+export function readableKey(raw: string): string | undefined {
+  const tries = [normalizePem(raw)];
+  const body = raw.replace(/\\n/g, "\n").replace(/\s+/g, "");
+  if (!/-----/.test(raw) && /^[A-Za-z0-9+/]+={0,2}$/.test(body)) {
+    for (const label of ["RSA PRIVATE KEY", "PRIVATE KEY"]) tries.push(normalizePem(`-----BEGIN ${label}-----\n${body}\n-----END ${label}-----`));
+  }
+  for (const k of tries) { try { createPrivateKey(k); return k; } catch { /* next */ } }
+  return undefined;
+}
 /**
  * Rebuilds a pasted .pem so copy-paste damage doesn't matter: "\n" escapes, Windows line endings, or line breaks
  * turned into spaces. Only the BEGIN/END lines and the base64 between them are kept.
