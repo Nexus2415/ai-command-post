@@ -9,6 +9,7 @@ import type { Issue, TaskStore } from "./linear.ts";
 import type { ClaimStore } from "./claims.ts";
 import { ProviderError, type ChatMessage, type ModelClient } from "./providers.ts";
 import { runTool, TOOL_DOCS, type ToolCall, type ToolEnv } from "./tools.ts";
+import { haltReason, type StopCheck } from "./stop-switch.ts";
 
 const RETRY_MARKER = "ACP retry";
 const MAX_PROVIDER_RETRIES = 3;
@@ -37,6 +38,8 @@ export interface Deps {
   budget: Budget;
   toolEnv: (issue: Issue) => ToolEnv;
   log?: (line: string) => void;
+  /** The site's Stop everything switch (src/stop-switch.ts), read before every run, model call and tool call. */
+  halt?: StopCheck;
   /** Atomic claim store (src/claims.ts). Unset = Linear-comment claims only. */
   claims?: ClaimStore;
 }
@@ -227,6 +230,9 @@ const RULES = `Rules you must follow:
 - Cite sources (URLs, file paths, issue IDs) for every factual claim.`;
 
 async function callModel(d: Deps, agent: AgentKey, issue: Issue, messages: ChatMessage[], maxOut: number): Promise<string | { blocked: string }> {
+  // Stop everything is checked in code before every paid call, never left to the model.
+  const stop = await haltReason(d.halt);
+  if (stop) return { blocked: stop };
   const client = d.clients[agent];
   if (!client) return { blocked: `${AGENTS[agent].name} has no API key configured` };
   const est = estimateTokens(messages.map((m) => m.content).join("\n"));
@@ -380,6 +386,19 @@ export async function work(d: Deps, task: Issue, agent: AgentKey, report: TickRe
     }
     if (j && typeof j["tool"] === "string") {
       const call: ToolCall = { tool: j["tool"], input: (j["input"] as Record<string, unknown>) ?? {} };
+      // Stop everything is checked again at the tool boundary, so a switch pressed mid-task stops the next side effect.
+      const stop = await haltReason(d.halt);
+      if (stop) {
+        if (!toolCallAttempted) {
+          await d.store.setState(task.id, d.cfg.linearTeamKey, "unstarted");
+          report.waiting.push(`${task.identifier}: ${stop}`);
+          return;
+        }
+        await d.store.comment(task.id, signed(d, "result", task.id, `${RESULT_MARKER} (${profile.name}, blocked)\n\n${stop} Stopped before the next tool call; automatic replay is off to avoid duplicating side effects.`));
+        await d.store.setState(task.id, d.cfg.linearTeamKey, "canceled");
+        report.worked.push(`${task.identifier} stopped by Stop everything`);
+        return;
+      }
       toolCallAttempted = true;
       const res = await runTool(call, tools, env);
       messages.push({ role: "user", content: `Tool ${call.tool} ${res.ok ? "returned" : "failed"}:\n${res.output}` });
@@ -527,6 +546,14 @@ export async function tick(deps: Deps): Promise<TickReport> {
   if (!d.cfg.active) {
     report.waiting.push(`Engine is off (ACP_ACTIVE=false). ${newCommands.length} command(s) and ${tasks.length} task(s) waiting.`);
     // Non-mutating stopped-state record: the run halted before any step, and says so in the run log.
+    d.log?.(JSON.stringify({ at: new Date().toISOString(), ...report, budget: d.budget.summary() }));
+    return report;
+  }
+  // The owner's Stop everything switch wins over ACP_ACTIVE: a stopped (or unreadable) switch ends the run here,
+  // before any claim, plan, model call or Linear write.
+  const stop = await haltReason(d.halt);
+  if (stop) {
+    report.waiting.push(stop);
     d.log?.(JSON.stringify({ at: new Date().toISOString(), ...report, budget: d.budget.summary() }));
     return report;
   }

@@ -13,6 +13,7 @@ import { agentFor } from "./agents.ts";
 import { createTokenSource } from "./identity.ts";
 import { liveRefusal } from "./provenance.ts";
 import { buildClients } from "./providers.ts";
+import { stopSwitchFrom } from "./stop-switch.ts";
 import { claimStoreFrom } from "./claims.ts";
 
 async function main() {
@@ -21,6 +22,12 @@ async function main() {
   if (!cfg.keys.linear) throw new Error("LINEAR_API_KEY is required");
   const refused = cmd === "status" ? null : liveRefusal(cfg);
   if (refused) throw new Error(refused);
+  // The site's Stop everything switch. Live writes never run without it connected: an engine the owner can't stop
+  // from the site doesn't start.
+  const halt = stopSwitchFrom(process.env);
+  if (cmd !== "status" && cfg.active && !cfg.dryRun && !halt) {
+    throw new Error("Live writes refused: the Stop everything switch isn't connected. Set ACP_WORKSPACE_DB_URL and ACP_WORKSPACE_DB_KEY (the workspace project's service_role key) for the engine.");
+  }
 
   const real = new LinearStore(cfg.keys.linear);
   const store: TaskStore = cfg.dryRun ? new DryRunStore(real) : real;
@@ -43,6 +50,7 @@ async function main() {
     store,
     clients,
     budget,
+    ...(halt ? { halt } : {}),
     // In a dry run nothing is really claimed, so the shared claim store isn't touched either.
     ...(cfg.dryRun ? {} : { claims: claimStoreFrom(process.env) }),
     log: (l) => console.log(l),
@@ -66,6 +74,7 @@ async function main() {
     `AI Command Post — team ${cfg.linearTeamKey} · ${cfg.active ? "ACTIVE" : "off"} · ${cfg.dryRun ? "dry run" : "live writes"} · cap $${cfg.monthlyBudgetUsd}` +
       ` · GitHub as: ${Object.entries(cfg.githubApps).map(([k, v]) => `${k}=${v && "error" in v ? "MISCONFIGURED" : "own app"}`).join(", ") || "shared account"}` +
       ` · claims ${cfg.provenanceSecret ? "signed" : "UNSIGNED"}, ${claimStoreFrom(process.env) ? "atomic" : "Linear-only"}` +
+      ` · stop switch ${halt ? "connected" : "NOT connected"}` +
       ` · agents online: ${Object.keys(clients).map((k) => AGENTS[k as keyof typeof AGENTS].name).join(", ") || "none"}`,
   );
 
