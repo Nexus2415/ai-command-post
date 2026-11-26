@@ -7,7 +7,8 @@
 //   shared (isShared); an unreadable or odd flag means nothing is saved. AIs in a private thread aren't even asked.
 // - A fact an AI saved from a thread that is private now is left out of every AI's memory (fail closed).
 // - The stop switch and the rules gate apply: nothing is saved while stopped, and a refused fact is dropped.
-// - A reply that used a tool (web, connectors) or drew on other threads may carry outside text, so its facts are
+// - A reply that used a tool (web, connectors), drew on other threads, or saw an attached file, image or PDF may
+//   carry outside text (and instructions hidden in it), so its facts are
 //   saved as "pending": the owner sees them, and no AI reads them until the owner taps Keep.
 // - Bounded: at most MAX_FACTS_PER_REPLY facts of MAX_FACT_CHARS each, and the project's MAX_NOTES in all. When
 //   memory is full nothing is overwritten; the reply says so and the owner chooses what to delete.

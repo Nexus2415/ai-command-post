@@ -48,6 +48,9 @@ const monthStart = (now) => new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMo
 const usd = (n) => "$" + n.toFixed(2);
 // Text files attached to a message are folded into it, marked by name, so the 32,000-character limit covers them.
 const MAX_FILES = 3;
+// An attached text file inside a message, as userMessage writes it. Its text is outside data, like a web page.
+const FILE_BLOCKS = /<<<file: [^\n]*>>>[\s\S]*?<<<end of file>>>/g;
+const FILE_BLOCK = /<<<file: [^\n]*>>>/;
 const NOT_A_MESSAGE = "A message of 1 to 32,000 characters is required.";
 // `markers` names the images and PDFs sent with the message (workspace-files.js markersFor).
 function userMessage(args, markers = "") {
@@ -597,7 +600,8 @@ const ACTIONS = Object.freeze({
     const gate = proposer(store, thread, model, deps);
     // Web access for this reply: pages the owner linked may be read; search results add more. Each web call is
     // checked against the caps first (web calls are always paid) and listed under the reply.
-    const allowedUrls = new Set(urlsIn(asked));
+    // Only links the owner typed: a link inside an attached file is the file's text, not the owner's choice.
+    const allowedUrls = new Set(urlsIn(asked.replace(FILE_BLOCKS, "")));
     const overWeb = await budgetCheck(store, env, deps, thread.id, true);
     const webLog = [];
     const webCtx = (soFar) => ({
@@ -631,10 +635,11 @@ const ACTIONS = Object.freeze({
       return { status: 502, body: { error: `${e.message} Your message was saved; try again for a reply.`, saved } };
     }
     // Facts the AI asked to remember are taken out of the reply and saved to project memory, live when the reply
-    // used nothing from outside (no tools, no other threads), otherwise waiting for the owner's review.
+    // used nothing from outside (no tools, no other threads, no uploaded image or PDF, whose text could carry
+    // instructions), otherwise waiting for the owner's review.
     const { text: answer, facts, changes } = extractFacts(out.text);
     const memoryLine = harmCheck(answer) ? "" : await saveFacts(store, thread.id, model, facts, {
-      stopReason: () => stopReason(store), harmCheck, trusted: !out.toolsUsed?.length && !shared.sources.length,
+      stopReason: () => stopReason(store), harmCheck, trusted: !out.toolsUsed?.length && !shared.sources.length && !sent.some((m) => m.files?.length || FILE_BLOCK.test(m.content)),
     }) + await saveChanges(store, thread.id, model, changes, { stopReason: () => stopReason(store), harmCheck });
     const message = await gatedReply(store, thread.id, model, answer || "(The AI sent an empty reply.)", out, "",
       memoryLine + sourcesLine(shared.sources) + webAuditText(webLog) + proposalsText(gate.made) + routeLine);
