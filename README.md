@@ -56,6 +56,8 @@ With `ACP_ACTIVE=true` and `ACP_DRY_RUN=false`, every cycle writes the engine's 
 
 Current state, what is switched off and why, and the owner-only steps left: `HANDOFF.md` ("Where it stands") and `docs/OWNER-CHECKLIST.md`.
 
+Rules every AI follows, and the legal and ethics check behind them: `docs/CODE-OF-CONDUCT.md` and `docs/GOVERNANCE.md`.
+
 ## Layout
 
 ```
