@@ -91,7 +91,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     allowPullRequests: bool(env["ACP_ALLOW_PULL_REQUESTS"], false),
     ledgerPath: env["ACP_LEDGER_PATH"] ?? ".acp/ledger.json",
     ledgerResetMonth: opt("ACP_LEDGER_RESET"),
-    provenanceSecret: provenanceSecret(env["ACP_PROVENANCE_SECRET"]),
+    provenanceSecret: provenanceSecret(env["ACP_PROVENANCE_SECRET"] || env["ACP_PROVENCE_SECRET"]),
     keys: {
       linear: opt("LINEAR_API_KEY"),
       github: opt("GITHUB_TOKEN"),
