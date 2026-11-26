@@ -52,7 +52,31 @@ test("the PR's facts are read from GitHub with every page of reviews", async () 
   }) as typeof fetch;
   const facts = await readPull("acme/app", 7, "t", f);
   assert.equal(facts.reviews.length, 101);
-  assert.equal(urls.length, 3);
+  assert.equal(urls.length, 4, "the PR is re-read after the reviews");
   assert.equal(independentReview(facts, logins).status, "approved");
   await assert.rejects(readPull("not a repo", 7, "t", f), /owner\/repo#number/);
+});
+
+test("two AIs given the same app are both dropped, never last-one-wins", () => {
+  const m = appLogins({ ACP_GH_APP_CLAUDE_SLUG: "shared-app", ACP_GH_APP_CHATGPT_SLUG: "Shared-App", ACP_GH_APP_PERPLEXITY_SLUG: "arnexyia-perplexity" }, ["claude", "chatgpt", "perplexity"]);
+  assert.deepEqual([...m], [["arnexyia-perplexity[bot]", "perplexity"]]);
+});
+
+test("a PR from the owner's account says its origin is unknown", () => {
+  const v = independentReview(pr([r("arnexyia-perplexity[bot]", "APPROVED")], "Nexus2415"), logins);
+  assert.equal(v.status, "approved");
+  assert.match(v.notes[0]!, /which AI wrote it is unknown/);
+});
+
+test("reading refuses a review list it can't prove complete, or a PR that moved mid-read", async () => {
+  const review = { user: { login: "arnexyia-perplexity[bot]" }, state: "APPROVED", commit_id: HEAD, submitted_at: "2026-11-25T12:00:00Z" };
+  const endless = (async (url: any) => String(url).endsWith("/pulls/7")
+    ? new Response(JSON.stringify({ user: { login: "x" }, head: { sha: HEAD } }))
+    : new Response(JSON.stringify(Array.from({ length: 100 }, () => review)))) as typeof fetch;
+  await assert.rejects(readPull("acme/app", 7, "t", endless), /More than 1,000 reviews/);
+  let reads = 0;
+  const moving = (async (url: any) => String(url).endsWith("/pulls/7")
+    ? new Response(JSON.stringify({ user: { login: "x" }, head: { sha: reads++ ? OLD : HEAD } }))
+    : new Response(JSON.stringify([review]))) as typeof fetch;
+  await assert.rejects(readPull("acme/app", 7, "t", moving), /changed while it was being read/);
 });

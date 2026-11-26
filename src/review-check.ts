@@ -34,16 +34,23 @@ export interface ReviewVerdict {
 /** AI app logins from settings: { "arnexyia-claude[bot]": "claude", ... }. */
 export function appLogins(env: Record<string, string | undefined>, agents: readonly AgentKey[]): Map<string, AgentKey> {
   const out = new Map<string, AgentKey>();
+  const shared = new Set<string>();
   for (const a of agents) {
-    const slug = env[`ACP_GH_APP_${a.toUpperCase()}_SLUG`]?.trim();
-    if (slug && /^[a-z0-9][a-z0-9-]{0,38}$/.test(slug)) out.set(`${slug}[bot]`.toLowerCase(), a);
+    const slug = env[`ACP_GH_APP_${a.toUpperCase()}_SLUG`]?.trim().toLowerCase();
+    if (!slug || !/^[a-z0-9][a-z0-9-]{0,38}$/.test(slug)) continue;
+    const login = `${slug}[bot]`;
+    // Two AIs given the same app can't be told apart, so neither counts (no silent "last one wins").
+    if (out.has(login)) shared.add(login);
+    else out.set(login, a);
   }
+  for (const login of shared) out.delete(login);
   return out;
 }
 
 export function independentReview(pr: PullFacts, logins: Map<string, AgentKey>): ReviewVerdict {
   const notes: string[] = [];
   const author = logins.get(pr.author.toLowerCase());
+  if (!author) notes.push(`PR opened by ${pr.author}, not an AI app, so which AI wrote it is unknown and any AI app's review counts`);
   const latest = new Map<AgentKey, { state: string; at: number }>();
   for (const r of pr.reviews) {
     const ai = logins.get(r.login.toLowerCase());
@@ -77,11 +84,15 @@ export async function readPull(repo: string, pr: number, token: string, f: Fetch
   };
   const p = await get(`/pulls/${pr}`);
   const reviews: any[] = [];
-  for (let page = 1; page <= 10; page++) {
+  for (let page = 1; ; page++) {
+    if (page > 10) throw new Error("More than 1,000 reviews on this PR; can't confirm the list is complete");
     const batch = await get(`/pulls/${pr}/reviews?per_page=100&page=${page}`);
     reviews.push(...batch);
     if (batch.length < 100) break;
   }
+  // A push while reading would pair old reviews with a new head; re-read and refuse rather than guess.
+  const again = await get(`/pulls/${pr}`);
+  if (String(again.head?.sha ?? "") !== String(p.head?.sha ?? "")) throw new Error("The PR changed while it was being read; run the check again");
   return {
     author: String(p.user?.login ?? ""),
     headSha: String(p.head?.sha ?? ""),
@@ -97,7 +108,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   if (!m) throw new Error("Usage: node src/review-check.ts owner/repo#number");
   const token = process.env["GITHUB_TOKEN"];
   if (!token) throw new Error("GITHUB_TOKEN is required to read the PR");
-  const logins = appLogins(process.env, ["claude", "chatgpt", "perplexity", "gemini"]);
+  const logins = appLogins(process.env, ["claude", "chatgpt", "perplexity"]) // Gemini is suspended;
   const v = independentReview(await readPull(m[1]!, Number(m[2]), token), logins);
   const line = v.status === "approved" ? `Independent review: approved by ${v.by}'s app.`
     : v.status === "changes_requested" ? `Independent review: ${v.by} requested changes.`
