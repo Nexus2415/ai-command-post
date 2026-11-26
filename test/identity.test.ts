@@ -120,3 +120,15 @@ test("the app's name is read from GitHub with its own key", async () => {
 test("the provenance secret is also read under the spelling ACP_PROVENCE_SECRET", () => {
   assert.ok(loadConfig({ ACP_PROVENCE_SECRET: "x".repeat(40) }).provenanceSecret);
 });
+
+test("a pasted key survives copy-paste damage, and an unreadable one says what to paste", () => {
+  const flat = PEM.trim().replace(/\n/g, " "); // line breaks turned into spaces
+  const crlf = PEM.replace(/\n/g, "\r\n");
+  for (const k of [flat, crlf, `  ${PEM}  `]) {
+    const s = appSettingFor({ ACP_GH_APP_CLAUDE_ID: "1", ACP_GH_APP_CLAUDE_KEY: k }, "claude") as GitHubApp;
+    assert.ok(!("error" in s), "readable");
+  }
+  const bad = appSettingFor({ ACP_GH_APP_CLAUDE_ID: "1", ACP_GH_APP_CLAUDE_KEY: "SHA256:abc123" }, "claude") as any;
+  assert.match(bad.error, /secret ARNEXYIA_CLAUDE_BOT.*whole downloaded \.pem/);
+  assert.ok(!bad.error.includes("abc123"), "the reason never repeats the value");
+});

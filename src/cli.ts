@@ -77,6 +77,8 @@ async function main() {
       ` · stop switch ${halt ? "connected" : "NOT connected"}` +
       ` · agents online: ${Object.keys(clients).map((k) => AGENTS[k as keyof typeof AGENTS].name).join(", ") || "none"}`,
   );
+  // Say why an app is refused (the reason names settings, never their values), so the owner can fix the right one.
+  for (const [k, v] of Object.entries(cfg.githubApps)) if (v && "error" in v) console.log(`GitHub app ${k}: ${v.error}`);
 
   const once = async () => {
     const r = await tick(deps);
