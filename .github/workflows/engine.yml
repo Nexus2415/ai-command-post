@@ -52,7 +52,7 @@ jobs:
           ACP_GH_APP_PERPLEXITY_INSTALLATION: ${{ vars.ACP_GH_APP_PERPLEXITY_INSTALLATION }}
           ACP_GH_APP_PERPLEXITY_SLUG: ${{ vars.ACP_GH_APP_PERPLEXITY_SLUG }}
           ACP_GH_APP_PERPLEXITY_KEY: ${{ secrets.ACP_GH_APP_PERPLEXITY_KEY || secrets.ARNEXYIA_PERPLEXITY_BOT }}
-          ACP_PROVENANCE_SECRET: ${{ secrets.ACP_PROVENANCE_SECRET || secrets.ACP_PROVENCE_SECRET }}
+          ACP_PROVENANCE_SECRET: ${{ secrets.ACP_PROVENANCE_SECRET }}
           # Atomic claim store (src/claims.ts): the workspace Supabase project and its service_role key. Unset = Linear-only claims.
           ACP_WORKSPACE_DB_URL: ${{ vars.ACP_WORKSPACE_DB_URL || secrets.ACP_WORKSPACE_DB_URL }}
           ACP_WORKSPACE_DB_KEY: ${{ secrets.ACP_WORKSPACE_DB_KEY }}
@@ -62,6 +62,10 @@ jobs:
           VERCEL_API_KEY: ${{ secrets.VERCEL_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # The owner's secret is saved as ANTHROPIC_API_KE (no final Y); accepted as a fallback so it needn't be re-pasted.
+          ANTHROPIC_API_KE: ${{ secrets.ANTHROPIC_API_KE }}
+          # Likewise his signing secret is ACP_PROVENCE_SECRET; passed under its own name so the log can say which was used.
+          ACP_PROVENCE_SECRET: ${{ secrets.ACP_PROVENCE_SECRET }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}
       - name: Save spend ledger
