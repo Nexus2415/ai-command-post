@@ -24,8 +24,13 @@
 - If a run reports that a command's summary "is already posted, but a comment can't prove the engine wrote it", the engine closes it only when that run wrote the summary itself (an earlier close failed, or someone else posted a matching one). Read the summary; if it's genuine, move the command to Done yourself. It isn't paid for again either way.
 
 ## How to pause
+Fastest, no approval needed: press **Stop everything** on the site. The engine reads that same switch
+(`ws_control`, src/stop-switch.ts) at the start of every run, before every model call and before every tool call,
+so the next step stops within seconds. An unreadable switch counts as stopped. Live writes refuse to start unless
+`ACP_WORKSPACE_DB_URL` and `ACP_WORKSPACE_DB_KEY` (service_role) are set for the engine, so the switch is always connected.
+
 Changing any of these variables needs the owner's specific written approval in Linear.
-1. Fastest: set repo variable `ACP_ACTIVE` to `false`. Next run does nothing.
+1. Variable: set repo variable `ACP_ACTIVE` to `false`. Next run does nothing.
 2. Read-only mode: set `ACP_DRY_RUN` to `true`.
 3. Hard stop: Actions → Engine → ⋯ → Disable workflow.
 Resume by reversing the change.
