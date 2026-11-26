@@ -1,4 +1,5 @@
 // Runtime configuration. Every value comes from the environment; nothing secret lives in the repo.
+import { appSettingFor, type AppSetting } from "./identity.ts";
 import { provenanceSecret } from "./provenance.ts";
 
 export type AgentKey = "claude" | "chatgpt" | "gemini" | "perplexity";
@@ -36,6 +37,8 @@ export interface Config {
     perplexity?: string;
   };
   models: Record<AgentKey, string>;
+  /** Each AI's own GitHub App (src/identity.ts). Missing = that AI uses the shared GITHUB_TOKEN. */
+  githubApps: Partial<Record<AgentKey, AppSetting>>;
   /** Repos agents may touch, as owner/name. Empty = GitHub tools disabled. */
   githubRepos: string[];
 }
@@ -106,6 +109,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
       gemini: env["ACP_MODEL_GEMINI"] ?? "gemini-2.5-flash",
       perplexity: env["ACP_MODEL_PERPLEXITY"] ?? "sonar",
     },
+    githubApps: Object.fromEntries(AGENT_KEYS.map((k) => [k, appSettingFor(env, k)]).filter(([, v]) => v !== undefined)),
     githubRepos: (env["ACP_GITHUB_REPOS"] ?? "")
       .split(",")
       .map((s) => s.trim())

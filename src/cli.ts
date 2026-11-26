@@ -9,6 +9,8 @@ import { Budget } from "./budget.ts";
 import { loadConfig } from "./config.ts";
 import { DryRunStore, LinearStore, type TaskStore } from "./linear.ts";
 import { tick, type Deps } from "./orchestrator.ts";
+import { agentFor } from "./agents.ts";
+import { createTokenSource } from "./identity.ts";
 import { liveRefusal } from "./provenance.ts";
 import { buildClients } from "./providers.ts";
 
@@ -33,6 +35,8 @@ async function main() {
   }
   const budget = new Budget({ capUsd: cfg.monthlyBudgetUsd, path: cfg.ledgerPath, resetMonth: cfg.ledgerResetMonth, remote });
 
+  // Each AI acts on GitHub as its own app when one is set up, otherwise through the shared token.
+  const tokens = createTokenSource({ apps: cfg.githubApps, sharedToken: cfg.keys.github });
   const deps: Deps = {
     cfg: cmd === "status" ? { ...cfg, active: false } : cfg,
     store,
@@ -41,6 +45,10 @@ async function main() {
     log: (l) => console.log(l),
     toolEnv: (issue) => ({
       githubToken: cfg.keys.github,
+      ...((): { githubAuth?: () => Promise<string | undefined> } => {
+        const agent = agentFor({ title: issue.title, labels: issue.labels, assignee: issue.assignee });
+        return agent ? { githubAuth: () => tokens.tokenFor(agent) } : {};
+      })(),
       firecrawlKey: cfg.keys.firecrawl,
       vercelToken: cfg.keys.vercel,
       dryRun: cfg.dryRun,
@@ -53,6 +61,7 @@ async function main() {
 
   console.log(
     `AI Command Post — team ${cfg.linearTeamKey} · ${cfg.active ? "ACTIVE" : "off"} · ${cfg.dryRun ? "dry run" : "live writes"} · cap $${cfg.monthlyBudgetUsd}` +
+      ` · GitHub as: ${Object.entries(cfg.githubApps).map(([k, v]) => `${k}=${v && "error" in v ? "MISCONFIGURED" : "own app"}`).join(", ") || "shared account"}` +
       ` · claims ${cfg.provenanceSecret ? "signed" : "UNSIGNED"}` +
       ` · agents online: ${Object.keys(clients).map((k) => AGENTS[k as keyof typeof AGENTS].name).join(", ") || "none"}`,
   );
