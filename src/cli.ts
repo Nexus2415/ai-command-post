@@ -14,6 +14,7 @@ import { createTokenSource } from "./identity.ts";
 import { liveRefusal } from "./provenance.ts";
 import { buildClients } from "./providers.ts";
 import { stopSwitchFrom } from "./stop-switch.ts";
+import { claimStoreFrom } from "./claims.ts";
 
 async function main() {
   const cmd = process.argv[2] ?? "status";
@@ -50,6 +51,8 @@ async function main() {
     clients,
     budget,
     ...(halt ? { halt } : {}),
+    // In a dry run nothing is really claimed, so the shared claim store isn't touched either.
+    ...(cfg.dryRun ? {} : { claims: claimStoreFrom(process.env) }),
     log: (l) => console.log(l),
     toolEnv: (issue) => ({
       githubToken: cfg.keys.github,
@@ -70,7 +73,7 @@ async function main() {
   console.log(
     `AI Command Post — team ${cfg.linearTeamKey} · ${cfg.active ? "ACTIVE" : "off"} · ${cfg.dryRun ? "dry run" : "live writes"} · cap $${cfg.monthlyBudgetUsd}` +
       ` · GitHub as: ${Object.entries(cfg.githubApps).map(([k, v]) => `${k}=${v && "error" in v ? "MISCONFIGURED" : "own app"}`).join(", ") || "shared account"}` +
-      ` · claims ${cfg.provenanceSecret ? "signed" : "UNSIGNED"}` +
+      ` · claims ${cfg.provenanceSecret ? "signed" : "UNSIGNED"}, ${claimStoreFrom(process.env) ? "atomic" : "Linear-only"}` +
       ` · stop switch ${halt ? "connected" : "NOT connected"}` +
       ` · agents online: ${Object.keys(clients).map((k) => AGENTS[k as keyof typeof AGENTS].name).join(", ") || "none"}`,
   );
