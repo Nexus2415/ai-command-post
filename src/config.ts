@@ -98,7 +98,8 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
       firecrawl: opt("FIRECRAWL_API_KEY"),
       vercel: opt("VERCEL_API_KEY"),
       openai: opt("OPENAI_API_KEY"),
-      anthropic: opt("ANTHROPIC_API_KEY"),
+      // ANTHROPIC_API_KE: the owner's secret name (missing the final Y), accepted so he needn't re-paste the key.
+      anthropic: opt("ANTHROPIC_API_KEY") ?? opt("ANTHROPIC_API_KE"),
       gemini: opt("GEMINI_API_KEY"),
       perplexity: opt("PERPLEXITY_API_KEY"),
     },

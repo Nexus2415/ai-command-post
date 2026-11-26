@@ -132,3 +132,8 @@ test("a pasted key survives copy-paste damage, and an unreadable one says what t
   assert.match(bad.error, /secret ARNEXYIA_CLAUDE_BOT.*whole downloaded \.pem/);
   assert.ok(!bad.error.includes("abc123"), "the reason never repeats the value");
 });
+
+test("the Claude key is also read under the owner's secret name ANTHROPIC_API_KE", () => {
+  assert.equal(loadConfig({ ANTHROPIC_API_KE: "sk-ant-x" }).keys.anthropic, "sk-ant-x");
+  assert.equal(loadConfig({ ANTHROPIC_API_KEY: "a", ANTHROPIC_API_KE: "b" }).keys.anthropic, "a", "the standard name wins");
+});
