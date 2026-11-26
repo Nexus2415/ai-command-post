@@ -9,12 +9,15 @@ import { Budget } from "./budget.ts";
 import { loadConfig } from "./config.ts";
 import { DryRunStore, LinearStore, type TaskStore } from "./linear.ts";
 import { tick, type Deps } from "./orchestrator.ts";
+import { liveRefusal } from "./provenance.ts";
 import { buildClients } from "./providers.ts";
 
 async function main() {
   const cmd = process.argv[2] ?? "status";
   const cfg = loadConfig();
   if (!cfg.keys.linear) throw new Error("LINEAR_API_KEY is required");
+  const refused = cmd === "status" ? null : liveRefusal(cfg);
+  if (refused) throw new Error(refused);
 
   const real = new LinearStore(cfg.keys.linear);
   const store: TaskStore = cfg.dryRun ? new DryRunStore(real) : real;
@@ -50,6 +53,7 @@ async function main() {
 
   console.log(
     `AI Command Post — team ${cfg.linearTeamKey} · ${cfg.active ? "ACTIVE" : "off"} · ${cfg.dryRun ? "dry run" : "live writes"} · cap $${cfg.monthlyBudgetUsd}` +
+      ` · claims ${cfg.provenanceSecret ? "signed" : "UNSIGNED"}` +
       ` · agents online: ${Object.keys(clients).map((k) => AGENTS[k as keyof typeof AGENTS].name).join(", ") || "none"}`,
   );
 
