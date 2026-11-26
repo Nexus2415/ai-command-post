@@ -35,6 +35,7 @@ test("the first engine to claim wins; later ones get the winner back", async () 
   const s = supabaseClaims("https://x.supabase.co/", "service", db.f, "run-a");
   assert.deepEqual(await s.acquire("iss-1", "acp:claude"), { won: true, holder: "acp:claude" });
   assert.deepEqual(await s.acquire("iss-1", "acp:claude"), { won: true, holder: "acp:claude" }, "the same run asking again still holds it");
+  assert.deepEqual(await s.acquire("iss-1", "acp:chatgpt"), { won: false, holder: "acp:claude" }, "same run, different AI: not theirs");
   const other = supabaseClaims("https://x.supabase.co/", "service", db.f, "run-b");
   assert.deepEqual(await other.acquire("iss-1", "acp:chatgpt"), { won: false, holder: "acp:claude" });
   assert.deepEqual(await other.acquire("iss-1", "acp:claude"), { won: false, holder: "another acp:claude run" }, "a second engine run as the same AI stands down too");

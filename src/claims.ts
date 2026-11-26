@@ -64,7 +64,8 @@ export function supabaseClaims(url: string, key: string, f: Fetch = fetch, runId
 }
 
 function holderOf(heldBy: string, heldRun: unknown, executor: string, runId: string) {
-  if (heldRun === runId) return { won: true, holder: executor };
+  // Both must match: inside one run, a task Claude holds is still not ChatGPT's.
+  if (heldRun === runId && heldBy === executor) return { won: true, holder: executor };
   return { won: false, holder: heldBy === executor ? `another ${heldBy} run` : heldBy };
 }
 
