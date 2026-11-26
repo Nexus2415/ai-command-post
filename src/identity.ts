@@ -44,7 +44,7 @@ export function appSettingFor(env: Record<string, string | undefined>, agent: Ag
   if (slug !== undefined && !/^[a-z0-9][a-z0-9-]{0,38}$/.test(slug)) return { error: `${varName(agent, "SLUG")} must be the app's URL name` };
   const privateKey = normalizePem(rawKey!);
   try { createPrivateKey(privateKey); } catch {
-    return { error: `${agent}'s GitHub App key (secret ARNEXYIA_${agent.toUpperCase()}_BOT) is not a readable private key: paste the whole downloaded .pem file, from -----BEGIN to the END----- line` };
+    return { error: `${agent}'s GitHub App key (secret ARNEXYIA_${agent.toUpperCase()}_BOT, or ACP_GH_APP_${agent.toUpperCase()}_KEY if that secret exists, which wins) is not a readable private key (${keyShape(rawKey!)}): paste the whole downloaded .pem file, from -----BEGIN to the END----- line` };
   }
   return { appId, privateKey, ...(installationId ? { installationId } : {}), ...(slug ? { slug } : {}) };
 }
@@ -53,6 +53,14 @@ export function appSettingFor(env: Record<string, string | undefined>, agent: Ag
  * Rebuilds a pasted .pem so copy-paste damage doesn't matter: "\n" escapes, Windows line endings, or line breaks
  * turned into spaces. Only the BEGIN/END lines and the base64 between them are kept.
  */
+/** Says what a refused key looks like, without revealing any of it: only its length and which markers it has. */
+export function keyShape(raw: string): string {
+  const t = raw.trim();
+  if (/^SHA256:/i.test(t)) return "it is the key's SHA256 fingerprint, not the key";
+  const begin = /-----BEGIN [A-Z ]+-----/.test(t), end = /-----END [A-Z ]+-----/.test(t);
+  const what = !begin ? "no -----BEGIN line" : !end ? "a -----BEGIN line but no -----END line, so it was cut off" : "both the BEGIN and END lines, but the text between them is damaged";
+  return `${t.length} characters, ${what}; a real key is about 1,600 to 1,700 characters`;
+}
 export function normalizePem(raw: string): string {
   const text = raw.replace(/\\n/g, "\n").trim();
   const m = /-----BEGIN ([A-Z ]+)-----([\s\S]*?)-----END \1-----/.exec(text);

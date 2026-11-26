@@ -137,3 +137,12 @@ test("the Claude key is also read under the owner's secret name ANTHROPIC_API_KE
   assert.equal(loadConfig({ ANTHROPIC_API_KE: "sk-ant-x" }).keys.anthropic, "sk-ant-x");
   assert.equal(loadConfig({ ANTHROPIC_API_KEY: "a", ANTHROPIC_API_KE: "b" }).keys.anthropic, "a", "the standard name wins");
 });
+
+test("a refused app key says what it looks like without showing it", () => {
+  const e = (k: string) => (appSettingFor(env({ ACP_GH_APP_CLAUDE_ID: "1", ACP_GH_APP_CLAUDE_KEY: k }), "claude") as any).error as string;
+  assert.match(e("SHA256:abcdEFGH1234"), /SHA256 fingerprint/);
+  assert.match(e("abcdef"), /6 characters, no -----BEGIN line/);
+  assert.match(e("-----BEGIN RSA PRIVATE KEY-----\nMIIE"), /no -----END line/);
+  assert.match(e("-----BEGIN RSA PRIVATE KEY-----\nzzzz\n-----END RSA PRIVATE KEY-----"), /text between them is damaged/);
+  assert.doesNotMatch(e("SHA256:abcdEFGH1234"), /abcdEFGH/);
+});
