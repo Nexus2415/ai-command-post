@@ -53,6 +53,9 @@ jobs:
           ACP_GH_APP_PERPLEXITY_SLUG: ${{ vars.ACP_GH_APP_PERPLEXITY_SLUG }}
           ACP_GH_APP_PERPLEXITY_KEY: ${{ secrets.ACP_GH_APP_PERPLEXITY_KEY || secrets.ARNEXYIA_PERPLEXITY_BOT }}
           ACP_PROVENANCE_SECRET: ${{ secrets.ACP_PROVENANCE_SECRET || secrets.ACP_PROVENCE_SECRET }}
+          # Atomic claim store (src/claims.ts): the workspace Supabase project and its service_role key. Unset = Linear-only claims.
+          ACP_WORKSPACE_DB_URL: ${{ vars.ACP_WORKSPACE_DB_URL || secrets.ACP_WORKSPACE_DB_URL }}
+          ACP_WORKSPACE_DB_KEY: ${{ secrets.ACP_WORKSPACE_DB_KEY }}
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.ACP_GITHUB_TOKEN }}
           FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}

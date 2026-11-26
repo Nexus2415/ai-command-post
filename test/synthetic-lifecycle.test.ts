@@ -13,6 +13,7 @@ import { Budget, DEFAULT_RATES, type Rate } from "../src/budget.ts";
 import { loadConfig, type AgentKey } from "../src/config.ts";
 import type { Issue, StateType, TaskStore } from "../src/linear.ts";
 import { COMMAND_MARKER, EXECUTOR_MARKER, RECONCILED_MARKER, RESULT_MARKER, claimStatus, claimsOn, tick, type Deps, type TickReport } from "../src/orchestrator.ts";
+import { memoryClaims, type ClaimStore } from "../src/claims.ts";
 import { decide } from "../src/policy.ts";
 import type { ChatMessage, ModelClient } from "../src/providers.ts";
 
@@ -130,6 +131,10 @@ interface World {
   cmd: Issue;
   env: Record<string, string>;
   deps: () => Deps;
+  /** One claim table shared by every engine built from this world, as one database is shared by every engine run. */
+  claimRows?: Map<string, { executor: string; run: string; at: number }>;
+  /** Overrides the claim store for every engine (e.g. one that's down). */
+  claims?: ClaimStore;
   fetchCalls: number;
   run: () => Promise<TickReport>;
 }
@@ -149,6 +154,7 @@ function world(scripts: Partial<Record<AgentKey, (string | Error)[]>> = {}, opts
     store, calls, budget, cmd, env, fetchCalls: 0,
     deps: () => ({
       cfg: loadConfig(w.env), store, clients, budget,
+      ...(w.claims ? { claims: w.claims } : w.claimRows ? { claims: memoryClaims(w.claimRows) } : {}),
       // The only source of "terminated" trace entries: what the production tick() itself emits to its run log.
       log: (line) => {
         const j = JSON.parse(line) as { active: boolean; waiting: string[] };
@@ -262,12 +268,12 @@ test("SYNTHETIC lifecycle: a second claimant is refused; the earliest claim wins
   });
 });
 
-// ARN-52 states this limit and nothing here closes it: a Linear comment is not an atomic lock. Left as `todo` so it
-// shows in the report as unproven instead of being silently skipped or claimed safe. Needs a DB-level claim store.
-test("UNPROVEN cross-engine atomicity: two engines racing on one task execute it once", { todo: "BLOCKED: Linear comments are not an atomic claim; needs a DB-level claim store (ARN-62/65 follow-up)" }, async () => {
+// ARN-52/62: a Linear comment is not an atomic lock, so the race below is closed by the claim store (src/claims.ts),
+// not by Linear. Two engines read every task's claims before either writes; the database lets exactly one claim each.
+test("SYNTHETIC cross-engine atomicity: with the claim store, two engines racing on one task execute it once", async () => {
   const w = world({ claude: [PLAN, DONE, "x"], chatgpt: [DONE] });
+  w.claimRows = new Map();
   await w.run(); // plan
-  // Two engines read the claims of every task before either writes.
   const store = w.store;
   let reads = 0;
   let release!: () => void;
@@ -280,8 +286,19 @@ test("UNPROVEN cross-engine atomicity: two engines racing on one task execute it
     return snapshot;
   };
   const before = w.calls.length;
-  await Promise.all([tick(w.deps()), tick(w.deps())]);
+  const [a, b] = await Promise.all([tick(w.deps()), tick(w.deps())]);
   assert.equal(w.calls.length - before, 2, "analysis and challenge each executed exactly once across both engines");
+  assert.ok([...a.waiting, ...b.waiting].some((x) => /holds it in the claim store; ACP backed off/.test(x)), "the losing engine says why it stood down");
+  assert.ok(perIssueClaims(w.store).every((v) => v.length === 1), "one Linear claim per task too");
+});
+
+test("SYNTHETIC claim store unavailable: ACP doesn't claim or work, and says it will try again", async () => {
+  const w = world();
+  w.claims = { acquire: async () => { throw new Error("claim store 503"); } };
+  const r = await w.run();
+  assert.equal(w.calls.length, 0, "no planning without a confirmed claim");
+  assert.ok(r.waiting.some((x) => /claim store unavailable \(claim store 503\); ACP will try again next run/.test(x)));
+  assert.equal(perIssueClaims(w.store).length, 0);
 });
 
 test("SYNTHETIC halt: ACP_ACTIVE=false between runs stops the next step, records termination, and has no side effects", async () => {

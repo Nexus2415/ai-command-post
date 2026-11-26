@@ -6,6 +6,7 @@ import { Budget, estimateTokens, ledgerContent } from "./budget.ts";
 import { isAgentKey, isSuspended, type AgentKey, type Config } from "./config.ts";
 import { extractJson } from "./json.ts";
 import type { Issue, TaskStore } from "./linear.ts";
+import type { ClaimStore } from "./claims.ts";
 import { ProviderError, type ChatMessage, type ModelClient } from "./providers.ts";
 import { runTool, TOOL_DOCS, type ToolCall, type ToolEnv } from "./tools.ts";
 
@@ -36,6 +37,8 @@ export interface Deps {
   budget: Budget;
   toolEnv: (issue: Issue) => ToolEnv;
   log?: (line: string) => void;
+  /** Atomic claim store (src/claims.ts). Unset = Linear-comment claims only. */
+  claims?: ClaimStore;
 }
 
 export interface TickReport {
@@ -97,8 +100,9 @@ export function runnableClients(clients: Deps["clients"]): Deps["clients"] {
  * so a run that loses the race sees the other claim on its next read and stops. ACP also re-reads right after
  * writing its own claim and backs off before any work if an earlier claim from another executor is now visible,
  * so two writers that both see each other's comment agree on one winner. What remains: a rival claim that Linear
- * has not yet shown on that re-read. A true guarantee needs an atomic store (e.g. the broker's database claim);
- * until then, duplicate execution is unlikely, not impossible.
+ * has not yet shown on that re-read. That gap is closed by the atomic claim store (src/claims.ts, ARN-62): when it
+ * is configured, ACP must win a database row keyed by the issue before writing its Linear claim, so exactly one
+ * engine claims each task. Without it, duplicate execution is unlikely, not impossible.
  */
 export type ExecutorClaim = { executor: string; source: "comment" | "label" };
 
@@ -155,9 +159,22 @@ async function commandLead(d: Deps, cmd: Issue, report: TickReport, input = cmd.
     report.waiting.push(`${cmd.identifier}: command claimed by another executor; ACP will not plan or reconcile it`);
     return null;
   }
+  // A command this AI already holds is still taken in the claim store for this run, so two runs never both act on it.
+  if (status === "own") {
+    const atomic = await atomicClaim(d, cmd, lead);
+    if (atomic !== "won") {
+      report.waiting.push(atomic);
+      return null;
+    }
+  }
   // Claim only when the lead can actually plan now, so a budget-blocked or offline lead never leaves a stale claim.
   const canPlan = !!d.clients[lead] && d.budget.check(lead, estimateTokens(input) + 1_000, PLAN_TOKENS).ok;
   if (status === "free" && canPlan) {
+    const atomic = await atomicClaim(d, cmd, lead);
+    if (atomic !== "won") {
+      report.waiting.push(atomic);
+      return null;
+    }
     await d.store.comment(cmd.id, signed(d, "claim", cmd.id, `${EXECUTOR_MARKER} acp:${lead}\n\n${CLAIM_MARKER} ${AGENTS[lead].name} (AI Command Post), as lead.`));
     // Any earlier claim but this lead's own wins, another ACP agent's included (two engine runs racing on one command).
     // Proceed only on a read-back that shows our own claim; a read that shows none is unconfirmed, not ownership.
@@ -177,6 +194,20 @@ async function commandLead(d: Deps, cmd: Issue, report: TickReport, input = cmd.
 async function claimsAfterWrite(d: Deps, issue: Issue): Promise<ExecutorClaim[]> {
   const labels = d.store.getLabels ? await d.store.getLabels(issue.id) : issue.labels;
   return claimsOn(labels, await d.store.getComments(issue.id), verifierFor(d.cfg.provenanceSecret, issue.id));
+}
+
+/**
+ * Takes the claim store's row for this run before acting (and before writing the Linear claim), when a store is set.
+ * "won" = go ahead; anything else = stand down with that reason. An unreachable store is never read as a win.
+ */
+async function atomicClaim(d: Deps, issue: Issue, agent: AgentKey): Promise<"won" | string> {
+  if (!d.claims) return "won";
+  try {
+    const r = await d.claims.acquire(issue.id, `acp:${agent}`);
+    return r.won ? "won" : `${issue.identifier}: ${r.holder} holds it in the claim store; ACP backed off`;
+  } catch (e) {
+    return `${issue.identifier}: claim store unavailable (${(e as Error).message}); ACP will try again next run`;
+  }
 }
 
 export function claimStatus(claims: ExecutorClaim[], agent: AgentKey): "own" | "foreign" | "free" {
@@ -275,6 +306,12 @@ export async function work(d: Deps, task: Issue, agent: AgentKey, report: TickRe
   const status = claimStatus(claimsOn(labels, await d.store.getComments(task.id), verifierFor(d.cfg.provenanceSecret, task.id)), agent);
   if (status === "foreign") {
     report.waiting.push(`${task.identifier}: claimed by another executor; ACP will not run it`);
+    return;
+  }
+  // Free or already ours in Linear, this run must still hold the claim store's row before working.
+  const atomic = await atomicClaim(d, task, agent);
+  if (atomic !== "won") {
+    report.waiting.push(atomic);
     return;
   }
   if (status === "free") {
