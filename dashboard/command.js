@@ -10,7 +10,9 @@
     { key: "perplexity", name: "Perplexity", role: "Research and independent review", glyph: "M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM16 16l5 5" },
     { key: "gemini", name: "Gemini", role: "Second-opinion review", suspended: true, glyph: "M12 3l2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5z" },
     { key: "codex", name: "Codex", role: "Code review on pull requests", glyph: "M5 5h14v14H5zM9 9h6M9 13h6M9 17h3" },
-    { key: "none", name: "Unclaimed", role: "Open work with no AI owner yet", glyph: "M12 4v8M12 16v.01M4 20h16L12 4z" },
+    // ARN-145: shared objectives (named one by one on the server) are their own group, not "nobody's" work.
+    { key: "shared", name: "Shared Operations", role: "Shared objectives the whole team works toward", group: true, glyph: "M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM12 3v6M12 15v6M3 12h6M15 12h6" },
+    { key: "none", name: "Unassigned", role: "Tasks with no AI named as owner", group: true, glyph: "M12 4v8M12 16v.01M4 20h16L12 4z" },
   ];
   const OPEN = ["active", "queued", "blocked", "review"];
   const PILL = {
@@ -22,6 +24,20 @@
   // ---- pure helpers (unit-tested in test/command-view.test.ts) ----
   const list = o => (o && Array.isArray(o.issues) ? o.issues.filter(i => i && typeof i === "object") : []);
   const ownerKey = it => (AGENTS.some(a => a.key === it.owner && a.key !== "none") ? it.owner : "none");
+  const NAMES = { claude: "Claude", chatgpt: "ChatGPT", perplexity: "Perplexity", gemini: "Gemini", codex: "Codex" };
+  // Execution attribution, kept apart from ownership: which AIs posted a "## Result (<AI>, done)" on this group's tasks.
+  // Tasks with no such comment are counted as "not recorded"; nothing is credited from completion alone.
+  function resultCredits(overview, key) {
+    const mine = list(overview).filter(i => ownerKey(i) === key && i.kind !== "question");
+    const by = {}; let unknown = 0;
+    for (const it of mine) {
+      const ex = Array.isArray(it.executedBy) ? it.executedBy.filter(k => NAMES[k]) : [];
+      if (!ex.length) { unknown++; continue; }
+      for (const k of ex) by[k] = (by[k] || 0) + 1;
+    }
+    const credits = Object.keys(by).sort((a, b) => by[b] - by[a] || a.localeCompare(b)).map(k => ({ key: k, name: NAMES[k], count: by[k] }));
+    return { credits, unknown };
+  }
 
   function agentStats(overview, key) {
     const mine = list(overview).filter(i => ownerKey(i) === key && i.kind !== "question");
@@ -47,7 +63,7 @@
   }
   // AIs that Linear shows with open tasks. Done-only and suspended AIs are not counted; this is workload, not live workers.
   function aisWithOpenTasks(overview) {
-    return AGENTS.filter(a => a.key !== "none" && !a.suspended && agentStats(overview, a.key).open > 0).length;
+    return AGENTS.filter(a => !a.group && !a.suspended && agentStats(overview, a.key).open > 0).length;
   }
   function totals(overview) {
     const all = list(overview).filter(i => i.kind !== "question");
@@ -69,13 +85,13 @@
     return { active: "running", blocked: "blocked", review: "review", queued: "queued", done: "complete" }[lane] || "idle";
   }
   function safeUrl(u) { const s = String(u || "").trim(); return /^https:\/\/linear\.app\/[^\s]*$/i.test(s) ? s : null; }
-  function agentName(key) { const a = AGENTS.find(x => x.key === key); return a ? a.name : "Unclaimed"; }
+  function agentName(key) { const a = AGENTS.find(x => x.key === key); return a ? a.name : "Unassigned"; }
   function errorMessage(status, body) {
     if (status === 401) return "Password required.";
     const msg = body && typeof body.error === "string" ? body.error : "";
     return msg || "Request failed (HTTP " + status + ").";
   }
-  const api = { AGENTS, PILL, agentStats, aisWithOpenTasks, totals, queue, activity, laneStatus, safeUrl, agentName, errorMessage, isIssueId: s => ID_RE.test(String(s)) };
+  const api = { AGENTS, PILL, agentStats, resultCredits, aisWithOpenTasks, totals, queue, activity, laneStatus, safeUrl, agentName, errorMessage, isIssueId: s => ID_RE.test(String(s)) };
   root.ACPCommandCore = api;
   if (typeof document === "undefined") return;
 
@@ -173,6 +189,14 @@
     [["Active", s.active], ["Queued", s.queued], ["Blocked", s.blocked], ["Done", s.done]].forEach(([k, v]) => stats.append(el("dt", null, k), el("dd", "mono", v)));
     body.append(bullets, stats);
     card.append(head, prog, body);
+    if (a.group) {
+      const r = resultCredits(overview, a.key);
+      const p = el("p", "credits");
+      p.append(el("span", "muted", "Results posted by "));
+      p.append(document.createTextNode(r.credits.length ? r.credits.map(c => c.name + " " + c.count).join(" · ") : "no AI yet"));
+      if (r.unknown) p.append(el("span", "muted", " · " + r.unknown + " not recorded"));
+      card.appendChild(p);
+    }
     // Branches: every open task for this AI, folded away until asked for.
     if (s.tasks.length > 3) {
       const more = el("details", "branches");
