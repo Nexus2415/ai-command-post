@@ -32,7 +32,8 @@ test("tab counts always match the issue list, even if a reply's lanes disagree w
 
 test("owner question labels distinguish issue creation from execution; Codex is named", () => {
   assert.equal(core.ownerLabel({ title: "[Question] status?", owner: null }), "Owner question · no execution");
-  assert.equal(core.ownerLabel({ title: "Do it", owner: null }), "Unclaimed");
+  assert.equal(core.ownerLabel({ title: "Do it", owner: null }), "Unassigned");
+  assert.equal(core.ownerLabel({ title: "Objective", owner: "shared" }), "Shared Operations");
   assert.equal(core.ownerLabel({ title: "[Codex] x", owner: "codex" }), "Codex");
   assert.match(core.QUESTION_EXPLANATION, /Submitting a question creates a Linear issue/);
   assert.match(core.QUESTION_EXPLANATION, /does not authorize agents to execute tools/);

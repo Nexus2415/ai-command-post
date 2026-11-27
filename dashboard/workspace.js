@@ -46,8 +46,7 @@
     } finally { inflight.delete(ctl); }
     const j = await r.json().catch(() => ({}));
     if (r.status === 401 && retry !== false) {
-      const pw = window.prompt("Password for AI Command Post");
-      if (pw) { password = pw; return post(action, args, false); }
+      if (window.ACPSession) return window.ACPSession.expired();
     }
     if (!r.ok) throw new Error(typeof j.error === "string" ? j.error : "Something went wrong (" + r.status + ").");
     return j;
@@ -110,23 +109,28 @@
     if (!notes.length) list.append(el("li", "empty", "No notes yet."));
     for (const n of notes) {
       const row = el("li", "nrow" + (n.pending ? " pending" : ""));
-      const body = el("span", null, n.content);
+      // A proposed correction shows the note it would change, so the owner checks it against the original.
+      const old = n.replaces ? notes.find((x) => x.id === n.replaces) : null;
+      const body = el("span", null, !n.replaces ? n.content
+        : n.forget ? "Forget: \u201c" + (old ? old.content : "a note") + "\u201d. Reason: " + n.content
+        : "Change \u201c" + (old ? old.content : "a note") + "\u201d to \u201c" + n.content + "\u201d");
+      const by = MODEL_NAMES[n.model] || "an AI";
       const tag = n.source === "ai"
-        ? el("span", "note ntag", (n.pending ? "Waiting for you. " : "") + "Saved by " + (MODEL_NAMES[n.model] || "an AI"))
+        ? el("span", "note ntag", (n.pending ? "Waiting for you. " : "") + (n.replaces ? "Proposed by " : "Saved by ") + by)
         : null;
       const actions = el("span", "row nact");
       const btn = (label, aria, fn) => {
         const b = el("button", null, label); b.type = "button"; b.setAttribute("aria-label", aria + ": " + n.content.slice(0, 40));
         b.addEventListener("click", guard(fn)); actions.append(b); return b;
       };
-      if (n.pending) btn("Keep", "Keep this fact", async () => { await post("keep_note", { noteId: n.id }); await loadNotes(); });
-      btn("Edit", "Edit note", async () => {
+      if (n.pending) btn(n.replaces ? "Approve" : "Keep", n.replaces ? "Approve this memory change" : "Keep this fact", async () => { await post("keep_note", { noteId: n.id }); await loadNotes(); });
+      if (!n.forget) btn("Edit", "Edit note", async () => {
         const next = window.prompt("Edit this note", n.content);
         if (next == null || !next.trim() || next.trim() === n.content) return;
         await post("update_note", { noteId: n.id, content: next });
         await loadNotes();
       });
-      btn("Delete", "Delete note", async () => { await post("delete_note", { noteId: n.id }); await loadNotes(); });
+      btn(n.replaces ? "Reject" : "Delete", n.replaces ? "Reject this memory change" : "Delete note", async () => { await post("delete_note", { noteId: n.id }); await loadNotes(); });
       row.append(body);
       if (tag) row.append(tag);
       row.append(actions);
@@ -147,6 +151,8 @@
       const row = el("li", "nrow" + (a.enabled ? "" : " off"));
       row.append(el("span", null, a.name + " · " + (MODEL_NAMES[a.model] || a.model)));
       row.append(el("span", "note ntag", (a.enabled ? a.schedule : "Off") + (a.lastStatus ? " · Last run: " + a.lastStatus : " · Not run yet")));
+      // Where the agent picks up next time: the AI's own note from its last finished run.
+      if (a.checkpoint) row.append(el("span", "note ntag", "Picks up from (" + String(a.checkpointAt || "").slice(0, 10) + "): " + a.checkpoint));
       const actions = el("span", "row nact");
       const btn = (label, aria, fn) => {
         const b = el("button", null, label); b.type = "button"; b.setAttribute("aria-label", aria + ": " + a.name);
@@ -160,6 +166,7 @@
         if (r.run.threadId) await openThread(r.run.threadId);
       });
       if (a.threadId) btn("Open", "Open this agent's thread", async () => openThread(a.threadId));
+      if (a.checkpoint) btn("Start fresh", "Clear this agent's checkpoint", async () => { await post("clear_agent_checkpoint", { id: a.id }); await loadAgents(); });
       btn(a.enabled ? "Turn off" : "Turn on", a.enabled ? "Turn this agent off" : "Turn this agent on", async () => {
         await post("set_agent_enabled", { id: a.id, enabled: !a.enabled }); await loadAgents();
       });
@@ -179,6 +186,7 @@
   }
 
   function closeThread() {
+    stopSpeaking();
     $("cH").textContent = "No thread open";
     $("cModel").hidden = true;
     $("cPrivacy").hidden = true;
@@ -190,7 +198,7 @@
   }
 
   async function openThread(id) {
-    if (id !== threadId) { uploads = []; showFiles(); }
+    if (id !== threadId) { stopSpeaking(); uploads = []; showFiles(); }
     threadId = id;
     const { thread, messages } = await post("get_thread", { threadId: id });
     $("welcome").hidden = true;
@@ -844,32 +852,77 @@
     $("cMic").classList.add("on"); $("cMic").setAttribute("aria-pressed", "true");
     say("Listening… tap the microphone again when you're done. Check the text, then send.", "warn");
   });
-  // Read aloud: the answer's own text (not the name line or notes under it), in short pieces so long answers aren't
-  // cut off by the browser. Tapping again, or another answer's button, stops it.
+  // Read aloud: keep one utterance alive, start from a user tap, and queue the next chunk only after the last ends.
+  // An idle cancel or queued batch can fail silently on some mobile browsers. Do not claim audio started until onstart.
   let speaking = null;
+  function stopSpeaking(message = "", isError = false) {
+    const session = speaking;
+    if (!session) return;
+    speaking = null; // Ignore callbacks from canceled utterances.
+    clearTimeout(session.timer);
+    session.button.setAttribute("aria-pressed", "false");
+    session.button.textContent = "▶ Listen";
+    if (session.synth.speaking || session.synth.pending || session.synth.paused) session.synth.cancel();
+    if (message) say(message, isError ? "err" : "");
+  }
   function speakButton(box) {
     const b = el("button", "speak", "▶ Listen"); b.type = "button";
     b.setAttribute("aria-label", "Read this answer aloud"); b.setAttribute("aria-pressed", "false");
     b.addEventListener("click", () => {
+      if (speaking?.button === b) { stopSpeaking(); return; }
+      stopSpeaking();
       const synth = window.speechSynthesis;
-      const was = speaking;
-      synth.cancel();
-      if (was) { was.setAttribute("aria-pressed", "false"); was.textContent = "▶ Listen"; speaking = null; }
-      if (was === b) return;
+      if (!synth || !window.SpeechSynthesisUtterance) { say("Read aloud is not available in this browser.", "err"); return; }
       const parts = [...box.childNodes].filter((n) => !(n.nodeType === 1 && (n.classList.contains("who") || n.classList.contains("drew") || n.classList.contains("attached") || n.classList.contains("srcs"))))
         .map((n) => n.textContent).join(" ").replace(/\s+/g, " ").trim();
-      const chunks = parts.match(/[^.!?]{1,220}[.!?]*|[^.!?]+/g) || [];
-      chunks.forEach((c, i) => {
-        const u = new SpeechSynthesisUtterance(c.trim());
-        u.lang = navigator.language || "en-US";
-        if (i === chunks.length - 1) u.onend = u.onerror = () => { if (speaking === b) { b.setAttribute("aria-pressed", "false"); b.textContent = "▶ Listen"; speaking = null; } };
-        synth.speak(u);
-      });
-      speaking = b; b.setAttribute("aria-pressed", "true"); b.textContent = "■ Stop";
+      const chunks = (parts.match(/[^.!?]{1,220}[.!?]*|[^.!?]+|[.!?]+/g) || []).map(c => c.trim()).filter(Boolean);
+      if (!chunks.length) { say("There is no answer text to read aloud.", "err"); return; }
+      const session = { button: b, synth, utterance: null, timer: null, index: 0 };
+      speaking = session;
+      b.setAttribute("aria-pressed", "true"); b.textContent = "■ Stop";
+      const unavailable = () => {
+        if (speaking === session) stopSpeaking("Audio could not start. Check media volume and Bluetooth output, then try in Safari or another browser.", true);
+      };
+      const next = () => {
+        if (speaking !== session) return;
+        if (session.index >= chunks.length) { stopSpeaking(); return; }
+        try {
+          const u = new window.SpeechSynthesisUtterance(chunks[session.index++]);
+          session.utterance = u; // Keep the current utterance reachable until its callbacks finish.
+          const lang = navigator.language || "en-US";
+          u.lang = lang; u.volume = 1;
+          const voices = typeof synth.getVoices === "function" ? synth.getVoices() : [];
+          const local = voices.filter(v => v.localService === true);
+          const voice = local.find(v => v.lang.toLowerCase() === lang.toLowerCase()) ||
+            local.find(v => v.lang.split("-")[0].toLowerCase() === lang.split("-")[0].toLowerCase());
+          if (voice) u.voice = voice;
+          u.onstart = () => { if (speaking === session && session.utterance === u) clearTimeout(session.timer); };
+          u.onend = () => {
+            if (speaking !== session || session.utterance !== u) return;
+            clearTimeout(session.timer); next();
+          };
+          u.onerror = () => { if (speaking === session && session.utterance === u) unavailable(); };
+          session.timer = setTimeout(unavailable, 6000);
+          if (synth.paused) synth.resume();
+          synth.speak(u);
+        } catch { unavailable(); }
+      };
+      next(); // The first speech call stays inside the user's click.
     });
     return b;
   }
+  window.addEventListener("pagehide", () => stopSpeaking());
   syncMic();
+  // The same playback path, with fixed synthetic text, works even if the preview has no database.
+  const sample = el("div", null, "This is a NEXIA audio test. If you can hear this, read aloud is working.");
+  $("audioTest").append(speakButton(sample));
 
+  // Arriving from Home's ask box: your words wait in the question box. Nothing is sent until you press send.
+  const asked = new URLSearchParams(location.search).get("ask");
+  if (asked) {
+    $("cText").value = asked.slice(0, 8000); grow();
+    history.replaceState(null, "", location.pathname);
+    say("Your request is in the question box. Pick a thread or start a new one, then press send.", "warn");
+  }
   guard(async () => { await loadStatus(); await loadProjects(); })();
 })();

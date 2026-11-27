@@ -1,16 +1,33 @@
 {
-  "name": "NEXIA",
-  "short_name": "NEXIA",
-  "description": "Ask the AI team, with spend caps and a stop switch.",
-  "start_url": "/workspace.html",
+  "name": "Arnexyia",
+  "short_name": "Arnexyia",
+  "description": "The Intelligence Behind Operations. Ask the AI team, with spend caps and a stop switch.",
+  "start_url": "/home.html",
   "scope": "/",
   "display": "standalone",
-  "background_color": "#07111c",
-  "theme_color": "#07111c",
+  "background_color": "#03101a",
+  "theme_color": "#03101a",
   "icons": [
-    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
-    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
-    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
-    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
   ]
 }

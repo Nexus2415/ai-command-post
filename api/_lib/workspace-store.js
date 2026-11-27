@@ -19,6 +19,8 @@ const note = (n) => ({
   source: n.source === "ai" ? "ai" : "owner", model: n.model ?? null, thread_id: n.thread_id ?? null,
   // An AI-saved fact counts as waiting for review unless the flag is certainly false (fail closed).
   pending: n.source === "ai" ? n.pending !== false : n.pending === true,
+  // A proposed correction names the note it changes; `forget` proposals remove it instead.
+  replaces: n.replaces ?? null, forget: n.forget === true,
 });
 const CONTROL_COLS = "stopped,updated_at";
 const CONNECTOR_COLS = "id,project_id,kind,name,spec,fingerprint,enabled,created_at";
@@ -124,6 +126,14 @@ export function createSupabaseStore(env, f = fetch) {
     deleteAgent: async (id) => (await call("DELETE", `ws_agents?id=eq.${id}&select=id`)).length > 0,
     // Claims a run in one conditional update: only a switched-on agent whose last run is older than `before`.
     // null means it is off, gone, or already claimed (a second cron call, a double click).
+    // Checkpoints are read and written on their own, so agents keep working before the checkpoint columns exist.
+    getAgentCheckpoint: async (id) => {
+      const r = (await call("GET", `ws_agents?select=checkpoint,checkpoint_at&id=eq.${id}`))[0];
+      return r?.checkpoint ? { text: r.checkpoint, at: r.checkpoint_at ?? null } : null;
+    },
+    listAgentCheckpoints: (projectId) => call("GET", `ws_agents?select=id,checkpoint,checkpoint_at&project_id=eq.${projectId}&limit=50`),
+    setAgentCheckpoint: async (id, text, at) =>
+      (await call("PATCH", `ws_agents?id=eq.${id}&select=id`, { checkpoint: text, checkpoint_at: text ? at : null }, "return=representation")).length > 0,
     claimAgentRun: async (id, before, at) => (await call("PATCH",
       `ws_agents?id=eq.${id}&enabled=is.true&or=${encodeURIComponent(`(last_run_at.is.null,last_run_at.lt."${before}")`)}&select=${AGENT_COLS}`,
       { last_run_at: at, last_status: "Running…" }, "return=representation"))[0] ?? null,
@@ -196,7 +206,7 @@ export function createMemoryStore({ control = false, shared = null } = {}) {
     },
     listNotes: async (projectId) => notes.filter((n) => n.project_id === projectId).map((n) => ({ ...n })),
     addNote: async (projectId, content, extra = {}) => {
-      const n = { id: randomUUID(), project_id: projectId, content, source: "owner", model: null, thread_id: null, pending: false, ...extra, created_at: now() };
+      const n = { id: randomUUID(), project_id: projectId, content, source: "owner", model: null, thread_id: null, pending: false, replaces: null, forget: false, ...extra, created_at: now() };
       notes.push(n);
       return { ...n };
     },
@@ -209,6 +219,8 @@ export function createMemoryStore({ control = false, shared = null } = {}) {
     deleteNote: async (noteId) => {
       const i = notes.findIndex((n) => n.id === noteId);
       if (i >= 0) notes.splice(i, 1);
+      // Same as the database: proposals about a deleted note go with it.
+      for (let j = notes.length - 1; j >= 0; j--) if (notes[j].replaces === noteId) notes.splice(j, 1);
       return i >= 0;
     },
     spend: async (threadId, since) => ({
@@ -256,6 +268,17 @@ export function createMemoryStore({ control = false, shared = null } = {}) {
     },
     updateAgent: async (id, patch) => { const a = agents.find((x) => x.id === id); if (a) Object.assign(a, patch); return a ? { ...a } : null; },
     deleteAgent: async (id) => { const i = agents.findIndex((a) => a.id === id); if (i >= 0) agents.splice(i, 1); return i >= 0; },
+    getAgentCheckpoint: async (id) => {
+      const a = agents.find((x) => x.id === id);
+      return a?.checkpoint ? { text: a.checkpoint, at: a.checkpoint_at ?? null } : null;
+    },
+    listAgentCheckpoints: async (projectId) => agents.filter((a) => a.project_id === projectId)
+      .map((a) => ({ id: a.id, checkpoint: a.checkpoint ?? null, checkpoint_at: a.checkpoint_at ?? null })),
+    setAgentCheckpoint: async (id, text, at) => {
+      const a = agents.find((x) => x.id === id);
+      if (a) Object.assign(a, { checkpoint: text, checkpoint_at: text ? at : null });
+      return Boolean(a);
+    },
     claimAgentRun: async (id, before, at) => {
       const a = agents.find((x) => x.id === id && x.enabled === true && (!x.last_run_at || x.last_run_at < before));
       if (!a) return null;

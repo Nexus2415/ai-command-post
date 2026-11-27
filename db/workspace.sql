@@ -51,6 +51,10 @@ alter table ws_notes add column if not exists model text check (model in ('claud
 alter table ws_notes add column if not exists thread_id uuid references ws_threads(id) on delete set null;
 alter table ws_notes add column if not exists pending boolean not null default false;
 alter table ws_notes add column if not exists updated_at timestamptz;
+-- Memory corrections: an AI may propose changing (`replaces`) or forgetting (`forget`) one note. Proposals stay pending
+-- until the owner keeps them; deleting the old note deletes its proposals. Safe to run again.
+alter table ws_notes add column if not exists replaces uuid references ws_notes(id) on delete cascade;
+alter table ws_notes add column if not exists forget boolean not null default false;
 
 -- A new message moves its thread to the top of the list.
 create or replace function ws_touch_thread() returns trigger language plpgsql set search_path = public as $$
@@ -167,5 +171,18 @@ create table if not exists ws_agents (
   check ((cadence = 'weekly') = (weekday is not null))
 );
 create index if not exists ws_agents_project_idx on ws_agents (project_id, created_at);
+-- Checkpoints: the short note a finished run leaves for the next one (api/_lib/workspace-agents.js). Safe to run again.
+alter table ws_agents add column if not exists checkpoint text check (char_length(checkpoint) <= 1200);
+alter table ws_agents add column if not exists checkpoint_at timestamptz;
 alter table ws_agents enable row level security;
 revoke all on ws_agents from anon, authenticated;
+
+-- Atomic engine claims (ARN-62, 2026-11-26): one executor per Linear task, decided by this primary key rather than by
+-- whichever Linear comment landed first. Only the engine writes here, with the service key (src/claims.ts).
+create table if not exists acp_claims (
+  issue_id text primary key check (char_length(issue_id) between 1 and 100),
+  executor text not null check (char_length(executor) between 1 and 60),
+  run_id text not null check (char_length(run_id) between 1 and 60),
+  claimed_at timestamptz not null default now()
+);
+alter table acp_claims enable row level security;

@@ -1,0 +1,39 @@
+{
+  "about": "Synthetic evaluation set for the AI Command Post workspace (src/eval.ts). Made-up questions only: no client data, no real names. expectTier is the tier the question should get: light only for short plain look-ups and chit-chat; anything that needs reasoning, money, law, code or a plan is full. Add a case whenever a real failure is found.",
+  "cases": [
+    { "id": "greet", "question": "Good morning!", "expectTier": "light" },
+    { "id": "thanks", "question": "Thanks, that helps.", "expectTier": "light" },
+    { "id": "capital", "question": "What is the capital of Portugal?", "expectTier": "light", "grader": { "mustInclude": ["Lisbon"] } },
+    { "id": "convert-miles", "question": "How many kilometers is 26.2 miles?", "expectTier": "light", "grader": { "mustInclude": ["42"] } },
+    { "id": "spelling", "question": "How do you spell 'accommodate'?", "expectTier": "light", "grader": { "mustInclude": ["accommodate"] } },
+    { "id": "define-sla", "question": "What does SLA stand for?", "expectTier": "light", "grader": { "mustInclude": ["service level agreement"] } },
+    { "id": "timezone", "question": "What time zone is Miami in?", "expectTier": "light", "grader": { "mustInclude": ["Eastern"] } },
+    { "id": "rename-file", "question": "Suggest a short name for a folder of invoices.", "expectTier": "light" },
+    { "id": "weather-small-talk", "question": "Is it usually hot in Florida in July?", "expectTier": "light" },
+    { "id": "synonym", "question": "Give me a synonym for 'quick'.", "expectTier": "light" },
+
+    { "id": "pricing-strategy", "question": "Help me set a pricing strategy for a $49/month ops tool.", "expectTier": "full" },
+    { "id": "contract-review", "question": "Review this contract clause for risks to us.", "expectTier": "full" },
+    { "id": "legal-question", "question": "Is it legal to record a sales call in Florida?", "expectTier": "full" },
+    { "id": "debug", "question": "Debug this error: TypeError undefined is not a function", "expectTier": "full" },
+    { "id": "rfq", "question": "Draft a response to this RFQ for janitorial supplies.", "expectTier": "full" },
+    { "id": "forecast", "question": "Forecast revenue if we sign 3 clients a month.", "expectTier": "full" },
+    { "id": "tax", "question": "How much should I set aside for taxes on $200k profit?", "expectTier": "full", "grader": { "mustNotMatch": ["^\\s*\\$?\\d[\\d,]*\\s*$"] } },
+    { "id": "compare-vendors", "question": "Compare Stripe and Square fees for us.", "expectTier": "full" },
+    { "id": "why", "question": "Why did our signups drop last week?", "expectTier": "full" },
+    { "id": "plan-launch", "question": "Make a launch plan for the founding pilot.", "expectTier": "full" },
+    { "id": "research", "question": "Research the top 3 competitors to our product.", "expectTier": "full" },
+    { "id": "budget", "question": "What budget do we need for ads next quarter?", "expectTier": "full" },
+    { "id": "steps", "question": "Walk me through it step by step.", "expectTier": "full" },
+    { "id": "essay", "question": "Write a report on our first month.", "expectTier": "full" },
+    { "id": "proposal", "question": "Write a proposal for a cleaning company client.", "expectTier": "full" },
+    { "id": "should-we-hire", "question": "Should we hire a part-time VA or keep using AI for support?", "expectTier": "full" },
+    { "id": "email-to-client", "question": "Write an email telling a client their invoice is overdue.", "expectTier": "full" },
+    { "id": "which-is-better", "question": "Which is better for us, monthly or annual billing?", "expectTier": "full" },
+    { "id": "security", "question": "Is our API key setup secure?", "expectTier": "full" },
+    { "id": "many-questions", "question": "What's our price? Who's the target? When do we launch? How do we sell?", "expectTier": "full" },
+
+    { "id": "tool-only-reply", "question": "List my open Linear issues and tell me which matters most.", "expectTier": "full", "grader": { "mustInclude": ["ARN-"] } },
+    { "id": "no-false-done", "question": "Send the overdue invoice email to the client.", "expectTier": "full", "grader": { "mustNotMatch": ["\\b(I have|I've) sent\\b"] } }
+  ]
+}

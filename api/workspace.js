@@ -1,7 +1,7 @@
 // Workspace API (Phase 1): projects, threads and messages behind the site password.
 // Clients can only post their own "user" messages; AI replies are written here, by the chat action, after the
 // budget checks.
-import { hasSitePassword, isSameOrigin } from "./_lib/site-auth.js";
+import { AUTH_ACTIONS, handleAuth, hasSitePassword, isSameOrigin } from "./_lib/site-auth.js";
 import { MODELS, StoreError, createSupabaseStore, isId, workspaceConfigured } from "./_lib/workspace-store.js";
 import { BudgetStop, LIGHT_NAMES, ModelError, estimateUsd, isPaid, mergeTurns, modelStatus, readsFiles, routeTier, runChat, trimHistory } from "./_lib/workspace-models.js";
 import { FileProblem, MAX_FILES_PER_THREAD, MAX_UPLOAD_BODY, checkUpload, fileTokens, markersFor, withFiles } from "./_lib/workspace-files.js";
@@ -13,7 +13,7 @@ import {
 } from "./_lib/workspace-connectors.js";
 import { STOP_MARK, harmCheck, logRefusal, refusalText, textOf } from "./_lib/workspace-rules.js";
 import { CHANGED, ROUTE_LABEL, inheritedSources, sharedFor, sourcesLine, stillShared, stripSources } from "./_lib/workspace-shared.js";
-import { MAX_NOTES, REMEMBER_PROMPT, extractFacts, memoryFor, saveFacts } from "./_lib/workspace-memory.js";
+import { MAX_NOTES, REMEMBER_PROMPT, applyChange, extractFacts, memoryFor, saveChanges, saveFacts } from "./_lib/workspace-memory.js";
 import { isShared } from "./_lib/workspace-shared.js";
 import { CHECK_MARK, CRITIQUE_MARK, SYNTHESIS_MARK, checkPrompt, checkerDisagrees, critiquePrompt, estimateRounds, roundtableState, synthesisPrompt } from "./_lib/workspace-roundtable.js";
 import {
@@ -23,7 +23,8 @@ import {
 
 import { CATALOG, catalogEntry } from "./_lib/workspace-catalog.js";
 import {
-  AgentProblem, MAX_AGENTS, RUN_NOW_GAP_MS, checkAgent, cronReady, dayStart, describeSchedule, isDue, monthKey, runMessage, threadTitle,
+  AgentProblem, MAX_AGENTS, RUN_NOW_GAP_MS, checkAgent, cronReady, dayStart, describeSchedule, extractCheckpoint, isDue, monthKey,
+  runMessage, threadTitle,
 } from "./_lib/workspace-agents.js";
 
 // Vercel: model replies can take a while.
@@ -47,6 +48,9 @@ const monthStart = (now) => new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMo
 const usd = (n) => "$" + n.toFixed(2);
 // Text files attached to a message are folded into it, marked by name, so the 32,000-character limit covers them.
 const MAX_FILES = 3;
+// An attached text file inside a message, as userMessage writes it. Its text is outside data, like a web page.
+const FILE_BLOCKS = /<<<file: [^\n]*>>>[\s\S]*?<<<end of file>>>/g;
+const FILE_BLOCK = /<<<file: [^\n]*>>>/;
 const NOT_A_MESSAGE = "A message of 1 to 32,000 characters is required.";
 // `markers` names the images and PDFs sent with the message (workspace-files.js markersFor).
 function userMessage(args, markers = "") {
@@ -296,7 +300,15 @@ const ACTIONS = Object.freeze({
     if (!isId(args.projectId)) return error(400, "Unknown project.");
     if (!(await store.getProject(args.projectId))) return error(404, "Unknown project.");
     try {
-      return { cronReady: cronReady(env), agents: (await store.listAgents(args.projectId)).map(describeAgent) };
+      const agents = (await store.listAgents(args.projectId)).map(describeAgent);
+      // Checkpoints are optional: before their columns exist the list still loads, without them.
+      const cps = await store.listAgentCheckpoints(args.projectId).catch(() => []);
+      for (const a of agents) {
+        const c = cps.find((x) => x.id === a.id);
+        a.checkpoint = c?.checkpoint ?? null;
+        a.checkpointAt = c?.checkpoint_at ?? null;
+      }
+      return { cronReady: cronReady(env), agents };
     } catch (e) {
       if (e instanceof StoreError) return { cronReady: cronReady(env), agents: [], setupNeeded: true };
       throw e;
@@ -326,6 +338,16 @@ const ACTIONS = Object.freeze({
     if (!isId(args.id) || typeof args.enabled !== "boolean") return error(400, "Say which agent, and on or off.");
     const row = await store.updateAgent(args.id, { enabled: args.enabled });
     return row ? { agent: describeAgent(row) } : error(404, "Unknown agent.");
+  },
+  // The owner clears an agent's checkpoint: its next run starts fresh.
+  async clear_agent_checkpoint(store, args) {
+    if (!isId(args.id)) return error(400, "Unknown agent.");
+    try {
+      return (await store.setAgentCheckpoint(args.id, null, null)) ? { cleared: true } : error(404, "Unknown agent.");
+    } catch (e) {
+      if (e instanceof StoreError) return error(503, "Checkpoints need a one-time database update first.");
+      throw e;
+    }
   },
   async delete_agent(store, args) {
     if (!isId(args.id)) return error(400, "Unknown agent.");
@@ -578,7 +600,8 @@ const ACTIONS = Object.freeze({
     const gate = proposer(store, thread, model, deps);
     // Web access for this reply: pages the owner linked may be read; search results add more. Each web call is
     // checked against the caps first (web calls are always paid) and listed under the reply.
-    const allowedUrls = new Set(urlsIn(asked));
+    // Only links the owner typed: a link inside an attached file is the file's text, not the owner's choice.
+    const allowedUrls = new Set(urlsIn(asked.replace(FILE_BLOCKS, "")));
     const overWeb = await budgetCheck(store, env, deps, thread.id, true);
     const webLog = [];
     const webCtx = (soFar) => ({
@@ -612,11 +635,12 @@ const ACTIONS = Object.freeze({
       return { status: 502, body: { error: `${e.message} Your message was saved; try again for a reply.`, saved } };
     }
     // Facts the AI asked to remember are taken out of the reply and saved to project memory, live when the reply
-    // used nothing from outside (no tools, no other threads), otherwise waiting for the owner's review.
-    const { text: answer, facts } = extractFacts(out.text);
+    // used nothing from outside (no tools, no other threads, no uploaded image or PDF, whose text could carry
+    // instructions), otherwise waiting for the owner's review.
+    const { text: answer, facts, changes } = extractFacts(out.text);
     const memoryLine = harmCheck(answer) ? "" : await saveFacts(store, thread.id, model, facts, {
-      stopReason: () => stopReason(store), harmCheck, trusted: !out.toolsUsed?.length && !shared.sources.length,
-    });
+      stopReason: () => stopReason(store), harmCheck, trusted: !out.toolsUsed?.length && !shared.sources.length && !sent.some((m) => m.files?.length || FILE_BLOCK.test(m.content)),
+    }) + await saveChanges(store, thread.id, model, changes, { stopReason: () => stopReason(store), harmCheck });
     const message = await gatedReply(store, thread.id, model, answer || "(The AI sent an empty reply.)", out, "",
       memoryLine + sourcesLine(shared.sources) + webAuditText(webLog) + proposalsText(gate.made) + routeLine);
     return { saved, message, tier };
@@ -798,8 +822,15 @@ async function runAgent(store, env, deps, agent, before) {
       threadId = (await store.createThread(claimed.project_id, threadTitle(claimed, now), claimed.model)).id;
       await store.updateAgent(claimed.id, { thread_id: threadId, thread_month: month });
     }
-    const out = await ACTIONS.chat(store, { threadId, content: runMessage(claimed, now), routing: true }, env, deps);
+    // The last finished run's checkpoint, if any (unreadable = start fresh).
+    const checkpoint = await store.getAgentCheckpoint(claimed.id).catch(() => null);
+    const out = await ACTIONS.chat(store, { threadId, content: runMessage(claimed, now, checkpoint), routing: true }, env, deps);
     status = out.status ? `Didn't finish: ${out.body.error}` : `Done. Cost $${Number(out.message.cost_usd || 0).toFixed(3)}.`;
+    // Only a finished run moves the checkpoint forward; a note the rules gate refuses keeps the old one.
+    if (!out.status) {
+      const note = extractCheckpoint(out.message.content);
+      if (note && !harmCheck(note)) await store.setAgentCheckpoint(claimed.id, note, now.toISOString()).catch(() => null);
+    }
   } catch (e) {
     if (!(e instanceof StoreError || e?.name === "TimeoutError" || e instanceof TypeError)) throw e;
     status = "Didn't run: workspace storage was unavailable.";
@@ -827,11 +858,17 @@ export async function runDueAgents(env, makeStore = createSupabaseStore, deps = 
   return { status: 200, body: { results } };
 }
 
-// Memory edits need the memory columns; before the one-time database update they report that plainly.
+// Memory edits need the memory columns; before the one-time database update they report that plainly. Keeping (or
+// editing) a proposed correction applies it: the old note is replaced, or removed for a forget.
 async function memoryUpdate(store, noteId, patch) {
   try {
     const note = await store.updateNote(noteId, patch);
-    return note ? { note } : error(404, "Unknown note.");
+    if (!note) return error(404, "Unknown note.");
+    if (note.replaces) {
+      const kept = await applyChange(store, note);
+      return kept ? { note: kept } : { forgotten: true };
+    }
+    return { note };
   } catch (e) {
     if (e instanceof StoreError) return error(503, "Editing project memory needs a one-time database update first.");
     throw e;
@@ -931,12 +968,26 @@ async function runRound1(store, env, deps, { thread, content, models, sent, shar
   return { saved, messages, failed };
 }
 
+// The request body when it is a sign-in action (small, so never an upload), otherwise null.
+function authBody(raw) {
+  let b = raw;
+  if (typeof raw === "string") {
+    if (raw.length > 4096 || !raw.includes("\"action\"")) return null;
+    try { b = JSON.parse(raw); } catch { return null; }
+  }
+  return b && typeof b === "object" && !Array.isArray(b) && AUTH_ACTIONS.includes(b.action) ? b : null;
+}
+
 // Pure request handler, so tests can drive it with a memory store.
 export async function handle(req, env, makeStore = createSupabaseStore, deps = {}) {
   // `net` is the network for connectors and custom tools: guarded (public addresses only) in production.
   const d = { fetch: deps.fetch ?? fetch, net: deps.net ?? deps.fetch ?? guardedFetch, now: deps.now ?? (() => new Date()) };
+  // Sign in, sign out and "am I signed in?" run before the password check (they are how a browser gets in) and
+  // never touch workspace storage. They set or clear the session cookie and nothing else.
+  const peek = authBody(req.body);
+  if (peek) return handleAuth(req, env, peek, d.now().getTime());
   if (!env.ACP_SITE_PASSWORD) return error(503, "The website isn't configured yet.");
-  if (!hasSitePassword(req, env)) return error(401, "Wrong password");
+  if (!hasSitePassword(req, env, d.now().getTime())) return error(401, "Sign in required.");
   if (req.method !== "POST") return error(405, "POST only");
   // Every action goes through POST, and some write, so all of them need a same-site browser request.
   if (!isSameOrigin(req)) return error(403, "Cross-site requests are not allowed.");
@@ -972,5 +1023,6 @@ export default async function handler(req, res) {
   res.setHeader("Vary", "Origin");
   res.setHeader("X-Content-Type-Options", "nosniff");
   const out = await handle(req, process.env);
+  if (out.cookie) res.setHeader("Set-Cookie", out.cookie);
   res.status(out.status).json(out.body);
 }

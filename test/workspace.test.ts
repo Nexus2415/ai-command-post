@@ -143,7 +143,7 @@ test("the workspace reads like a chat: answers in one column, one question box a
 
 test("the main address opens the chat; the older console stays one tap away", () => {
   const v = JSON.parse(readFileSync(new URL("../vercel.json", import.meta.url), "utf8"));
-  assert.deepEqual(v.redirects, [{ source: "/", destination: "/workspace.html", permanent: false }]);
+  assert.deepEqual(v.redirects, [{ source: "/", destination: "/home.html", permanent: false }]);
   const html = readFileSync(new URL("../dashboard/workspace.html", import.meta.url), "utf8");
   assert.match(html, /href="\/index\.html"/);
   assert.doesNotMatch(html, /href="\/"/);

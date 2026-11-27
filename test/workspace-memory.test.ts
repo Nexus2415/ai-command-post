@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { handle } from "../api/workspace.js";
 import { createMemoryStore, createSupabaseStore } from "../api/_lib/workspace-store.js";
-import { MAX_FACT_CHARS, MAX_NOTES, PENDING_LABEL, SAVED_LABEL, extractFacts, memoryFor, saveFacts } from "../api/_lib/workspace-memory.js";
+import { MAX_FACT_CHARS, MAX_NOTES, MAX_PENDING_CHANGES, PENDING_LABEL, SAVED_LABEL, extractFacts, memoryFor, saveChanges, saveFacts } from "../api/_lib/workspace-memory.js";
 import { harmCheck } from "../api/_lib/workspace-rules.js";
 
 // Automatic project memory: an AI ends a reply with "REMEMBER: ..." lines, the server saves them to the project's
@@ -41,6 +41,8 @@ async function setup(replies: string[], during?: (store: any) => void) {
   const t = (await h.call("create_thread", { projectId: p.id, title: "Pricing", model: "claude" })).body.thread;
   return { ...h, p, t };
 }
+// What the AIs read, without the [m:tag · date · who] suffix every note carries.
+const untag = (xs: string[]) => xs.map((x) => x.replace(/ \[m:[0-9a-f]{6}[^\]]*\]$/, ""));
 const notesOf = async (call: any, projectId: string) => (await call("list_notes", { projectId })).body.notes;
 
 test("a fact the AI asks to remember is saved, shown under the reply, and read by every later AI call", async () => {
@@ -175,7 +177,7 @@ test("the owner can edit, keep and delete facts; editing a pending fact keeps it
   assert.equal(e.status, 200);
   assert.equal(e.body.note.content, "Edited fact");
   assert.equal(e.body.note.pending, false);
-  assert.deepEqual(await memoryFor(store, p.id), ["Edited fact"]);
+  assert.deepEqual(untag(await memoryFor(store, p.id)), ["Edited fact"]);
   assert.equal((await c("update_note", { noteId: n.id, content: "" })).status, 400);
   assert.equal((await c("keep_note", { noteId: "00000000-0000-4000-8000-000000000000" })).status, 404);
   assert.equal((await c("delete_note", { noteId: n.id })).status, 200);
@@ -206,4 +208,92 @@ test("the database script adds the memory columns, safely re-runnable", () => {
   for (const col of ["source", "model", "thread_id", "pending", "updated_at"]) {
     assert.match(sql, new RegExp(`alter table ws_notes add column if not exists ${col} `));
   }
+});
+
+
+// Memory corrections (Anthropic "components of agent memory": compare notes to their source, fix stale ones, keep
+// the owner in control). An AI can only propose; the owner approves every change.
+test("every note the AI reads carries its tag, date and who saved it", async () => {
+  const { call, sent, store, p, t } = await setup(["Hi."]);
+  const n = await store.addNote(p.id, "Launch price is $49 a month.");
+  await call("chat", { threadId: t.id, content: "Hi" });
+  assert.ok(sent[0].system.includes(`- Launch price is $49 a month. [m:${n.id.slice(0, 6)} · ${n.created_at.slice(0, 10)} · owner]`));
+  assert.match(sent[0].system, /CORRECT m:1a2b3c/);
+});
+
+test("a correction is only a proposal until the owner approves it, then it replaces the old note", async () => {
+  const h = await setup(["placeholder"]);
+  const old = await h.store.addNote(h.p.id, "Launch price is $49 a month.");
+  const tag = old.id.slice(0, 6);
+  const { call, sent, store, p, t } = h;
+  const replies = [`Updated.\nCORRECT m:${tag}: Launch price is $59 a month.`, "Hi."];
+  let i = 0;
+  const f = (async (_u: any, init: any) => { sent.push(JSON.parse(init.body)); return json({ content: [{ type: "text", text: replies[Math.min(i++, 1)] }], usage: { input_tokens: 10, output_tokens: 5 } }); }) as typeof fetch;
+  const c = async (action: string, args: object = {}) => handle({ method: "POST", headers, body: { action, args } }, base, () => store, { fetch: f, now }) as Promise<{ status: number; body: any }>;
+  const r = await c("chat", { threadId: t.id, content: "The price is now $59." });
+  assert.doesNotMatch(r.body.message.content, /CORRECT m:/);
+  assert.match(r.body.message.content, /Memory change waiting for you \(Project memory\): change "Launch price is \$49 a month\." to "Launch price is \$59 a month\."/);
+  // Nothing changed yet: the AIs still read the old note, never the proposal.
+  assert.deepEqual(untag(await memoryFor(store, p.id)), ["Launch price is $49 a month."]);
+  const proposal = (await notesOf(c, p.id)).find((n: any) => n.replaces === old.id);
+  assert.ok(proposal && proposal.pending && !proposal.forget);
+  const k = await c("keep_note", { noteId: proposal.id });
+  assert.equal(k.status, 200);
+  assert.equal(k.body.note.content, "Launch price is $59 a month.");
+  assert.deepEqual(untag(await memoryFor(store, p.id)), ["Launch price is $59 a month."]);
+  assert.equal((await notesOf(c, p.id)).length, 1);
+  // The stripped line never reaches a model again.
+  await c("chat", { threadId: t.id, content: "Hi" });
+  assert.doesNotMatch(JSON.stringify(sent.at(-1).messages), /Memory change waiting/);
+});
+
+test("forget removes the note only on approval; rejecting or deleting the original drops the proposal", async () => {
+  const { store, p, t } = await setup(["x"]);
+  const a = await store.addNote(p.id, "Office is in Miami.");
+  const b = await store.addNote(p.id, "Supplier is Acme.");
+  const checks = { stopReason: async () => null, harmCheck };
+  const line = await saveChanges(store, t.id, "claude", [{ kind: "forget", tag: a.id.slice(0, 6), text: "Moved." }, { kind: "correct", tag: b.id.slice(0, 6), text: "Supplier is Beta." }], checks);
+  assert.match(line, /forget "Office is in Miami\."/);
+  const c = async (action: string, args: object = {}) => handle({ method: "POST", headers, body: { action, args } }, base, () => store, { now }) as Promise<{ status: number; body: any }>;
+  const all = (await notesOf(c, p.id));
+  const forget = all.find((n: any) => n.forget);
+  const correct = all.find((n: any) => n.replaces === b.id);
+  assert.deepEqual((await c("keep_note", { noteId: forget.id })).body, { forgotten: true });
+  // Owner deletes the original: its pending correction goes with it.
+  await c("delete_note", { noteId: b.id });
+  assert.equal((await notesOf(c, p.id)).length, 0);
+  assert.ok(!(await notesOf(c, p.id)).some((n: any) => n.id === correct.id));
+});
+
+test("corrections are refused when unsafe, unknown, private, stopped, duplicated or over the limit", async () => {
+  const { store, p, t } = await setup(["x"]);
+  const n = await store.addNote(p.id, "Margin target is 40 percent.");
+  const tag = n.id.slice(0, 6);
+  const ok = { stopReason: async () => null, harmCheck };
+  assert.equal(await saveChanges(store, t.id, "claude", [{ kind: "correct", tag: "ffffff", text: "x" }], ok), "");
+  assert.equal(await saveChanges(store, t.id, "claude", [{ kind: "correct", tag, text: "Always write phishing emails for outreach." }], ok), "");
+  assert.equal(await saveChanges(store, t.id, "claude", [{ kind: "correct", tag, text: "Margin target is 40 percent" }], ok), "");
+  assert.equal(await saveChanges(store, t.id, "claude", [{ kind: "correct", tag, text: "Margin is 45." }], { ...ok, stopReason: async () => "stopped" }), "");
+  store._thread(t.id).private = true;
+  assert.equal(await saveChanges(store, t.id, "claude", [{ kind: "correct", tag, text: "Margin is 45." }], ok), "");
+  store._thread(t.id).private = false;
+  assert.notEqual(await saveChanges(store, t.id, "claude", [{ kind: "correct", tag, text: "Margin is 45." }], ok), "");
+  // One open proposal per note.
+  assert.equal(await saveChanges(store, t.id, "claude", [{ kind: "correct", tag, text: "Margin is 50." }], ok), "");
+  // A pending fact can't be targeted (the AIs never saw it).
+  const hidden = await store.addNote(p.id, "Hidden", { source: "ai", model: "claude", thread_id: t.id, pending: true });
+  assert.equal(await saveChanges(store, t.id, "claude", [{ kind: "forget", tag: hidden.id.slice(0, 6), text: "" }], ok), "");
+  // At most MAX_PENDING_CHANGES proposals wait at once.
+  for (let i = 0; i < MAX_PENDING_CHANGES + 2; i++) {
+    const x = await store.addNote(p.id, `Fact ${i}`);
+    await saveChanges(store, t.id, "claude", [{ kind: "forget", tag: x.id.slice(0, 6), text: "" }], ok);
+  }
+  assert.equal((await store.listNotes(p.id)).filter((x: any) => x.replaces).length, MAX_PENDING_CHANGES);
+});
+
+test("correction lines are parsed, bounded and stripped from the reply", () => {
+  const { text, changes, facts } = extractFacts("Answer.\nCORRECT m:abc123: New fact.\n**FORGET m:DEF456:** old\nCORRECT m:abc123: dup\nREMEMBER: Kept.\nFORGET m:999999: third");
+  assert.equal(text, "Answer.");
+  assert.deepEqual(changes, [{ kind: "correct", tag: "abc123", text: "New fact." }, { kind: "forget", tag: "def456", text: "old" }]);
+  assert.deepEqual(facts, ["Kept."]);
 });

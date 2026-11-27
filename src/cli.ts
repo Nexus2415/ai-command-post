@@ -9,12 +9,25 @@ import { Budget } from "./budget.ts";
 import { loadConfig } from "./config.ts";
 import { DryRunStore, LinearStore, type TaskStore } from "./linear.ts";
 import { tick, type Deps } from "./orchestrator.ts";
+import { agentFor } from "./agents.ts";
+import { createTokenSource } from "./identity.ts";
+import { liveRefusal } from "./provenance.ts";
 import { buildClients } from "./providers.ts";
+import { stopSwitchFrom } from "./stop-switch.ts";
+import { claimStoreFrom } from "./claims.ts";
 
 async function main() {
   const cmd = process.argv[2] ?? "status";
   const cfg = loadConfig();
   if (!cfg.keys.linear) throw new Error("LINEAR_API_KEY is required");
+  const refused = cmd === "status" ? null : liveRefusal(cfg);
+  if (refused) throw new Error(refused);
+  // The site's Stop everything switch. Live writes never run without it connected: an engine the owner can't stop
+  // from the site doesn't start.
+  const halt = stopSwitchFrom(process.env);
+  if (cmd !== "status" && cfg.active && !cfg.dryRun && !halt) {
+    throw new Error("Live writes refused: the Stop everything switch isn't connected. Set ACP_WORKSPACE_DB_URL and ACP_WORKSPACE_DB_KEY (the workspace project's service_role key) for the engine.");
+  }
 
   const real = new LinearStore(cfg.keys.linear);
   const store: TaskStore = cfg.dryRun ? new DryRunStore(real) : real;
@@ -30,14 +43,23 @@ async function main() {
   }
   const budget = new Budget({ capUsd: cfg.monthlyBudgetUsd, path: cfg.ledgerPath, resetMonth: cfg.ledgerResetMonth, remote });
 
+  // Each AI acts on GitHub as its own app when one is set up, otherwise through the shared token.
+  const tokens = createTokenSource({ apps: cfg.githubApps, sharedToken: cfg.keys.github });
   const deps: Deps = {
     cfg: cmd === "status" ? { ...cfg, active: false } : cfg,
     store,
     clients,
     budget,
+    ...(halt ? { halt } : {}),
+    // In a dry run nothing is really claimed, so the shared claim store isn't touched either.
+    ...(cfg.dryRun ? {} : { claims: claimStoreFrom(process.env) }),
     log: (l) => console.log(l),
     toolEnv: (issue) => ({
       githubToken: cfg.keys.github,
+      ...((): { githubAuth?: () => Promise<string | undefined> } => {
+        const agent = agentFor({ title: issue.title, labels: issue.labels, assignee: issue.assignee });
+        return agent ? { githubAuth: () => tokens.tokenFor(agent) } : {};
+      })(),
       firecrawlKey: cfg.keys.firecrawl,
       vercelToken: cfg.keys.vercel,
       dryRun: cfg.dryRun,
@@ -50,8 +72,17 @@ async function main() {
 
   console.log(
     `AI Command Post — team ${cfg.linearTeamKey} · ${cfg.active ? "ACTIVE" : "off"} · ${cfg.dryRun ? "dry run" : "live writes"} · cap $${cfg.monthlyBudgetUsd}` +
+      ` · GitHub as: ${Object.entries(cfg.githubApps).map(([k, v]) => `${k}=${v && "error" in v ? "MISCONFIGURED" : "own app"}`).join(", ") || "shared account"}` +
+      ` · claims ${cfg.provenanceSecret ? "signed" : "UNSIGNED"}, ${claimStoreFrom(process.env) ? "atomic" : "Linear-only"}` +
+      ` · stop switch ${halt ? "connected" : "NOT connected"}` +
       ` · agents online: ${Object.keys(clients).map((k) => AGENTS[k as keyof typeof AGENTS].name).join(", ") || "none"}`,
   );
+  // Which spelling each key was read under, so a misnamed secret is visible in the log (names only, never values).
+  const usedName = (a: string, b: string) => (process.env[a]?.trim() ? a : process.env[b]?.trim() ? b : null);
+  const keyNames = [usedName("ANTHROPIC_API_KEY", "ANTHROPIC_API_KE"), usedName("ACP_PROVENANCE_SECRET", "ACP_PROVENCE_SECRET")].filter(Boolean);
+  console.log(`Keys read from: ${keyNames.join(", ") || "none of the alternates"}`);
+  // Say why an app is refused (the reason names settings, never their values), so the owner can fix the right one.
+  for (const [k, v] of Object.entries(cfg.githubApps)) if (v && "error" in v) console.log(`GitHub app ${k}: ${v.error}`);
 
   const once = async () => {
     const r = await tick(deps);

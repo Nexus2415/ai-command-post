@@ -13,8 +13,7 @@
     } catch (e) { throw new Error("Network error: couldn't reach the server."); }
     const j = await r.json().catch(() => ({}));
     if (r.status === 401 && retry !== false) {
-      const pw = window.prompt("Password for AI Command Post");
-      if (pw) { password = pw; return defaultPost(action, args, false); }
+      if (window.ACPSession) return window.ACPSession.expired();
     }
     if (!r.ok) throw new Error(typeof j.error === "string" ? j.error : "Something went wrong (" + r.status + ").");
     return j;

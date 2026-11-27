@@ -38,12 +38,34 @@ jobs:
           ACP_LINEAR_TEAM_KEY: ${{ vars.ACP_LINEAR_TEAM_KEY || 'ARN' }}
           ACP_DEFAULT_LEAD: ${{ vars.ACP_DEFAULT_LEAD || 'claude' }}
           ACP_GITHUB_REPOS: ${{ vars.ACP_GITHUB_REPOS }}
+          # Each AI's own GitHub App (src/identity.ts): App ID in variable ARNEXYIA_<AI>_BOT, key in secret ARNEXYIA_<AI>_BOT
+          # (ACP_GH_APP_<AI>_* also work). Installation and slug are looked up when unset. Unset = shared ACP_GITHUB_TOKEN.
+          ACP_GH_APP_CLAUDE_ID: ${{ vars.ACP_GH_APP_CLAUDE_ID || vars.ARNEXYIA_CLAUDE_BOT }}
+          ACP_GH_APP_CLAUDE_INSTALLATION: ${{ vars.ACP_GH_APP_CLAUDE_INSTALLATION }}
+          ACP_GH_APP_CLAUDE_SLUG: ${{ vars.ACP_GH_APP_CLAUDE_SLUG }}
+          ACP_GH_APP_CLAUDE_KEY: ${{ secrets.ACP_GH_APP_CLAUDE_KEY || secrets.ARNEXYIA_CLAUDE_BOT }}
+          ACP_GH_APP_CHATGPT_ID: ${{ vars.ACP_GH_APP_CHATGPT_ID || vars.ARNEXYIA_CHATGPT_BOT }}
+          ACP_GH_APP_CHATGPT_INSTALLATION: ${{ vars.ACP_GH_APP_CHATGPT_INSTALLATION }}
+          ACP_GH_APP_CHATGPT_SLUG: ${{ vars.ACP_GH_APP_CHATGPT_SLUG }}
+          ACP_GH_APP_CHATGPT_KEY: ${{ secrets.ACP_GH_APP_CHATGPT_KEY || secrets.ARNEXYIA_CHATGPT_BOT }}
+          ACP_GH_APP_PERPLEXITY_ID: ${{ vars.ACP_GH_APP_PERPLEXITY_ID || vars.ARNEXYIA_PERPLEXITY_BOT }}
+          ACP_GH_APP_PERPLEXITY_INSTALLATION: ${{ vars.ACP_GH_APP_PERPLEXITY_INSTALLATION }}
+          ACP_GH_APP_PERPLEXITY_SLUG: ${{ vars.ACP_GH_APP_PERPLEXITY_SLUG }}
+          ACP_GH_APP_PERPLEXITY_KEY: ${{ secrets.ACP_GH_APP_PERPLEXITY_KEY || secrets.ARNEXYIA_PERPLEXITY_BOT }}
+          ACP_PROVENANCE_SECRET: ${{ secrets.ACP_PROVENANCE_SECRET }}
+          # Atomic claim store (src/claims.ts): the workspace Supabase project and its service_role key. Unset = Linear-only claims.
+          ACP_WORKSPACE_DB_URL: ${{ vars.ACP_WORKSPACE_DB_URL || secrets.ACP_WORKSPACE_DB_URL }}
+          ACP_WORKSPACE_DB_KEY: ${{ secrets.ACP_WORKSPACE_DB_KEY }}
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.ACP_GITHUB_TOKEN }}
           FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
           VERCEL_API_KEY: ${{ secrets.VERCEL_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # The owner's secret is saved as ANTHROPIC_API_KE (no final Y); accepted as a fallback so it needn't be re-pasted.
+          ANTHROPIC_API_KE: ${{ secrets.ANTHROPIC_API_KE }}
+          # Likewise his signing secret is ACP_PROVENCE_SECRET; passed under its own name so the log can say which was used.
+          ACP_PROVENCE_SECRET: ${{ secrets.ACP_PROVENCE_SECRET }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}
       - name: Save spend ledger

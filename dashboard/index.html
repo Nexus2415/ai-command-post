@@ -1,6 +1,6 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>NEXIA · Command</title>
+<title>Arnexyia · Assign work</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
@@ -146,9 +146,11 @@ button.link{background:none;border:0;padding:0;margin-left:8px;color:inherit;tex
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 </style>
 <link rel="stylesheet" href="ops-theme.css">
+<script src="session.js"></script>
 <script src="ops-ui.js"></script>
 <link rel="stylesheet" href="nexia.css">
-<nav class="nexia-nav" aria-label="Main menu"><a class="nexia-brand" href="/workspace.html" aria-label="NEXIA home"><svg class="nexia-emblem" aria-hidden="true" viewBox="0 0 96 96" fill="none"><circle cx="48" cy="48" r="44" stroke="#4688a5" stroke-dasharray="2 5"/><circle cx="48" cy="48" r="35" stroke="#65d9fa" stroke-opacity=".7"/><ellipse cx="48" cy="48" rx="15" ry="35" transform="rotate(45 48 48)" stroke="#65d9fa"/><ellipse cx="48" cy="48" rx="15" ry="35" transform="rotate(-45 48 48)" stroke="#65d9fa"/><circle cx="48" cy="48" r="6" fill="#d9f8ff"/><path d="M48 7V15M48 81V89M7 48H15M81 48H89" stroke="#83e5ff" stroke-width="2"/></svg><span><strong>NEXIA</strong><small>Your AI command center</small></span></a><div class="nexia-links"><a href="/workspace.html"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v12H9l-5 4z M8 9h8 M8 13h6"/></svg><span>Workspace<small>Talk to AI</small></span></a><a href="/index.html" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16v12H4z M7 10l3 2-3 2 M12 15h5"/></svg><span>Command<small>Assign work</small></span></a><a href="/command.html"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v6 M5 19v-5h14v5 M12 10v9 M10 4h4 M3 19h4 M10 19h4 M17 19h4"/></svg><span>Orchestrator<small>Track work</small></span></a><a href="/tools.html"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l9 5v8l-9 5-9-5V8z M3 8l9 5 9-5 M12 13v8"/></svg><span>Forge<small>Connect apps</small></span></a></div></nav>
+<header class="ax-head"><a class="nexia-brand" href="/home.html" aria-label="Arnexyia home"><svg class="ax-logo" aria-hidden="true" viewBox="0 0 40 40"><path fill="#7ff4ff" d="M20 3v15.5L11.5 36H3z"/><path fill="#16b6ca" d="M20 3 37 36h-8.5L20 18.5z"/><path fill="#2ee0ee" opacity=".55" d="M20 25.5 23.4 33h-6.8z"/></svg><span><strong class="ax-word">ARNEXYIA</strong><small class="ax-tag">The Intelligence Behind Operations.</small></span></a></header>
+<nav class="nexia-nav" aria-label="Main menu"><a class="nexia-brand" href="/home.html" aria-label="Arnexyia home"><svg class="ax-logo" aria-hidden="true" viewBox="0 0 40 40"><path fill="#7ff4ff" d="M20 3v15.5L11.5 36H3z"/><path fill="#16b6ca" d="M20 3 37 36h-8.5L20 18.5z"/><path fill="#2ee0ee" opacity=".55" d="M20 25.5 23.4 33h-6.8z"/></svg><span><strong class="ax-word">ARNEXYIA</strong><small class="ax-tag">The Intelligence Behind Operations.</small></span></a><div class="nexia-links"><a href="/home.html"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11 12 4l9 7v9a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/></svg><span>Home</span></a><a href="/workspace.html"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H10l-5 4v-4H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z"/><path d="M8.5 11h.01M12 11h.01M15.5 11h.01" stroke-width="2.6"/></svg><span>Command</span></a><a href="/tasks.html" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="m8 12 3 3 5-6"/></svg><span>Tasks</span></a><a href="/settings.html"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span>Settings</span></a></div></nav>
 
 <div class="wrap">
   <div class="bar">
@@ -195,7 +197,7 @@ button.link{background:none;border:0;padding:0;margin-left:8px;color:inherit;tex
     <div><span class="eyebrow">In progress</span><span class="n mono" id="nProg">—</span><span class="s">Being worked now</span></div>
     <div><span class="eyebrow">Queued</span><span class="n mono" id="nQueue">—</span><span class="s">Future tasks</span></div>
     <div><span class="eyebrow">Accomplished · 7 days</span><span class="n mono" id="nDone">—</span><span class="s" id="nDoneAll">Completed</span></div>
-    <div><span class="eyebrow">Unclaimed</span><span class="n mono" id="nUncl">—</span><span class="s">Open, no AI owner</span></div>
+    <div><span class="eyebrow">Unassigned</span><span class="n mono" id="nUncl">—</span><span class="s">Open, no AI owner</span></div>
   </section>
 
   <section data-legacy aria-labelledby="rosterH" style="display:grid;gap:10px">
@@ -306,7 +308,7 @@ async function setLead(k){if(paused(k)||!AGENTS.find(a=>a.key===k))return;lead=k
 
 function renderRoster(){
   const r=$("roster"); r.innerHTML="";
-  const cols=[...AGENTS,{key:"none",name:"Unclaimed",role:"Open tasks with no AI owner yet"}];
+  const cols=[...AGENTS,{key:"none",name:"Unassigned",role:"Open tasks with no AI owner yet"}];
   cols.forEach(a=>{const mine=issues.filter(i=>agentOf(i)===a.key);
     const c=k=>mine.filter(i=>lane(i)===k).length;
     const el=document.createElement("div");el.className="panel agent";el.dataset.ag=a.key;
@@ -320,7 +322,7 @@ function taskLi(it){const ag=agentOf(it);const a=AGENTS.find(x=>x.key===ag);
   const when=lane(it)==="done"?rel(it.completedAt||it.updatedAt):rel(it.updatedAt);
   const li=document.createElement("li");li.className="task";li.dataset.ag=ag;
   li.innerHTML='<span class="stripe"></span><div><a href="'+esc(it.url||"#")+'" target="_blank" rel="noopener">'+esc(it.title)+'</a>'+
-    '<div class="meta"><span>'+esc(it.id)+'</span><span class="ag">'+esc(a?a.name:"Unclaimed")+'</span>'+
+    '<div class="meta"><span>'+esc(it.id)+'</span><span class="ag">'+esc(a?a.name:"Unassigned")+'</span>'+
     (pr.value&&pr.value<=2?'<span class="prio-'+pr.value+'">'+esc(pr.name||("P"+pr.value))+'</span>':"")+
     (it.status?'<span>'+esc(it.status)+'</span>':"")+'<span>'+esc(when)+'</span></div></div>';
   return li;}
@@ -429,7 +431,7 @@ function webMcp(){
   async function call(tool,args,retry){
     const r=await fetch("/api/linear",{method:"POST",headers:{"content-type":"application/json","x-acp-password":memPw},body:JSON.stringify({tool:tool,args:args})});
     const j=await r.json().catch(()=>({}));
-    if(r.status===401&&retry!==false){const pw=window.prompt("Password for AI Command Post");if(pw){memPw=pw;return call(tool,args,false)}}
+    if(r.status===401&&retry!==false&&window.ACPSession)return window.ACPSession.expired();
     if(!r.ok)throw {code:r.status>=500&&r.status!==502?"server_unavailable":"tool_error",server:"Linear",message:j.error||("HTTP "+r.status)};
     return {payload:j};
   }

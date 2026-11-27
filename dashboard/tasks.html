@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#03101a">
+<title>Arnexyia · Tasks</title>
+<link rel="icon" href="icon.svg">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="stylesheet" href="nexia.css">
+<body>
+<header class="ax-head"><a class="nexia-brand" href="/home.html" aria-label="Arnexyia home"><svg class="ax-logo" aria-hidden="true" viewBox="0 0 40 40"><path fill="#7ff4ff" d="M20 3v15.5L11.5 36H3z"/><path fill="#16b6ca" d="M20 3 37 36h-8.5L20 18.5z"/><path fill="#2ee0ee" opacity=".55" d="M20 25.5 23.4 33h-6.8z"/></svg><span><strong class="ax-word">ARNEXYIA</strong><small class="ax-tag">The Intelligence Behind Operations.</small></span></a></header>
+<nav class="nexia-nav" aria-label="Main menu"><a class="nexia-brand" href="/home.html" aria-label="Arnexyia home"><svg class="ax-logo" aria-hidden="true" viewBox="0 0 40 40"><path fill="#7ff4ff" d="M20 3v15.5L11.5 36H3z"/><path fill="#16b6ca" d="M20 3 37 36h-8.5L20 18.5z"/><path fill="#2ee0ee" opacity=".55" d="M20 25.5 23.4 33h-6.8z"/></svg><span><strong class="ax-word">ARNEXYIA</strong><small class="ax-tag">The Intelligence Behind Operations.</small></span></a><div class="nexia-links"><a href="/home.html"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11 12 4l9 7v9a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/></svg><span>Home</span></a><a href="/workspace.html"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H10l-5 4v-4H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z"/><path d="M8.5 11h.01M12 11h.01M15.5 11h.01" stroke-width="2.6"/></svg><span>Command</span></a><a href="/tasks.html" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="m8 12 3 3 5-6"/></svg><span>Tasks</span></a><a href="/settings.html"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span>Settings</span></a></div></nav>
+<main class="ax-page">
+  <div class="ax-title">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4V3h6v1M8.5 12l2 2 4-4M8.5 17h7"/></svg>
+    <div><h1>Tasks</h1><p>Track and manage your work.</p></div>
+    <a class="ax-btn ax-act" href="/index.html"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>New task</a>
+  </div>
+
+  <div class="ax-stats" aria-label="Counts">
+    <div class="ax-stat t-accent"><b id="cTotal">–</b><span>Total</span></div>
+    <div class="ax-stat t-info"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m10 8 6 4-6 4z"/></svg><b id="cProg">–</b><span>In progress</span></div>
+    <div class="ax-stat t-warn"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><b id="cReview">–</b><span>To review</span></div>
+    <div class="ax-stat t-good"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></svg><b id="cDone">–</b><span>Completed</span></div>
+  </div>
+
+  <div class="ax-seg" role="tablist" aria-label="Show">
+    <button type="button" role="tab" id="tab-active" data-tab="active" aria-selected="true" aria-controls="tList">Active</button>
+    <button type="button" role="tab" id="tab-review" data-tab="review" aria-selected="false" aria-controls="tList">Review</button>
+    <button type="button" role="tab" id="tab-done" data-tab="done" aria-selected="false" aria-controls="tList">Completed</button>
+  </div>
+  <ul class="ax-list cards" id="tList" role="tabpanel" aria-labelledby="tab-active"><li class="ax-empty">Loading…</li></ul>
+  <p class="ax-msg" id="tMsg" hidden></p>
+  <p class="ax-muted" id="tFresh" style="font-size:13px;text-align:center;margin-top:14px"></p>
+  <p style="text-align:center;margin-top:6px"><a class="ax-btn ghost" href="/command.html">Team map: who is working on what</a></p>
+</main>
+<script src="session.js"></script>
+<script src="work.js"></script>
+<script src="tasks.js"></script>
+</body>
+</html>

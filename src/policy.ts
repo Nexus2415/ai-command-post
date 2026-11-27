@@ -85,7 +85,8 @@ export interface PolicyContext {
 export type Decision = { allow: true; tier: Tier } | { allow: false; tier: Tier; reason: string };
 
 export function decide(tool: string, input: Record<string, unknown>, ctx: PolicyContext): Decision {
-  const tier = TOOL_TIERS[tool];
+  // Own keys only: a tool named "constructor" or "toString" must not pick up an inherited value and pass as a tier.
+  const tier = Object.hasOwn(TOOL_TIERS, tool) ? TOOL_TIERS[tool] : undefined;
   if (!tier) return { allow: false, tier: "red", reason: `Unknown tool "${tool}" is blocked` };
 
   const text = JSON.stringify(input);

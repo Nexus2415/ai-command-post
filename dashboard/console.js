@@ -94,7 +94,7 @@
   }
   // Owner questions filed through intake are read-only, not unclaimed work.
   const isQuestion = it => /^\[Question\]/.test(String(it && it.title || ""));
-  const ownerLabel = it => AGENT_NAME[it && it.owner] || (isQuestion(it) ? "Owner question · no execution" : "Unclaimed");
+  const ownerLabel = it => AGENT_NAME[it && it.owner] || (it && it.owner === "shared" ? "Shared Operations" : isQuestion(it) ? "Owner question · no execution" : "Unassigned");
   // Engine and budget panel rows from the engine's own status report (display only; nothing is authorized by it).
   const STALE_MS = 6 * 3600 * 1000; // GitHub fires scheduled runs hours apart, so only a long gap is flagged.
   const usd = (n, dp) => "$" + Number(n).toFixed(dp);
@@ -156,8 +156,7 @@
     } catch (e) { const err = new Error("Network error: couldn't reach the server."); err.status = 0; throw err; }
     const j = await r.json().catch(() => ({}));
     if (r.status === 401 && retry !== false) {
-      const pw = window.prompt("Password for AI Command Post");
-      if (pw) { password = pw; return post(path, body, false); }
+      if (window.ACPSession) return window.ACPSession.expired();
     }
     if (!r.ok) { const err = new Error(errorMessage(r.status, j, path === "/api/intake" ? "intake" : "console")); err.status = r.status; throw err; }
     return j;

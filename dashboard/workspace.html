@@ -1,6 +1,6 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>NEXIA · Workspace</title>
+<title>Arnexyia · Command</title>
 <meta name="theme-color" content="#07111c">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
@@ -133,10 +133,12 @@ details.file pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:300px;ov
 <link rel="stylesheet" href="ops-theme.css">
 <link rel="stylesheet" href="flow-view.css">
 <link rel="stylesheet" href="workspace-chat.css">
+<script src="session.js"></script>
 <script src="ops-ui.js"></script>
 <link rel="stylesheet" href="nexia.css">
 <body class="nexia-chat">
-<nav class="nexia-nav" aria-label="Main menu"><a class="nexia-brand" href="/workspace.html" aria-label="NEXIA home"><svg class="nexia-emblem" aria-hidden="true" viewBox="0 0 96 96" fill="none"><circle cx="48" cy="48" r="44" stroke="#4688a5" stroke-dasharray="2 5"/><circle cx="48" cy="48" r="35" stroke="#65d9fa" stroke-opacity=".7"/><ellipse cx="48" cy="48" rx="15" ry="35" transform="rotate(45 48 48)" stroke="#65d9fa"/><ellipse cx="48" cy="48" rx="15" ry="35" transform="rotate(-45 48 48)" stroke="#65d9fa"/><circle cx="48" cy="48" r="6" fill="#d9f8ff"/><path d="M48 7V15M48 81V89M7 48H15M81 48H89" stroke="#83e5ff" stroke-width="2"/></svg><span><strong>NEXIA</strong><small>Your AI command center</small></span></a><div class="nexia-links"><a href="/workspace.html" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v12H9l-5 4z M8 9h8 M8 13h6"/></svg><span>Workspace<small>Talk to AI</small></span></a><a href="/index.html"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16v12H4z M7 10l3 2-3 2 M12 15h5"/></svg><span>Command<small>Assign work</small></span></a><a href="/command.html"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v6 M5 19v-5h14v5 M12 10v9 M10 4h4 M3 19h4 M10 19h4 M17 19h4"/></svg><span>Orchestrator<small>Track work</small></span></a><a href="/tools.html"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l9 5v8l-9 5-9-5V8z M3 8l9 5 9-5 M12 13v8"/></svg><span>Forge<small>Connect apps</small></span></a></div></nav>
+<header class="ax-head"><a class="nexia-brand" href="/home.html" aria-label="Arnexyia home"><svg class="ax-logo" aria-hidden="true" viewBox="0 0 40 40"><path fill="#7ff4ff" d="M20 3v15.5L11.5 36H3z"/><path fill="#16b6ca" d="M20 3 37 36h-8.5L20 18.5z"/><path fill="#2ee0ee" opacity=".55" d="M20 25.5 23.4 33h-6.8z"/></svg><span><strong class="ax-word">ARNEXYIA</strong><small class="ax-tag">The Intelligence Behind Operations.</small></span></a></header>
+<nav class="nexia-nav" aria-label="Main menu"><a class="nexia-brand" href="/home.html" aria-label="Arnexyia home"><svg class="ax-logo" aria-hidden="true" viewBox="0 0 40 40"><path fill="#7ff4ff" d="M20 3v15.5L11.5 36H3z"/><path fill="#16b6ca" d="M20 3 37 36h-8.5L20 18.5z"/><path fill="#2ee0ee" opacity=".55" d="M20 25.5 23.4 33h-6.8z"/></svg><span><strong class="ax-word">ARNEXYIA</strong><small class="ax-tag">The Intelligence Behind Operations.</small></span></a><div class="nexia-links"><a href="/home.html"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11 12 4l9 7v9a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/></svg><span>Home</span></a><a href="/workspace.html" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H10l-5 4v-4H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z"/><path d="M8.5 11h.01M12 11h.01M15.5 11h.01" stroke-width="2.6"/></svg><span>Command</span></a><a href="/tasks.html"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="m8 12 3 3 5-6"/></svg><span>Tasks</span></a><a href="/settings.html"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span>Settings</span></a></div></nav>
 
 <div class="wrap app">
   <h1 class="sr-only">Workspace</h1>
@@ -199,6 +201,7 @@ details.file pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:300px;ov
         <p class="welcome-h">Ask the AI team anything.</p>
         <p class="note">Pick a project and a thread, or start a new one. Your question goes in the box at the bottom, and the answer appears here.</p>
         <button class="btn" id="welcomeOpen" type="button">Choose a thread</button>
+        <div id="audioTest"><p class="note">Audio test · no thread, storage or AI request needed.</p></div>
       </div>
       <section class="approvals" id="aPanel" aria-labelledby="aH" hidden>
         <h3 id="aH" class="eyebrow">Waiting for your approval</h3>

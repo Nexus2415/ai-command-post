@@ -1,4 +1,6 @@
 // Runtime configuration. Every value comes from the environment; nothing secret lives in the repo.
+import { appSettingFor, type AppSetting } from "./identity.ts";
+import { provenanceSecret } from "./provenance.ts";
 
 export type AgentKey = "claude" | "chatgpt" | "gemini" | "perplexity";
 
@@ -21,6 +23,9 @@ export interface Config {
   ledgerPath: string;
   /** ACP_LEDGER_RESET=YYYY-MM: owner acknowledges that a lost ledger may restart at $0 for that month only. */
   ledgerResetMonth: string | undefined;
+  /** ACP_PROVENANCE_SECRET (32+ characters): signs the engine's claims and results so a typed marker can't pass for
+   *  one (src/provenance.ts). Unset = unsigned, and the engine refuses to run live. */
+  provenanceSecret: string | undefined;
   keys: {
     linear?: string;
     github?: string;
@@ -32,6 +37,8 @@ export interface Config {
     perplexity?: string;
   };
   models: Record<AgentKey, string>;
+  /** Each AI's own GitHub App (src/identity.ts). Missing = that AI uses the shared GITHUB_TOKEN. */
+  githubApps: Partial<Record<AgentKey, AppSetting>>;
   /** Repos agents may touch, as owner/name. Empty = GitHub tools disabled. */
   githubRepos: string[];
 }
@@ -84,13 +91,15 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     allowPullRequests: bool(env["ACP_ALLOW_PULL_REQUESTS"], false),
     ledgerPath: env["ACP_LEDGER_PATH"] ?? ".acp/ledger.json",
     ledgerResetMonth: opt("ACP_LEDGER_RESET"),
+    provenanceSecret: provenanceSecret(env["ACP_PROVENANCE_SECRET"] || env["ACP_PROVENCE_SECRET"]),
     keys: {
       linear: opt("LINEAR_API_KEY"),
       github: opt("GITHUB_TOKEN"),
       firecrawl: opt("FIRECRAWL_API_KEY"),
       vercel: opt("VERCEL_API_KEY"),
       openai: opt("OPENAI_API_KEY"),
-      anthropic: opt("ANTHROPIC_API_KEY"),
+      // ANTHROPIC_API_KE: the owner's secret name (missing the final Y), accepted so he needn't re-paste the key.
+      anthropic: opt("ANTHROPIC_API_KEY") ?? opt("ANTHROPIC_API_KE"),
       gemini: opt("GEMINI_API_KEY"),
       perplexity: opt("PERPLEXITY_API_KEY"),
     },
@@ -101,6 +110,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
       gemini: env["ACP_MODEL_GEMINI"] ?? "gemini-2.5-flash",
       perplexity: env["ACP_MODEL_PERPLEXITY"] ?? "sonar",
     },
+    githubApps: Object.fromEntries(AGENT_KEYS.map((k) => [k, appSettingFor(env, k)]).filter(([, v]) => v !== undefined)),
     githubRepos: (env["ACP_GITHUB_REPOS"] ?? "")
       .split(",")
       .map((s) => s.trim())
