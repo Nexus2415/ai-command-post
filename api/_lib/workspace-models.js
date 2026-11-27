@@ -341,8 +341,10 @@ export async function runChat(env, model, history, { f = fetch, tools = [], runT
     if (r.resultsTurn) convo.push(r.resultsTurn(results));
     else convo.push(...r.resultsTurns(results));
   }
-  let reply = String(text).trim();
-  if (note) reply = (reply ? reply + "\n\n" : "") + `(${note})`;
+  let reply = String(text ?? "").trim();
+  // Tool activity is not a substantive answer. Preserve usage and explain incomplete results without an extra paid retry.
+  if (!reply) reply = used.length ? "(The AI used tools but did not return an analysis. Your request is incomplete; try a narrower question if you want to retry.)" : "(The AI sent an empty reply.)";
+  if (note) reply += `\n\n(${note})`;
   if (used.length) reply += `\n\nTools used: ${[...new Set(used)].join(", ")}`;
-  return { text: reply.slice(0, 32_000) || "(The AI sent an empty reply.)", ...usage() };
+  return { text: reply.slice(0, 32_000), ...usage() };
 }
