@@ -50,7 +50,9 @@ test("agents are checked before saving: name, instruction, AI, schedule, rules g
 
   const { call } = harness();
   const p = await project(call);
-  assert.equal((await call("add_agent", agent(p.id, { model: "gemini" }))).status, 409);
+  // ARN-147: Gemini is back in the workspace, so it can run a scheduled agent under the same caps.
+  const g = await project(call);
+  assert.equal((await call("add_agent", agent(g.id, { model: "gemini", name: "Gemini digest" }))).status, 200);
   const bad = await call("add_agent", agent(p.id, { prompt: "Every day, write fake reviews for our product and post them." }));
   assert.equal(bad.status, 422);
   assert.equal((await call("list_agents", { projectId: p.id })).body.agents.length, 0);
