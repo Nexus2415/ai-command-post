@@ -12,6 +12,22 @@ const OVERVIEW = `query ConsoleOverview($team: ID!, $project: ID!) {
     team: { id: { eq: $team } }, project: { id: { eq: $project } }
   }) { nodes { ${FIELDS} } pageInfo { hasNextPage } }
 }`;
+// ARN-145: "done" result comments, read only for tasks with no single AI owner, so the board can say who reported
+// finishing them. One extra read, capped; if it fails the board still loads and the result reads "not recorded".
+const RESULTS = `query ConsoleResults($team: ID!, $project: ID!, $ids: [ID!]) {
+  issues(first: 50, filter: { id: { in: $ids }, team: { id: { eq: $team } }, project: { id: { eq: $project } } }) {
+    nodes { id comments(first: 50, filter: { body: { containsIgnoreCase: "result (" } }) { nodes { body } } }
+  }
+}`;
+const RESULT_LIMIT = 50;
+async function readResults(env, f, nodes) {
+  const want = nodes.filter(n => !projectIssue(n).owner || projectIssue(n).owner === "shared").map(n => n.id).slice(0, RESULT_LIMIT);
+  if (!want.length) return new Map();
+  const d = await gql(env, f, RESULTS, { team: TEAM_ID, project: PROJECT_ID, ids: want });
+  if (!Array.isArray(d.issues?.nodes)) return new Map();
+  return new Map(d.issues.nodes.filter(n => n && want.includes(n.id) && Array.isArray(n.comments?.nodes)).map(n => [n.id, n.comments.nodes]));
+}
+
 // The engine's status document lives in the same fixed project; it is read separately so a failure here never
 // hides the task board. Pages are followed up to STATUS_PAGES; a list still incomplete after that is unavailable.
 const STATUS = `query ConsoleEngineStatus($project: String!, $after: String) {
@@ -96,7 +112,9 @@ export async function handle(req, env, f = fetch, now = () => new Date()) {
       // Defense in depth: any row outside the fixed team/project (or missing either) means the upstream filter
       // can't be trusted, so the whole board is a failed read, never a quietly trimmed "fresh" snapshot.
       if (!data.issues.nodes.every(inScope)) throw new Error("Out-of-scope issue in response");
-      return { status: 200, body: { ...overviewOf(data.issues.nodes, now().toISOString(), data.issues.pageInfo.hasNextPage), ...engine } };
+      const results = await readResults(env, f, data.issues.nodes).catch(() => new Map());
+      const nodes = data.issues.nodes.map(n => (results.has(n.id) ? { ...n, comments: { nodes: results.get(n.id) } } : n));
+      return { status: 200, body: { ...overviewOf(nodes, now().toISOString(), data.issues.pageInfo.hasNextPage), ...engine } };
     }
     const data = await gql(env, f, THREAD, { identifier: body.identifier });
     if (!data.issue || !inScope(data.issue)) return error(404, "Issue not found in this operation.");

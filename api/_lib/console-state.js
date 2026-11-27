@@ -31,6 +31,27 @@ export function ownerOf(issueOrTitle) {
   });
 }
 
+// ARN-145: shared objectives every AI works toward. They are named here one by one, never guessed from a title, so
+// they show as "Shared Operations" rather than as work nobody picked up. Founding-pilot gates ARN-5 to ARN-10, the
+// mesh objective ARN-12 and the parent coordination issue ARN-43. Display only: the engine never routes on this.
+export const SHARED_OBJECTIVES = Object.freeze(["ARN-5", "ARN-6", "ARN-7", "ARN-8", "ARN-9", "ARN-10", "ARN-12", "ARN-43"]);
+
+// Who reported finishing the work, read from the team's own "## Result (<AI>, done)" comments. This is separate from
+// ownership: it never changes who a task is assigned to, and no result comment means "not recorded", never a guess.
+const EXECUTORS = [["codex", /\bcodex\b/i], ["claude", /\bclaude\b/i], ["chatgpt", /chat\s*gpt/i], ["perplexity", /perplexity/i], ["gemini", /gemini/i]];
+const RESULT_DONE = /^\s*#{1,6}\s*Result\s*\(\s*([^,()\n]{1,40}?)\s*,\s*done\b/i;
+export function executorsOf(comments) {
+  if (!Array.isArray(comments)) return null;
+  const found = [];
+  for (const c of comments) {
+    const m = RESULT_DONE.exec(String(c?.body || "").split("\n", 1)[0]);
+    if (!m) continue;
+    const key = EXECUTORS.find(([, re]) => re.test(m[1]))?.[0];
+    if (key && !found.includes(key)) found.push(key);
+  }
+  return found;
+}
+
 export function laneOf(issue) {
   // Terminal state wins: canceled is NOT accomplished, even if a result says "done".
   const type = issue.state?.type;
@@ -48,7 +69,10 @@ export function laneOf(issue) {
 export function projectIssue(issue) {
   return {
     id: issue.identifier, uuid: issue.id, title: issue.title || "",
-    url: safeLinearUrl(issue.url), owner: ownerOf(issue),
+    url: safeLinearUrl(issue.url),
+    owner: ownerOf(issue) ?? (SHARED_OBJECTIVES.includes(issue.identifier) ? "shared" : null),
+    // null = no evidence was read for this task; [] = read, and no AI posted a "done" result.
+    executedBy: executorsOf(issue.comments?.nodes),
     status: issue.state?.name || "Unknown", statusType: issue.state?.type || "unknown",
     lane: laneOf(issue),
     // Owner questions are recorded for an answer, never queued as executable work.

@@ -197,7 +197,7 @@ button.link{background:none;border:0;padding:0;margin-left:8px;color:inherit;tex
     <div><span class="eyebrow">In progress</span><span class="n mono" id="nProg">—</span><span class="s">Being worked now</span></div>
     <div><span class="eyebrow">Queued</span><span class="n mono" id="nQueue">—</span><span class="s">Future tasks</span></div>
     <div><span class="eyebrow">Accomplished · 7 days</span><span class="n mono" id="nDone">—</span><span class="s" id="nDoneAll">Completed</span></div>
-    <div><span class="eyebrow">Unclaimed</span><span class="n mono" id="nUncl">—</span><span class="s">Open, no AI owner</span></div>
+    <div><span class="eyebrow">Unassigned</span><span class="n mono" id="nUncl">—</span><span class="s">Open, no AI owner</span></div>
   </section>
 
   <section data-legacy aria-labelledby="rosterH" style="display:grid;gap:10px">
@@ -308,7 +308,7 @@ async function setLead(k){if(paused(k)||!AGENTS.find(a=>a.key===k))return;lead=k
 
 function renderRoster(){
   const r=$("roster"); r.innerHTML="";
-  const cols=[...AGENTS,{key:"none",name:"Unclaimed",role:"Open tasks with no AI owner yet"}];
+  const cols=[...AGENTS,{key:"none",name:"Unassigned",role:"Open tasks with no AI owner yet"}];
   cols.forEach(a=>{const mine=issues.filter(i=>agentOf(i)===a.key);
     const c=k=>mine.filter(i=>lane(i)===k).length;
     const el=document.createElement("div");el.className="panel agent";el.dataset.ag=a.key;
@@ -322,7 +322,7 @@ function taskLi(it){const ag=agentOf(it);const a=AGENTS.find(x=>x.key===ag);
   const when=lane(it)==="done"?rel(it.completedAt||it.updatedAt):rel(it.updatedAt);
   const li=document.createElement("li");li.className="task";li.dataset.ag=ag;
   li.innerHTML='<span class="stripe"></span><div><a href="'+esc(it.url||"#")+'" target="_blank" rel="noopener">'+esc(it.title)+'</a>'+
-    '<div class="meta"><span>'+esc(it.id)+'</span><span class="ag">'+esc(a?a.name:"Unclaimed")+'</span>'+
+    '<div class="meta"><span>'+esc(it.id)+'</span><span class="ag">'+esc(a?a.name:"Unassigned")+'</span>'+
     (pr.value&&pr.value<=2?'<span class="prio-'+pr.value+'">'+esc(pr.name||("P"+pr.value))+'</span>':"")+
     (it.status?'<span>'+esc(it.status)+'</span>':"")+'<span>'+esc(when)+'</span></div></div>';
   return li;}

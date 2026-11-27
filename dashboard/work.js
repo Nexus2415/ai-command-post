@@ -3,6 +3,7 @@
 (function (root) {
   "use strict";
   const NAMES = { claude: "Claude", chatgpt: "ChatGPT", gemini: "Gemini", perplexity: "Perplexity", codex: "Codex" };
+  const GROUPS = { shared: "Shared Operations" };
   const LABEL = { active: "In progress", queued: "Not started", blocked: "Blocked", review: "Needs review", done: "Completed", canceled: "Canceled" };
   const RANK = { blocked: 0, active: 1, review: 2, queued: 3, done: 4, canceled: 5 };
   const TABS = { active: ["active", "queued", "blocked"], review: ["review"], done: ["done"] };
@@ -32,7 +33,14 @@
   }
   // Home's "Active work": open and review tasks, most urgent first.
   const activeWork = (o, max) => tasksOf(o).filter((i) => ["active", "blocked", "review", "queued"].includes(i.lane)).sort(byUrgency).slice(0, max || 4);
-  const ownerName = (k) => NAMES[k] || "Unassigned";
+  const ownerName = (k) => NAMES[k] || GROUPS[k] || "Unassigned";
+  // ARN-145: who posted a "## Result (<AI>, done)" on the task, apart from who owns it. Only shown when it adds
+  // something (no owner, or a different AI than the owner); no result comment shows nothing, never a guess.
+  function resultBy(it) {
+    const ex = it && Array.isArray(it.executedBy) ? it.executedBy.filter((k) => NAMES[k]) : [];
+    if (!ex.length || (ex.length === 1 && ex[0] === it.owner)) return "";
+    return "Result by " + ex.map((k) => NAMES[k]).join(", ");
+  }
   const label = (lane) => LABEL[lane] || "Unknown";
   function safeUrl(u) { const s = String(u || "").trim(); return /^https:\/\/linear\.app\/[^\s"'<>]*$/i.test(s) ? s : null; }
   function greeting(hour, name) {
@@ -40,7 +48,7 @@
     const n = String(name || "").trim().slice(0, 40);
     return n ? part + ", " + n : part;
   }
-  const api = { counts, tab, activeWork, ownerName, label, safeUrl, greeting, TABS };
+  const api = { counts, tab, activeWork, ownerName, resultBy, label, safeUrl, greeting, TABS };
   root.ACPWork = api;
   if (typeof document === "undefined") return;
 
@@ -55,6 +63,7 @@
   const GLYPH = {
     claude: "M9 7l-5 5 5 5M15 7l5 5-5 5", chatgpt: "M4 6h16M4 12h10M4 18h7", perplexity: "M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM16 16l5 5",
     gemini: "M12 3l2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5z", codex: "M5 5h14v14H5zM9 9h6M9 13h6M9 17h3", none: "M12 4v8M12 16v.01M4 20h16L12 4z",
+    shared: "M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM12 3v6M12 15v6M3 12h6M15 12h6",
   };
   const CHEV = "M9 6l6 6-6 6";
   // One task as a row: owner icon, title, "ARN-12 · Claude" and a status pill; opens the task in Linear.
@@ -66,7 +75,8 @@
     const main = el("span", "ax-main");
     main.append(el("strong", null, it.title || "Untitled task"));
     const sub = el("small");
-    sub.append(el("span", null, (it.id ? it.id + " · " : "") + ownerName(it.owner)), el("span", "ax-pill " + (it.lane || ""), label(it.lane)));
+    const by = resultBy(it);
+    sub.append(el("span", null, (it.id ? it.id + " · " : "") + ownerName(it.owner) + (by ? " · " + by : "")), el("span", "ax-pill " + (it.lane || ""), label(it.lane)));
     main.append(sub);
     a.append(ico, main);
     if (url) a.append(icon(CHEV, "ax-chev"));
