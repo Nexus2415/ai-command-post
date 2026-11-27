@@ -15,7 +15,8 @@ jobs:
   tick:
     if: vars.ACP_ACTIVE == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    # A coder may wait up to 4 minutes per check of its own PR (ARN-149), so a run can take longer than before.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

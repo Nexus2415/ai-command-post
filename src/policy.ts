@@ -17,8 +17,10 @@ export const TOOL_TIERS: Record<string, Tier> = {
   "linear.comment": "green",
   "vercel.list_deployments": "green",
   "vercel.deployment_status": "green",
+  "github.pr_checks": "green",
   "linear.create_subtask": "yellow",
   "github.open_pull_request": "yellow",
+  "github.update_pull_request": "yellow",
 };
 
 /** Words that mark a requested action as owner-only no matter which tool is asked for. */
@@ -104,7 +106,7 @@ export function decide(tool: string, input: Record<string, unknown>, ctx: Policy
       return { allow: false, tier, reason: `Repo ${String(repo)} is not in ACP_GITHUB_REPOS` };
     }
   }
-  if (tool === "github.open_pull_request" && !ctx.allowPullRequests) {
+  if ((tool === "github.open_pull_request" || tool === "github.update_pull_request") && !ctx.allowPullRequests) {
     return { allow: false, tier, reason: "Opening pull requests is disabled (ACP_ALLOW_PULL_REQUESTS=false)" };
   }
   if (text.length > 200_000) return { allow: false, tier, reason: "Tool input too large" };
