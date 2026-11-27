@@ -151,3 +151,18 @@ body{background-image:none;font-size:15px}
   radial-gradient(circle,var(--accent) 45%,transparent 50%) 26px 50%/10px 10px no-repeat;animation:think 1.2s ease-in-out infinite}
 @keyframes think{50%{opacity:.35}}
 @media (prefers-reduced-motion:reduce){.m.thinking .dots{animation:none}}
+/* Sources and footnotes under an answer: one closed drop-down, opened on tap. */
+details.srcs{margin-top:10px;font-size:13px;color:var(--muted)}
+details.srcs > summary{cursor:pointer;display:inline-flex;align-items:center;gap:6px;min-height:32px;padding:2px 12px;border:1px solid var(--line);border-radius:999px;font:500 12px var(--mono);list-style:none}
+details.srcs > summary::-webkit-details-marker{display:none}
+details.srcs > summary::after{content:"▾";font-size:11px}
+details.srcs[open] > summary::after{content:"▴"}
+details.srcs[open] > summary{color:var(--fg);border-color:var(--accent)}
+.srcs-body{display:grid;gap:10px;margin-top:10px;padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:var(--panel)}
+.srclist{margin:0;padding-left:18px;display:grid;gap:4px;overflow-wrap:anywhere}
+.srclist a{color:var(--accent)}
+.srcs-body .rt-fold{background:var(--panel-2)}
+.srcs-body .m.check{font-size:13px;margin:0}
+.m .part{margin:12px 0 0}
+.m .part b{color:var(--fg);font-weight:600}
+.srcs-body .part{margin:0}

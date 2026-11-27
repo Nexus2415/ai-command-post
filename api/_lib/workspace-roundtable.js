@@ -2,7 +2,7 @@
 // one synthesis for the owner. Pure helpers here; api/workspace.js runs the rounds, one request per round, so each
 // stays inside the function's time limit and each is budget-checked on its own.
 import { stripSources } from "./workspace-shared.js";
-import { MAX_OUTPUT_TOKENS, costUsd, OPENROUTER_FEE, modelStatus, isNotice } from "./workspace-models.js";
+import { MAX_OUTPUT_TOKENS, STYLE, costUsd, OPENROUTER_FEE, modelStatus, isNotice } from "./workspace-models.js";
 
 // Stored rounds are ordinary assistant messages. Rounds 2 and 3 start with these markers so the thread, the
 // screen and later replies can tell them apart. Only the server writes assistant messages, so a user can't fake one.
@@ -96,11 +96,15 @@ export function synthesisPrompt(question, answers, critiques) {
     "First settle every conflict: wherever the answers or critiques contradict each other, decide which position " +
       "is right on the strength of the evidence and reasoning, not on how many AIs held it. Then write the one " +
       "concluded answer for the owner, built from the best parts of every answer, in plain language a non-technical " +
-      "reader understands, with these headings:\n" +
-      "Answer: the full best answer to the question (not a summary of the discussion).\n" +
+      "reader understands. It is read as one voice, Arnexyia's: never mention the roundtable, the other AIs, answer " +
+      "letters or the discussion inside the Answer, Risks or Next step. Use exactly these four labels, each at the " +
+      "start of its own line, in this order:\n" +
+      "Answer: the full best answer to the question (not a summary of the discussion). " + STYLE.replace(/ If you used[^]*$/, "") + "\n" +
+      "Next step: the single next action, in one sentence.\n" +
+      "Risks: the main risk or two, in one or two sentences.\n" +
       "Conflicts settled: each point the AIs disagreed on, which way it was decided, and why. If they agreed " +
       "throughout, write \"None: the AIs agreed.\" If one can't be settled, say so and what would settle it.\n" +
-      "Risks: the main risks of the answer.\nNext step: the single next action.\nBe concise: about 350 words.",
+      "Be concise: about 300 words in all.",
   ].join("\n\n");
 }
 

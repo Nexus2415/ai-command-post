@@ -223,8 +223,8 @@
       if (kind === "check") box.classList.add("check");
       box.append(el("span", "who", kind === "critique" ? name + " · review and revised answer"
         : kind === "check" ? "Checked by " + name + (/^\W*disagree\b/i.test(body) ? " · disagrees" : " · agrees")
-        : kind === "synthesis" ? "Concluded answer · agreed by the AIs, written by " + name : name));
-      showContent(box, kind === "critique" || kind === "synthesis" || kind === "check" ? body : m.content);
+        : kind === "synthesis" ? "Arnexyia" : name));
+      showContent(box, kind === "critique" || kind === "synthesis" || kind === "check" ? body : m.content, m.role === "assistant" ? kind : "user");
       if (m.role === "assistant" && window.speechSynthesis) box.firstChild.append(speakButton(box));
       return box;
     };
@@ -237,15 +237,24 @@
       const synth = ai.find((m) => kindOf(m) === "synthesis");
       if (synth) {
         const answers = ai.filter((m) => kindOf(m) === "answer"), reviews = ai.filter((m) => ["check", "critique"].includes(kindOf(m)));
-        list.append(boxOf(synth, "synthesis"));
-        if (answers.length) list.append(fold("Each AI's own answer (" + answers.map(nameOf).join(", ") + ")", rowOf(answers, "answer")));
-        if (reviews.length) { const r = el("div", "cmp"); r.dataset.kind = "critique"; for (const m of reviews) r.append(boxOf(m, kindOf(m))); list.append(fold("How they settled their disagreements", r)); }
+        const sb = boxOf(synth, "synthesis");
+        list.append(sb);
+        // Behind the answer, in its drop-down: each AI's own answer and how they settled their disagreements.
+        if (answers.length) addExtra(sb, fold("Each AI's own answer (" + answers.map(nameOf).join(", ") + ")", rowOf(answers, "answer")), 0);
+        if (reviews.length) { const r = el("div", "cmp"); r.dataset.kind = "critique"; for (const m of reviews) r.append(boxOf(m, kindOf(m))); addExtra(sb, fold("How they settled their disagreements", r), 0); }
         for (const m of ai) if (!["synthesis", "answer", "critique", "check"].includes(kindOf(m))) list.append(boxOf(m, kindOf(m)));
         continue;
       }
       let row = null, rowKind = null;
       for (const m of ai) {
         const kind = kindOf(m);
+        // A checker that agreed is a footnote: it goes in the drop-down of the answer it checked.
+        const prev = row && row.lastElementChild;
+        if (kind === "check" && prev && rowKind === "answer" && !/^\W*disagree\b/i.test(m.content.replace(/^\[[^\]\n]*\]\n?/, ""))) {
+          const note = boxOf(m, kind); note.querySelector(".speak")?.remove();
+          addExtra(prev, note, 0);
+          continue;
+        }
         if (!row || rowKind !== kind) {
           row = el("div", "cmp"); rowKind = kind; row.dataset.kind = kind;
           if (kind === "critique") list.append(el("div", "round", "Step 2 of 3 · Settling disagreements"));
@@ -354,14 +363,85 @@
   const ROUTE_LINE = /\n*Answered by the light model \(smart routing\): ([^\n]*)/;
   // Attached files arrive folded into the message between markers; each shows as a collapsible block.
   const FILE_BLOCK = /<<<file: ([^\n]{1,120})>>>\n([\s\S]*?)\n<<<end of file>>>/g;
-  function showContent(box, content) {
+  // Under each answer, sources, web activity and the other footnotes sit in one closed drop-down ("Sources (3)"),
+  // so the answer itself reads clean. Everything is still there, one tap away.
+  const AUDIT = /\n*Web activity \(audit, times UTC, total \$([\d.]+)\):\n((?:- [^\n]*(?:\n|$))+)/;
+  const ROUNDTABLE_LINE = /\n*Roundtable: [^\n]*Conclusion by [^\n]*$/;
+  // A "Sources:" block the AI wrote at the end of its answer (the system prompt asks for exactly that).
+  const MODEL_SOURCES = /\n[ \t]*(?:\*\*|#{1,6}[ \t]*)?(?:Sources?|References|Citations)(?:\*\*)?[ \t]*:?(?:\*\*)?[ \t]*\n((?:[ \t]*\S[^\n]*(?:\n|$)){1,20})\s*$/i;
+  // The synthesis' labelled parts. Answer, Next step and Risks are shown; Conflicts settled goes in the drop-down.
+  const PART = /^(Answer|Next step|Risks|Conflicts settled):[ \t]*/gim;
+  // Plain text only: drop markdown markers the AI may still send, so no stray ** or # shows.
+  const tidy = (t) => t.replace(/\*\*([^*\n]+)\*\*/g, "$1").replace(/__([^_\n]+)__/g, "$1").replace(/^#{1,6}[ \t]+/gm, "").replace(/\n{3,}/g, "\n\n");
+  function extrasOf(box) {
+    let d = box.querySelector(":scope > details.srcs");
+    if (!d) {
+      d = el("details", "srcs");
+      d.append(el("summary", null, "Details"), el("div", "srcs-body"));
+      d.dataset.count = "0";
+      box.append(d);
+    }
+    return d;
+  }
+  function addExtra(box, node, sources) {
+    const d = extrasOf(box);
+    d.lastElementChild.append(node);
+    const n = Number(d.dataset.count) + (sources || 0);
+    d.dataset.count = String(n);
+    d.firstElementChild.textContent = n ? "Sources (" + n + ")" : "Details";
+  }
+  const linkOrText = (line) => {
+    const li = el("li");
+    const m = line.match(/https?:\/\/[^\s)>\]]+/);
+    if (!m) { li.textContent = line; return li; }
+    const before = line.slice(0, m.index).replace(/[\s:(\[<-]+$/, "").replace(/^\[|\]$/g, "");
+    if (before) li.append(document.createTextNode(before + " "));
+    const a = el("a", null, m[0].replace(/^https?:\/\/(www\.)?/, "").slice(0, 80));
+    a.href = m[0]; a.target = "_blank"; a.rel = "noopener noreferrer";
+    li.append(a);
+    return li;
+  };
+  function showContent(box, content, kind) {
+    const ai = kind && kind !== "user";
+    const later = [];
     const src = content.match(SOURCES_LINE);
     if (src) content = content.replace(SOURCES_LINE, "");
     const route = content.match(ROUTE_LINE);
     if (route) content = content.replace(ROUTE_LINE, "");
-    showText(box, content);
-    if (src) box.append(el("div", "drew", "Drew on: " + src[1]));
-    if (route) box.append(el("div", "drew", "⚡ Light model: " + route[1]));
+    const audit = ai ? content.match(AUDIT) : null;
+    if (audit) content = content.replace(AUDIT, "");
+    const rt = ai ? content.match(ROUNDTABLE_LINE) : null;
+    if (rt) content = content.replace(ROUNDTABLE_LINE, "");
+    const own = ai ? content.match(MODEL_SOURCES) : null;
+    if (own && own.index > content.length * 0.3) content = content.slice(0, own.index);
+    const ownList = own && own.index !== undefined && content.length <= own.index ? own[1].split("\n").map((l) => l.replace(/^[ \t]*(?:[-*•]|\d+[.)])[ \t]*/, "").trim()).filter(Boolean) : [];
+    if (ai) content = tidy(content);
+    if (kind === "synthesis") {
+      const parts = {}; let order = [];
+      const marks = [...content.matchAll(PART)];
+      if (marks.length) {
+        marks.forEach((m, i) => { const key = m[1].toLowerCase(); parts[key] = content.slice(m.index + m[0].length, i + 1 < marks.length ? marks[i + 1].index : content.length).trim(); order.push(key); });
+        const lead = content.slice(0, marks[0].index).trim();
+        showText(box, [lead, parts.answer].filter(Boolean).join("\n\n"));
+        for (const [key, label] of [["next step", "Next step"], ["risks", "Risks"]]) {
+          if (!parts[key]) continue;
+          const p = el("p", "part"); p.append(el("b", null, label + ": "), document.createTextNode(parts[key])); box.append(p);
+        }
+        if (parts["conflicts settled"]) { const p = el("p", "part"); p.append(el("b", null, "Where the AIs disagreed: "), document.createTextNode(parts["conflicts settled"])); later.push([p, 0]); }
+      } else showText(box, content);
+    } else showText(box, content);
+    if (ownList.length) { const ul = el("ul", "srclist"); ownList.forEach((l) => ul.append(linkOrText(l))); later.push([ul, ownList.length]); }
+    if (audit) {
+      const lines = audit[2].split("\n").filter(Boolean).map((l) => l.replace(/^- /, ""));
+      const wrap = el("div", "webact");
+      wrap.append(el("div", "eyebrow", "Web reads and searches · $" + Number(audit[1]).toFixed(3)));
+      const ul = el("ul", "srclist"); lines.forEach((l) => ul.append(linkOrText(l))); wrap.append(ul);
+      later.push([wrap, ownList.length ? 0 : lines.length]);
+    }
+    if (src) later.push([el("div", "drew", "Drew on other threads: " + src[1]), 0]);
+    if (route) later.push([el("div", "drew", "⚡ Light model: " + route[1]), 0]);
+    if (rt) later.push([el("div", "drew", rt[0].trim()), 0]);
+    for (const [node, n] of later) addExtra(box, node, n);
   }
   // Images and PDFs are named by a marker (same as api/_lib/workspace-files.js); each shows as the picture itself,
   // or a button that opens the PDF. Files are fetched from the server and shown through blob links, never as HTML.
@@ -793,7 +873,7 @@
       stopSpeaking();
       const synth = window.speechSynthesis;
       if (!synth || !window.SpeechSynthesisUtterance) { say("Read aloud is not available in this browser.", "err"); return; }
-      const parts = [...box.childNodes].filter((n) => !(n.nodeType === 1 && (n.classList.contains("who") || n.classList.contains("drew") || n.classList.contains("attached"))))
+      const parts = [...box.childNodes].filter((n) => !(n.nodeType === 1 && (n.classList.contains("who") || n.classList.contains("drew") || n.classList.contains("attached") || n.classList.contains("srcs"))))
         .map((n) => n.textContent).join(" ").replace(/\s+/g, " ").trim();
       const chunks = (parts.match(/[^.!?]{1,220}[.!?]*|[^.!?]+|[.!?]+/g) || []).map(c => c.trim()).filter(Boolean);
       if (!chunks.length) { say("There is no answer text to read aloud.", "err"); return; }
