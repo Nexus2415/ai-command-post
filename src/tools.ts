@@ -117,19 +117,81 @@ export function prPath(v: unknown): string {
   return p;
 }
 
-export function prFiles(v: unknown): { path: string; content: string }[] {
-  if (!Array.isArray(v) || !v.length) throw new Error('"files" must be a non-empty array of {path, content}');
+/** One exact find/replace on a file the agent did not rewrite whole (ARN-148). */
+export interface FileEdit {
+  find: string;
+  replace: string;
+}
+export type PrFile = { path: string; content: string } | { path: string; edits: FileEdit[] };
+export const MAX_EDITS_PER_FILE = 40;
+
+/**
+ * Files arrive either whole ({path, content}) or as exact edits ({path, edits:[{find, replace}]}). Edits let an AI
+ * change a large file without re-sending all of it in one reply; the reply size had capped the engine to small files.
+ */
+export function prFiles(v: unknown): PrFile[] {
+  if (!Array.isArray(v) || !v.length) throw new Error('"files" must be a non-empty array of {path, content} or {path, edits}');
   if (v.length > MAX_PR_FILES) throw new Error(`A pull request may touch at most ${MAX_PR_FILES} files`);
   const seen = new Set<string>();
   return v.map((f) => {
-    if (!f || typeof f !== "object" || typeof f.content !== "string") throw new Error("Each file needs path and content");
-    if (f.content.length > MAX_FILE_CHARS) throw new Error(`File content may be at most ${MAX_FILE_CHARS} characters`);
+    if (!f || typeof f !== "object") throw new Error("Each file needs path and content, or path and edits");
+    const hasContent = typeof f.content === "string";
+    const hasEdits = f.edits !== undefined;
+    if (hasContent === hasEdits) throw new Error("Each file needs path and content, or path and edits (not both)");
     const path = prPath(f.path);
     const key = path.toLowerCase();
     if (seen.has(key)) throw new Error(`File path "${path}" appears more than once`);
     seen.add(key);
-    return { path, content: f.content };
+    if (hasContent) {
+      if (f.content.length > MAX_FILE_CHARS) throw new Error(`File content may be at most ${MAX_FILE_CHARS} characters`);
+      return { path, content: f.content };
+    }
+    if (!Array.isArray(f.edits) || !f.edits.length) throw new Error(`"edits" for ${path} must be a non-empty array of {find, replace}`);
+    if (f.edits.length > MAX_EDITS_PER_FILE) throw new Error(`At most ${MAX_EDITS_PER_FILE} edits per file`);
+    const edits = f.edits.map((e: any, i: number) => {
+      if (!e || typeof e.find !== "string" || !e.find || typeof e.replace !== "string") {
+        throw new Error(`Edit ${i + 1} for ${path} needs a non-empty "find" and a "replace" string`);
+      }
+      if (e.find.length > MAX_FILE_CHARS || e.replace.length > MAX_FILE_CHARS) throw new Error(`Edit ${i + 1} for ${path} is too large`);
+      return { find: e.find, replace: e.replace };
+    });
+    return { path, edits };
   });
+}
+
+/**
+ * Applies edits in order. Each "find" must occur exactly once in the text as it stands at that point, so an edit can
+ * never land in the wrong place silently; a miss or an ambiguous match fails the whole file before anything is written.
+ */
+export function applyEdits(path: string, base: string, edits: FileEdit[]): string {
+  let text = base;
+  edits.forEach((e, i) => {
+    const at = text.indexOf(e.find);
+    if (at < 0) throw new Error(`Edit ${i + 1} for ${path}: "find" text not found. Read the file again and copy the text exactly`);
+    if (text.indexOf(e.find, at + 1) >= 0) throw new Error(`Edit ${i + 1} for ${path}: "find" text appears more than once; include more surrounding lines`);
+    text = text.slice(0, at) + e.replace + text.slice(at + e.find.length);
+  });
+  if (text.length > MAX_FILE_CHARS) throw new Error(`File content may be at most ${MAX_FILE_CHARS} characters`);
+  return text;
+}
+
+/** Line numbers for github.read_file's optional range (1-based, inclusive). */
+export const MAX_READ_LINES = 400;
+export function lineRange(input: Record<string, unknown>): { from: number; to: number } | null {
+  const { from, to } = input;
+  if (from === undefined && to === undefined) return null;
+  const a = from === undefined ? 1 : Number(from);
+  const b = to === undefined ? a + MAX_READ_LINES - 1 : Number(to);
+  if (!Number.isInteger(a) || !Number.isInteger(b) || a < 1 || b < a) throw new Error('"from" and "to" must be whole line numbers with from <= to');
+  return { from: a, to: Math.min(b, a + MAX_READ_LINES - 1) };
+}
+
+/** Returns the asked lines with a header naming the span, so the AI knows where it is in a long file. */
+export function sliceLines(text: string, r: { from: number; to: number }): string {
+  const lines = text.split("\n");
+  const end = Math.min(r.to, lines.length);
+  if (r.from > lines.length) return `[file has ${lines.length} lines; nothing at line ${r.from}]`;
+  return `[lines ${r.from}-${end} of ${lines.length}]\n${lines.slice(r.from - 1, end).join("\n")}`;
 }
 
 const encodePath = (p: string) => p.split("/").map(encodeURIComponent).join("/");
@@ -185,9 +247,17 @@ const HANDLERS: Record<string, (input: Record<string, unknown>, env: ToolEnv) =>
     const repo = str(input, "repo");
     const path = readPath(input["path"]);
     const ref = input["ref"] === undefined ? "" : `?ref=${encodeURIComponent(gitRef(input["ref"], ""))}`;
+    const range = lineRange(input);
     const j = await gh(env, `/repos/${repo}/contents/${encodePath(path)}${ref}`);
     if (Array.isArray(j)) return j.map((e: any) => `${e.type}\t${e.path}`).join("\n");
-    return Buffer.from(j.content ?? "", "base64").toString("utf8");
+    const text = Buffer.from(j.content ?? "", "base64").toString("utf8");
+    if (range) return sliceLines(text, range);
+    // A long file would be cut at the output limit with no way to see the rest; say how to page through it.
+    if (text.length > MAX_OUTPUT) {
+      const n = text.split("\n").length;
+      return `${text.slice(0, MAX_OUTPUT - 300)}\n…[file is ${text.length} characters, ${n} lines; read the rest with "from" and "to" line numbers, at most ${MAX_READ_LINES} lines per read]`;
+    }
+    return text;
   },
   async "github.list_tree"(input, env) {
     const repo = str(input, "repo");
@@ -209,11 +279,36 @@ const HANDLERS: Record<string, (input: Record<string, unknown>, env: ToolEnv) =>
     if (body.length > MAX_BODY_CHARS) throw new Error(`"body" may be at most ${MAX_BODY_CHARS} characters`);
     // Everything is validated before any GitHub call, dry run included (ARN-119).
     const branch = prBranch(input["branch"]);
-    const files = prFiles(input["files"]);
-    if (env.dryRun) return `DRY RUN: would open PR "${title}" on ${repo} from ${branch} touching ${files.length} file(s)`;
-    const repoInfo = await gh(env, `/repos/${repo}`);
-    const base = repoInfo.default_branch as string;
-    if (typeof base !== "string" || !base || base === branch) throw new Error("Agents may not write to the default branch");
+    const parsed = prFiles(input["files"]);
+    const edited = parsed.filter((f) => "edits" in f);
+    // Reads only up to here. Edits are applied to the default branch's copy and checked before any write, so a dry
+    // run proves they apply and a live run never leaves a half-written branch because one edit missed.
+    let base: string | undefined;
+    if (!env.dryRun || edited.length) {
+      const repoInfo = await gh(env, `/repos/${repo}`);
+      base = repoInfo.default_branch as string;
+      if (typeof base !== "string" || !base || base === branch) throw new Error("Agents may not write to the default branch");
+    }
+    const files: { path: string; content: string }[] = [];
+    for (const f of parsed) {
+      if ("content" in f) {
+        files.push(f);
+        continue;
+      }
+      let current: any;
+      try {
+        current = await gh(env, `/repos/${repo}/contents/${encodePath(f.path)}?ref=${encodeURIComponent(base!)}`);
+      } catch (e) {
+        throw new Error(`Cannot edit ${f.path}: it could not be read from ${base} (${(e as Error).message}). Send the whole file as "content" to create it`);
+      }
+      if (Array.isArray(current) || typeof current?.content !== "string") throw new Error(`Cannot edit ${f.path}: it is not a file`);
+      files.push({ path: f.path, content: applyEdits(f.path, Buffer.from(current.content, "base64").toString("utf8"), f.edits) });
+    }
+    if (env.dryRun) {
+      const checked = edited.length ? `; all ${edited.reduce((n, f) => n + ("edits" in f ? f.edits.length : 0), 0)} edit(s) apply cleanly` : "";
+      return `DRY RUN: would open PR "${title}" on ${repo} from ${branch} touching ${files.length} file(s)${checked}`;
+    }
+    if (!base) throw new Error("Default branch unknown");
     const baseRef = await gh(env, `/repos/${repo}/git/ref/heads/${encodeURIComponent(base)}`);
     // Creating the ref fails if the branch already exists, so an agent can never write onto someone else's branch.
     await gh(env, `/repos/${repo}/git/refs`, { method: "POST", body: JSON.stringify({ ref: `refs/heads/${branch}`, sha: baseRef.object.sha }) });
@@ -284,11 +379,11 @@ HANDLERS["vercel.deployment_status"] = async (input, env) => {
 };
 
 export const TOOL_DOCS: Record<string, string> = {
-  "github.read_file": '{"repo":"owner/name","path":"src/x.ts","ref?":"branch"} — read a file or list a directory',
+  "github.read_file": '{"repo":"owner/name","path":"src/x.ts","ref?":"branch","from?":1,"to?":400} — read a file (or lines from-to of a long one, up to 400 per read) or list a directory',
   "github.list_tree": '{"repo":"owner/name","ref?":"branch"} — list every file path',
   "github.search_issues": '{"repo":"owner/name","query":"text"} — search issues and PRs',
   "github.open_pull_request":
-    '{"repo":"owner/name","branch":"acp/short-name","title":"...","body":"...","files":[{"path":"...","content":"full new file content"}]} — open a DRAFT pull request; never merges',
+    '{"repo":"owner/name","branch":"acp/short-name","title":"...","body":"...","files":[{"path":"new/or/small.ts","content":"full file content"},{"path":"existing/big.ts","edits":[{"find":"exact existing text, unique in the file","replace":"new text"}]}]} — open a DRAFT pull request; never merges. Prefer edits for existing files: each find must match the current file exactly once',
   "firecrawl.search": '{"query":"text","limit?":5} — web search',
   "firecrawl.scrape": '{"url":"https://..."} — fetch one page as markdown',
   "linear.comment": '{"body":"markdown"} — post a progress note on your task',
