@@ -1,7 +1,7 @@
 // Workspace API (Phase 1): projects, threads and messages behind the site password.
 // Clients can only post their own "user" messages; AI replies are written here, by the chat action, after the
 // budget checks.
-import { hasSitePassword, isSameOrigin } from "./_lib/site-auth.js";
+import { AUTH_ACTIONS, handleAuth, hasSitePassword, isSameOrigin } from "./_lib/site-auth.js";
 import { MODELS, StoreError, createSupabaseStore, isId, workspaceConfigured } from "./_lib/workspace-store.js";
 import { BudgetStop, LIGHT_NAMES, ModelError, estimateUsd, isPaid, mergeTurns, modelStatus, readsFiles, routeTier, runChat, trimHistory } from "./_lib/workspace-models.js";
 import { FileProblem, MAX_FILES_PER_THREAD, MAX_UPLOAD_BODY, checkUpload, fileTokens, markersFor, withFiles } from "./_lib/workspace-files.js";
@@ -968,12 +968,26 @@ async function runRound1(store, env, deps, { thread, content, models, sent, shar
   return { saved, messages, failed };
 }
 
+// The request body when it is a sign-in action (small, so never an upload), otherwise null.
+function authBody(raw) {
+  let b = raw;
+  if (typeof raw === "string") {
+    if (raw.length > 4096 || !raw.includes("\"action\"")) return null;
+    try { b = JSON.parse(raw); } catch { return null; }
+  }
+  return b && typeof b === "object" && !Array.isArray(b) && AUTH_ACTIONS.includes(b.action) ? b : null;
+}
+
 // Pure request handler, so tests can drive it with a memory store.
 export async function handle(req, env, makeStore = createSupabaseStore, deps = {}) {
   // `net` is the network for connectors and custom tools: guarded (public addresses only) in production.
   const d = { fetch: deps.fetch ?? fetch, net: deps.net ?? deps.fetch ?? guardedFetch, now: deps.now ?? (() => new Date()) };
+  // Sign in, sign out and "am I signed in?" run before the password check (they are how a browser gets in) and
+  // never touch workspace storage. They set or clear the session cookie and nothing else.
+  const peek = authBody(req.body);
+  if (peek) return handleAuth(req, env, peek, d.now().getTime());
   if (!env.ACP_SITE_PASSWORD) return error(503, "The website isn't configured yet.");
-  if (!hasSitePassword(req, env)) return error(401, "Wrong password");
+  if (!hasSitePassword(req, env, d.now().getTime())) return error(401, "Sign in required.");
   if (req.method !== "POST") return error(405, "POST only");
   // Every action goes through POST, and some write, so all of them need a same-site browser request.
   if (!isSameOrigin(req)) return error(403, "Cross-site requests are not allowed.");
@@ -1009,5 +1023,6 @@ export default async function handler(req, res) {
   res.setHeader("Vary", "Origin");
   res.setHeader("X-Content-Type-Options", "nosniff");
   const out = await handle(req, process.env);
+  if (out.cookie) res.setHeader("Set-Cookie", out.cookie);
   res.status(out.status).json(out.body);
 }

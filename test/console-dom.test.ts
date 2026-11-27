@@ -55,12 +55,15 @@ function setup(responses: (path: string, init: any) => any) {
   const sessionWrites: any[] = [];
   const calls: { path: string; init: any; body: any }[] = [];
   const prompts: string[] = [];
+  const expired: string[] = [];
   const ctx: any = {
     document: doc, localStorage,
     sessionStorage: { getItem: () => null, setItem: (...a: any[]) => sessionWrites.push(a), removeItem() {} },
     crypto: { randomUUID: (() => { let n = 0; return () => "key-" + (++n); })() },
     setInterval: () => 0, console,
     prompt: () => { prompts.push("asked"); return "s3cret"; },
+    // Signing in happens on the sign-in page now; a 401 sends you there instead of asking for a password here.
+    ACPSession: { expired: () => { expired.push("sign-in"); return new Promise(() => {}); } },
     fetch: async (path: string, init: any) => {
       calls.push({ path, init, body: JSON.parse(init.body) });
       const r = await responses(path, init);
@@ -71,25 +74,21 @@ function setup(responses: (path: string, init: any) => any) {
   ctx.window = ctx;
   vm.runInNewContext(src, ctx);
   ctx.ACPConsole.start();
-  return { ctx, $: doc.getElementById, store, writes, sessionWrites, calls, prompts, intentBtns, legacy };
+  return { ctx, $: doc.getElementById, store, writes, sessionWrites, calls, prompts, expired, intentBtns, legacy };
 }
 const flush = async () => { for (let i = 0; i < 20; i++) await new Promise(r => setImmediate(r)); };
 const ok = (json: any = {}) => ({ status: 200, json });
 const overviewJson = { issues: [], lanes: {}, agents: [{ key: "claude", connection: "online" }], fetchedAt: "2026-10-01T00:00:00Z", hasNextPage: false };
 
-test("password is held in memory only: never written to localStorage or sessionStorage", async () => {
-  let first = true;
-  const t = setup(() => { if (first) { first = false; return { status: 401, json: { error: "unauthorized" } }; } return ok(overviewJson); });
+test("no password is asked for or stored here: a 401 sends you to the sign-in page", async () => {
+  const t = setup(() => ({ status: 401, json: { error: "Sign in required." } }));
   await flush();
-  assert.equal(t.prompts.length, 1);
-  assert.equal(t.calls[0]!.init.headers["x-acp-password"], "");
-  assert.equal(t.calls[1]!.init.headers["x-acp-password"], "s3cret");
+  assert.equal(t.prompts.length, 0, "no password prompt on the page");
+  assert.deepEqual(t.expired, ["sign-in"]);
+  assert.equal(t.calls.length, 1, "nothing more is tried after the 401");
   assert.equal(t.store.has("acp.pw"), false, "a password left by older builds is cleared");
   assert.deepEqual(t.writes, []);
   assert.deepEqual(t.sessionWrites, []);
-  t.$("cRefresh").click(); await flush();
-  assert.equal(t.calls.at(-1)!.init.headers["x-acp-password"], "s3cret");
-  assert.equal(t.prompts.length, 1);
 });
 
 test("double-click on Send files one intake request; button is disabled while busy", async () => {

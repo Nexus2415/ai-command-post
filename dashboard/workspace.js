@@ -46,8 +46,7 @@
     } finally { inflight.delete(ctl); }
     const j = await r.json().catch(() => ({}));
     if (r.status === 401 && retry !== false) {
-      const pw = window.prompt("Password for AI Command Post");
-      if (pw) { password = pw; return post(action, args, false); }
+      if (window.ACPSession) return window.ACPSession.expired();
     }
     if (!r.ok) throw new Error(typeof j.error === "string" ? j.error : "Something went wrong (" + r.status + ").");
     return j;
@@ -799,5 +798,12 @@
   }
   syncMic();
 
+  // Arriving from Home's ask box: your words wait in the question box. Nothing is sent until you press send.
+  const asked = new URLSearchParams(location.search).get("ask");
+  if (asked) {
+    $("cText").value = asked.slice(0, 8000); grow();
+    history.replaceState(null, "", location.pathname);
+    say("Your request is in the question box. Pick a thread or start a new one, then press send.", "warn");
+  }
   guard(async () => { await loadStatus(); await loadProjects(); })();
 })();
