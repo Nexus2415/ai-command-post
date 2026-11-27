@@ -295,15 +295,19 @@ async function plan(d: Deps, cmd: Issue, lead: AgentKey, report: TickReport): Pr
 export async function work(d: Deps, task: Issue, agent: AgentKey, report: TickReport): Promise<void> {
   const profile = AGENTS[agent];
   // Links the task names are fetchable; links in later tool results are added as they arrive (exact match only).
-  const env: ToolEnv = { ...d.toolEnv(task), allowedUrls: new Set(urlsIn(`${task.title}\n${task.description}`)) };
+  const env: ToolEnv = { ...d.toolEnv(task), allowedUrls: new Set(urlsIn(`${task.title}\n${task.description}`)), openedBranches: new Set() };
   // Only offer tools whose credentials are configured, so a worker never plans around a tool that can't run.
   const tools = profile.tools.filter(
     (t) => TOOL_DOCS[t] && !(t.startsWith("firecrawl.") && !env.firecrawlKey) && !(t.startsWith("github.") && !env.githubToken && !env.githubAuth) && !(t.startsWith("vercel.") && !env.vercelToken),
   );
+  // A coder's PR counts as done only with its checks green (ARN-149): proof, not a claim.
+  const codeRule = tools.includes("github.pr_checks")
+    ? "\n- If you open or update a pull request, call github.pr_checks before finishing. Report done only when it says ALL PASSED, and put the PR link and that result in your final report. If checks fail, read the failing lines, fix them with github.update_pull_request, and check again. If you run out of replies first, report blocked with what still fails."
+    : "";
   const messages: ChatMessage[] = [
     {
       role: "system",
-      content: `You are ${profile.name}. ${profile.role}\n\n${RULES}\n\nTools (call one per reply):\n${tools.map((t) => `- ${t}: ${TOOL_DOCS[t]}`).join("\n")}\n\nEach reply must be JSON only, either\n{"tool":"<name>","input":{...}}\nor, when finished,\n{"final":"markdown report with sources","status":"done"}\nor, if you cannot finish,\n{"final":"what you did and exactly what is blocking","status":"blocked"}\nYou have at most ${d.cfg.maxStepsPerTask} replies.`,
+      content: `You are ${profile.name}. ${profile.role}\n\n${RULES}${codeRule}\n\nTools (call one per reply):\n${tools.map((t) => `- ${t}: ${TOOL_DOCS[t]}`).join("\n")}\n\nEach reply must be JSON only, either\n{"tool":"<name>","input":{...}}\nor, when finished,\n{"final":"markdown report with sources","status":"done"}\nor, if you cannot finish,\n{"final":"what you did and exactly what is blocking","status":"blocked"}\nYou have at most ${d.cfg.maxStepsPerTask} replies.`,
     },
     { role: "user", content: `Task ${task.identifier}: ${task.title}\n\n${task.description}` },
   ];

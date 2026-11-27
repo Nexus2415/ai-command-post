@@ -31,6 +31,13 @@ export interface ToolEnv {
    */
   allowedUrls?: Set<string>;
   f?: Fetch;
+  /**
+   * acp/ branches this task opened in this run (ARN-149). github.update_pull_request writes only to these, so an AI
+   * can fix its own PR but never push onto another AI's or a person's branch.
+   */
+  openedBranches?: Set<string>;
+  /** Waits between check polls; tests pass a fake so nothing sleeps. */
+  sleep?: (ms: number) => Promise<void>;
 }
 
 /** Every http(s) link in a text, trailing punctuation removed. */
@@ -242,6 +249,66 @@ async function firecrawl(env: ToolEnv, path: string, body: unknown): Promise<any
   return j;
 }
 
+
+/** Turns validated files into full contents, applying edits to the copy on `ref`. Reads only; throws before any write. */
+async function resolveFiles(env: ToolEnv, repo: string, ref: string, parsed: PrFile[]): Promise<{ path: string; content: string }[]> {
+  const files: { path: string; content: string }[] = [];
+  for (const f of parsed) {
+    if ("content" in f) {
+      files.push(f);
+      continue;
+    }
+    let current: any;
+    try {
+      current = await gh(env, `/repos/${repo}/contents/${encodePath(f.path)}?ref=${encodeURIComponent(ref)}`);
+    } catch (e) {
+      throw new Error(`Cannot edit ${f.path}: it could not be read from ${ref} (${(e as Error).message}). Send the whole file as "content" to create it`);
+    }
+    if (Array.isArray(current) || typeof current?.content !== "string") throw new Error(`Cannot edit ${f.path}: it is not a file`);
+    files.push({ path: f.path, content: applyEdits(f.path, Buffer.from(current.content, "base64").toString("utf8"), f.edits) });
+  }
+  return files;
+}
+
+/** Writes files onto a branch, one commit each (the contents API). */
+async function writeFiles(env: ToolEnv, repo: string, branch: string, files: { path: string; content: string }[], message: string): Promise<void> {
+  for (const file of files) {
+    const path = encodePath(file.path);
+    let sha: string | undefined;
+    try {
+      sha = (await gh(env, `/repos/${repo}/contents/${path}?ref=${encodeURIComponent(branch)}`)).sha;
+    } catch {
+      sha = undefined;
+    }
+    await gh(env, `/repos/${repo}/contents/${path}`, {
+      method: "PUT",
+      body: JSON.stringify({ message, content: Buffer.from(file.content).toString("base64"), branch, ...(sha ? { sha } : {}) }),
+    });
+  }
+}
+
+export const CHECK_WAIT_MS = 240_000;
+const CHECK_POLL_MS = 15_000;
+const FAIL_LINE = /not ok|error|fail|✖|assert/i;
+
+/** The lines of a failed job's log that say what broke, plus its tail; logs are untrusted text like any tool output. */
+export function failureExcerpt(log: string): string {
+  const lines = log.replace(/\r/g, "").split("\n").map((l) => l.replace(/^\d{4}-\d\d-\d\dT[\d:.]+Z /, ""));
+  const hits = lines.filter((l) => FAIL_LINE.test(l)).slice(0, 40);
+  const tail = lines.slice(-25);
+  return [...hits, "…", ...tail].join("\n").slice(0, 4_000);
+}
+
+async function jobLog(env: ToolEnv, repo: string, jobId: number): Promise<string> {
+  const token = env.githubAuth ? await env.githubAuth() : env.githubToken;
+  const res = await (env.f ?? fetch)(`https://api.github.com/repos/${repo}/actions/jobs/${jobId}/logs`, {
+    headers: { accept: "application/vnd.github+json", authorization: `Bearer ${token}`, "x-github-api-version": "2022-11-28" },
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (!res.ok) throw new Error(`log unavailable (${res.status})`);
+  return res.text();
+}
+
 const HANDLERS: Record<string, (input: Record<string, unknown>, env: ToolEnv) => Promise<string>> = {
   async "github.read_file"(input, env) {
     const repo = str(input, "repo");
@@ -289,22 +356,9 @@ const HANDLERS: Record<string, (input: Record<string, unknown>, env: ToolEnv) =>
       base = repoInfo.default_branch as string;
       if (typeof base !== "string" || !base || base === branch) throw new Error("Agents may not write to the default branch");
     }
-    const files: { path: string; content: string }[] = [];
-    for (const f of parsed) {
-      if ("content" in f) {
-        files.push(f);
-        continue;
-      }
-      let current: any;
-      try {
-        current = await gh(env, `/repos/${repo}/contents/${encodePath(f.path)}?ref=${encodeURIComponent(base!)}`);
-      } catch (e) {
-        throw new Error(`Cannot edit ${f.path}: it could not be read from ${base} (${(e as Error).message}). Send the whole file as "content" to create it`);
-      }
-      if (Array.isArray(current) || typeof current?.content !== "string") throw new Error(`Cannot edit ${f.path}: it is not a file`);
-      files.push({ path: f.path, content: applyEdits(f.path, Buffer.from(current.content, "base64").toString("utf8"), f.edits) });
-    }
+    const files = await resolveFiles(env, repo, base!, parsed);
     if (env.dryRun) {
+      env.openedBranches?.add(`${repo}#${branch}`);
       const checked = edited.length ? `; all ${edited.reduce((n, f) => n + ("edits" in f ? f.edits.length : 0), 0)} edit(s) apply cleanly` : "";
       return `DRY RUN: would open PR "${title}" on ${repo} from ${branch} touching ${files.length} file(s)${checked}`;
     }
@@ -312,21 +366,63 @@ const HANDLERS: Record<string, (input: Record<string, unknown>, env: ToolEnv) =>
     const baseRef = await gh(env, `/repos/${repo}/git/ref/heads/${encodeURIComponent(base)}`);
     // Creating the ref fails if the branch already exists, so an agent can never write onto someone else's branch.
     await gh(env, `/repos/${repo}/git/refs`, { method: "POST", body: JSON.stringify({ ref: `refs/heads/${branch}`, sha: baseRef.object.sha }) });
-    for (const file of files) {
-      const path = encodePath(file.path);
-      let sha: string | undefined;
-      try {
-        sha = (await gh(env, `/repos/${repo}/contents/${path}?ref=${encodeURIComponent(branch)}`)).sha;
-      } catch {
-        sha = undefined;
-      }
-      await gh(env, `/repos/${repo}/contents/${path}`, {
-        method: "PUT",
-        body: JSON.stringify({ message: `${title}\n\nOpened by AI Command Post`, content: Buffer.from(file.content).toString("base64"), branch, ...(sha ? { sha } : {}) }),
-      });
-    }
+    await writeFiles(env, repo, branch, files, `${title}\n\nOpened by AI Command Post`);
     const pr = await gh(env, `/repos/${repo}/pulls`, { method: "POST", body: JSON.stringify({ title, head: branch, base, body, draft: true }) });
-    return `Opened draft PR #${pr.number}: ${pr.html_url}`;
+    env.openedBranches?.add(`${repo}#${branch}`);
+    return `Opened draft PR #${pr.number}: ${pr.html_url}\nNext: call github.pr_checks with {"repo":"${repo}","pr":${pr.number}} and fix any failure with github.update_pull_request before reporting done.`;
+  },
+  async "github.update_pull_request"(input, env) {
+    const repo = str(input, "repo");
+    const branch = prBranch(input["branch"]);
+    const message = str(input, "message");
+    if (message.length > MAX_TITLE_CHARS || /[\r\n]/.test(message)) throw new Error(`"message" must be one line of at most ${MAX_TITLE_CHARS} characters`);
+    const parsed = prFiles(input["files"]);
+    if (!env.openedBranches?.has(`${repo}#${branch}`)) {
+      throw new Error(`You may only update a pull request this task opened in this run; ${branch} is not one of them`);
+    }
+    if (env.dryRun) return `DRY RUN: would push ${parsed.length} file(s) to ${branch} on ${repo}`;
+    // Edits apply to the branch as it stands now, so a fix builds on the PR's earlier commits.
+    const files = await resolveFiles(env, repo, branch, parsed);
+    await writeFiles(env, repo, branch, files, `${message}\n\nUpdated by AI Command Post`);
+    return `Pushed ${files.length} file(s) to ${branch}. Call github.pr_checks again to see the new results.`;
+  },
+  async "github.pr_checks"(input, env) {
+    const repo = str(input, "repo");
+    const n = Number(input["pr"]);
+    if (!Number.isInteger(n) || n < 1) throw new Error('"pr" must be a pull request number');
+    const sleep = env.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+    const pr = await gh(env, `/repos/${repo}/pulls/${n}`);
+    const sha = String(pr.head?.sha ?? "");
+    if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error("Pull request head commit unknown");
+    // Waiting costs no model tokens: the tool polls until every check finishes or the wait runs out.
+    let runs: any[] = [];
+    for (let waited = 0; ; waited += CHECK_POLL_MS) {
+      runs = (await gh(env, `/repos/${repo}/commits/${sha}/check-runs?per_page=50`)).check_runs ?? [];
+      const pending = runs.filter((r) => r.status !== "completed");
+      if ((runs.length && !pending.length) || waited >= CHECK_WAIT_MS) break;
+      await sleep(CHECK_POLL_MS);
+    }
+    if (!runs.length) return `PR #${n} (${sha.slice(0, 7)}): no checks have started yet. Try again later; do not report done without checks.`;
+    const bad = new Set(["failure", "timed_out", "cancelled", "action_required", "startup_failure"]);
+    const out: string[] = [];
+    for (const r of runs) {
+      const state = r.status === "completed" ? r.conclusion : r.status;
+      out.push(`- ${r.name}: ${state}`);
+      if (r.status === "completed" && bad.has(r.conclusion)) {
+        if (r.output?.title || r.output?.summary) out.push(`  ${String(r.output?.title ?? "")} ${String(r.output?.summary ?? "").slice(0, 800)}`.trimEnd());
+        if (r.app?.slug === "github-actions") {
+          try {
+            out.push(failureExcerpt(await jobLog(env, repo, r.id)));
+          } catch (e) {
+            out.push(`  (${(e as Error).message})`);
+          }
+        }
+      }
+    }
+    const done = runs.every((r) => r.status === "completed");
+    const green = done && runs.every((r) => !bad.has(r.conclusion));
+    const verdict = !done ? "STILL RUNNING after the wait" : green ? "ALL PASSED" : "FAILED";
+    return `PR #${n} at ${sha.slice(0, 7)}: ${verdict}\n${out.join("\n")}`;
   },
   async "firecrawl.search"(input, env) {
     const query = str(input, "query");
@@ -384,6 +480,9 @@ export const TOOL_DOCS: Record<string, string> = {
   "github.search_issues": '{"repo":"owner/name","query":"text"} — search issues and PRs',
   "github.open_pull_request":
     '{"repo":"owner/name","branch":"acp/short-name","title":"...","body":"...","files":[{"path":"new/or/small.ts","content":"full file content"},{"path":"existing/big.ts","edits":[{"find":"exact existing text, unique in the file","replace":"new text"}]}]} — open a DRAFT pull request; never merges. Prefer edits for existing files: each find must match the current file exactly once',
+  "github.pr_checks": '{"repo":"owner/name","pr":123} — wait (up to 4 minutes) for a pull request\'s checks and report each result, with failing log lines',
+  "github.update_pull_request":
+    '{"repo":"owner/name","branch":"acp/short-name","message":"one-line commit message","files":[same shape as open_pull_request]} — push a fix to a PR you opened in this task; edits apply to the branch as it is now',
   "firecrawl.search": '{"query":"text","limit?":5} — web search',
   "firecrawl.scrape": '{"url":"https://..."} — fetch one page as markdown',
   "linear.comment": '{"body":"markdown"} — post a progress note on your task',
