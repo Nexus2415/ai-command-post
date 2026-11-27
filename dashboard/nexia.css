@@ -1,93 +1,86 @@
-/* NEXIA look (ARN-139, palette and phone bar from ChatGPT's PR #105, ported onto today's pages).
-   Presentation only: colours, a shared menu (a left rail on wide screens, a top bar on tablets, a bottom bar on
-   phones). No page behaviour changes. Loaded last on every page, so it wins over ops-theme.css and the page styles. */
+/* ARNEXYIA look: deep navy, teal glow, rounded glass cards, one menu with four tabs (Home, Command, Tasks, Settings).
+   Presentation only. Loaded last on every page, so it wins over ops-theme.css and the page styles.
+   The menu is a top bar on wide screens and a bottom bar on phones; a brand header sits on top on phones. */
 :root:root:root:root{
-  --bg:#07111c; --bg-2:#0b1929; --panel:#102033; --panel-2:#0b1828; --line:#29445b;
-  --fg:#e8f4ff; --muted:#a8bccc; --accent:#83e5ff; --accent-fg:#08202d; --accent-soft:#18394c;
-  --sand:#83e5ff; --olive:#18394c; --grid:rgba(99,194,234,.045);
-  --good:#62deb3; --good-soft:#13392e; --warn:#f3c873; --warn-soft:#382c19;
-  --bad:#ff827e; --bad-soft:#3d2028; --amber:#f3c873; --signal:#b42d37; --idle:#95a7b8;
+  --bg:#03101a; --bg-2:#061824; --panel:#0a2130; --panel-2:#071a27; --line:#16405a; --line-hi:#2aa9c0;
+  --fg:#e9f8fc; --muted:#9db7c5; --accent:#2ee0ee; --accent-2:#14b4c8; --accent-fg:#022029; --accent-soft:#0c3846;
+  --sand:#2ee0ee; --olive:#0c3846; --grid:rgba(46,224,238,.035);
+  --good:#4fe0a2; --good-soft:#0f3a2e; --warn:#f5c862; --warn-soft:#3a2f15;
+  --bad:#ff7b79; --bad-soft:#3d1d25; --amber:#f5c862; --signal:#b42d37; --idle:#93a8b6; --info:#7fb2ff; --info-soft:#13284a;
   --display:system-ui,-apple-system,"Segoe UI",sans-serif;
   --body:system-ui,-apple-system,"Segoe UI",sans-serif;
-  --nx-rail:208px; --nx-phone-nav:calc(64px + env(safe-area-inset-bottom,0px));
+  --ax-card:linear-gradient(160deg,rgba(14,44,60,.88),rgba(6,24,36,.92));
+  --ax-glow:0 0 0 1px rgba(46,224,238,.06) inset,0 10px 30px rgba(0,0,0,.35);
+  --nx-phone-nav:calc(68px + env(safe-area-inset-bottom,0px));
   color-scheme:dark;
 }
 html{background:var(--bg)}
-body{margin:0;color:var(--fg);background-color:var(--bg);
-  background-image:radial-gradient(ellipse at 48% 0%,#18374d 0%,transparent 52%),
-    linear-gradient(var(--grid) 1px,transparent 1px),linear-gradient(90deg,var(--grid) 1px,transparent 1px);
-  background-size:auto,32px 32px,32px 32px;background-attachment:fixed}
-h1,h2,h3{font-family:var(--display);font-weight:650;letter-spacing:.01em}
-.panel,.ops-beacon,.hud{border-radius:12px}
-.panel{background:linear-gradient(155deg,#12283c,var(--panel-2));box-shadow:0 12px 32px #0002}
+body{margin:0;color:var(--fg);background-color:var(--bg);font-family:var(--body);
+  background-image:radial-gradient(ellipse 90% 50% at 50% -10%,#0f3a4c 0%,transparent 60%),
+    radial-gradient(ellipse 70% 40% at 100% 110%,rgba(20,180,200,.14) 0%,transparent 70%);
+  background-attachment:fixed}
+h1,h2,h3{font-family:var(--display);font-weight:700;letter-spacing:.005em}
+.panel,.ops-beacon,.hud{border-radius:16px}
+.panel{background:var(--ax-card);border:1px solid var(--line);box-shadow:var(--ax-glow)}
 .panel::before,.panel::after{display:none}
-.btn,.seg button,.sel,.chip,textarea,input{border-radius:8px}
+.btn,.seg button,.sel,.chip,textarea,input,select{border-radius:12px}
 .btn{font-family:var(--body);text-transform:none;letter-spacing:.01em}
 .btn.ghost{color:var(--accent);border-color:var(--line)}
 :focus-visible{outline:2px solid var(--accent);outline-offset:3px}
-.stopbtn{border-radius:8px;font-family:var(--body);font-weight:750;letter-spacing:.025em;
+.stopbtn{border-radius:12px;font-family:var(--body);font-weight:750;letter-spacing:.025em;
   background:#a92d38;color:#fff;border:2px solid #ffaca8;box-shadow:0 0 0 2px #f36c7166}
-.resumebtn{border-radius:8px}
-.welcome-h,.side-brand{font-family:var(--display);font-weight:650;letter-spacing:.02em}
+.resumebtn{border-radius:12px}
+.welcome-h,.side-brand{font-family:var(--display);font-weight:700;letter-spacing:.01em}
 .side-brand{text-transform:none}
 
-/* The shared menu. */
-.nexia-nav{box-sizing:border-box;display:flex;align-items:center;gap:16px;padding:6px 16px;background:#081522;
-  border-bottom:1px solid var(--line);position:relative;z-index:51;min-width:0}
+/* Brand mark: the teal "A". */
+.ax-logo{width:30px;height:30px;flex:none;filter:drop-shadow(0 0 10px rgba(46,224,238,.45))}
+.ax-word{display:block;font:800 18px/1 var(--body);letter-spacing:.14em;color:var(--fg)}
+.ax-tag{display:block;font-size:11.5px;color:var(--muted);margin-top:4px;letter-spacing:.01em}
+
+/* The menu. */
+.nexia-nav{box-sizing:border-box;display:flex;align-items:center;gap:20px;padding:8px 20px;
+  background:rgba(3,16,26,.86);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+  border-bottom:1px solid var(--line);position:sticky;top:0;z-index:51;min-width:0}
 .nexia-brand{display:flex;align-items:center;gap:10px;color:var(--fg);text-decoration:none;min-height:44px;flex:none}
-.nexia-brand strong{display:block;color:var(--accent);font:750 18px/1 var(--body);letter-spacing:.24em}
-.nexia-brand small{display:block;font-size:11px;color:var(--muted);margin-top:4px}
-.nexia-emblem{width:32px;height:32px;flex:none;filter:drop-shadow(0 0 9px #55c9ff55)}
-.nexia-links{display:flex;gap:6px;min-width:0}
-.nexia-links a{display:flex;align-items:center;gap:8px;min-height:44px;padding:6px 10px;border:1px solid transparent;border-radius:8px;
-  text-decoration:none;color:var(--muted);font-weight:600;font-size:13px}
-.nexia-links a:hover{background:#122a3c;color:var(--fg)}
-.nexia-links a[aria-current="page"]{color:var(--accent);background:#143247;border-color:#37637e}
-.nexia-links svg{width:18px;height:18px;flex:none;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
-.nexia-links a > span{display:grid;gap:2px;line-height:1.2}
-.nexia-links a small{font-size:10px;font-weight:400;color:var(--muted)}
+.nexia-links{display:flex;gap:6px;min-width:0;margin-left:auto;padding:4px;border:1px solid var(--line);border-radius:16px;background:rgba(8,30,42,.6)}
+.nexia-links a{display:flex;align-items:center;gap:8px;min-height:40px;padding:6px 14px;border:1px solid transparent;border-radius:12px;
+  text-decoration:none;color:var(--muted);font-weight:600;font-size:14px}
+.nexia-links a:hover{color:var(--fg);background:rgba(46,224,238,.06)}
+.nexia-links a[aria-current="page"]{color:var(--accent);background:linear-gradient(180deg,rgba(46,224,238,.18),rgba(46,224,238,.06));
+  border-color:rgba(46,224,238,.55);box-shadow:0 0 18px rgba(46,224,238,.22)}
+.nexia-links svg{width:20px;height:20px;flex:none;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.ax-head{display:none}
 
 /* Chat page: the menu takes its own space, the conversation fills the rest (question box stays at the bottom). */
 body.nexia-chat{display:flex;flex-direction:column;height:100vh;height:100dvh;overflow:hidden}
 body.nexia-chat .wrap.app{flex:1 1 0;height:auto;min-height:0}
 body.nexia-chat .convo{height:100%}
 
-/* Wide screens: the menu is a rail on the left. */
-@media (min-width:1350px){
-  body:has(> .nexia-nav){padding-left:var(--nx-rail)}
-  .nexia-nav{position:fixed;inset:0 auto 0 0;width:var(--nx-rail);flex-direction:column;align-items:stretch;gap:18px;
-    border-bottom:0;border-right:1px solid var(--line);padding:22px 12px;overflow:auto}
-  .nexia-brand{padding:0 6px}
-  .nexia-emblem{width:38px;height:38px}
-  .nexia-links{flex-direction:column}
-  .nexia-links a{font-size:14px}
-  body.nexia-chat{box-sizing:border-box}
-}
-/* Tablets: a top bar; captions hidden to save room. */
-@media (min-width:701px) and (max-width:1349px){
-  .nexia-brand small,.nexia-links a small{display:none}
-}
-/* Phones: a bottom bar with four big buttons, like an app. */
+/* Tablets: the tagline is hidden to save room. */
+@media (min-width:701px) and (max-width:1000px){ .ax-tag{display:none} .nexia-links a{padding:6px 10px} }
+/* Phones: a brand header on top and a bottom bar with four big buttons, like an app. */
 @media (max-width:700px){
   body:has(> .nexia-nav){padding-bottom:var(--nx-phone-nav);background-attachment:scroll}
   body.nexia-chat{box-sizing:border-box}
-  .nexia-nav{position:fixed;inset:auto 0 0 0;min-height:var(--nx-phone-nav);z-index:65;
-    padding:4px max(6px,env(safe-area-inset-right,0px)) calc(4px + env(safe-area-inset-bottom,0px)) max(6px,env(safe-area-inset-left,0px));
-    border-bottom:0;border-top:1px solid var(--line);box-shadow:0 -8px 24px #0004}
-  .nexia-brand{display:none}
-  .nexia-links{flex:1;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px}
-  .nexia-links a{min-height:56px;flex-direction:column;justify-content:center;gap:3px;padding:4px 2px;text-align:center}
-  .nexia-links svg{width:22px;height:22px}
-  .nexia-links a > span{font-size:0;gap:0}
-  .nexia-links a small{font-size:11px;font-weight:600;color:inherit}
-  .nexia-links a[aria-current="page"]{box-shadow:inset 0 2px 0 var(--accent)}
+  .ax-head{display:flex;flex-direction:column;align-items:center;padding:14px 16px 10px;text-align:center}
+  .ax-head .nexia-brand{min-height:0}
+  .ax-head .ax-word{font-size:21px}
+  .ax-head .ax-logo{width:34px;height:34px}
+  body.nexia-chat .ax-head{display:none}
+  .nexia-nav{position:fixed;inset:auto 0 0 0;top:auto;min-height:var(--nx-phone-nav);z-index:65;
+    padding:6px max(8px,env(safe-area-inset-right,0px)) calc(6px + env(safe-area-inset-bottom,0px)) max(8px,env(safe-area-inset-left,0px));
+    border-bottom:0;border-top:1px solid var(--line);box-shadow:0 -10px 30px rgba(0,0,0,.45);background:rgba(4,18,28,.94)}
+  .nexia-nav > .nexia-brand{display:none}
+  .nexia-links{flex:1;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px;margin:0;border-radius:18px}
+  .nexia-links a{min-height:52px;flex-direction:column;justify-content:center;gap:3px;padding:4px 2px;text-align:center;font-size:12px}
+  .nexia-links svg{width:23px;height:23px}
   /* Chat: the question box sits just above the bottom bar, which already leaves room for the home indicator. */
   body.nexia-chat .dock{padding-bottom:8px}
   body.nexia-chat .side{bottom:var(--nx-phone-nav)}
   body.nexia-chat .scrim{bottom:var(--nx-phone-nav)}
   body.nexia-chat .more{max-height:calc(100dvh - var(--nx-phone-nav) - 80px);overflow:auto}
 }
-@media (prefers-reduced-motion:reduce){.nexia-emblem *{animation:none!important;transition:none!important}}
 /* Small phones (iPhone SE and similar): the answer-mode toggle gets its own line, so the question box fits the
    screen instead of the whole page zooming out. */
 @media (max-width:380px){
@@ -95,10 +88,101 @@ body.nexia-chat .convo{height:100%}
   .modes{order:-1;flex:1 0 100%;display:grid;grid-template-columns:repeat(3,minmax(0,1fr))}
   .modes span{justify-content:center;min-height:40px;width:100%}
 }
-/* Orchestrator page: the left rail takes 208px, so its 3-column board folds to one column a little sooner
-   (the page's own rule does this below 1280px of screen; with the rail that is below 1488px). */
-@media (min-width:1350px) and (max-width:1488px){
-  .page > .grid{grid-template-columns:minmax(0,1fr)}
-  .page > .grid > .rail{grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
-  .page > .grid > .center{order:-1}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+/* ---- Shared building blocks for the Home, Tasks, Settings and sign-in pages. ---- */
+.ax-page{box-sizing:border-box;width:100%;max-width:860px;margin:0 auto;padding:20px 16px 32px;font:15px/1.5 var(--body)}
+.ax-page *{box-sizing:border-box}
+.ax-title{display:flex;align-items:center;flex-wrap:wrap;gap:8px 14px;margin:4px 0 18px}
+.ax-title > div{flex:1 1 200px;min-width:0}
+.ax-title svg{width:40px;height:40px;flex:none;stroke:var(--accent);fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round;filter:drop-shadow(0 0 8px rgba(46,224,238,.4))}
+.ax-title h1{margin:0;font-size:28px;line-height:1.15}
+.ax-title p{margin:2px 0 0;color:var(--muted)}
+.ax-title .ax-act{margin-left:auto}
+.ax-card{background:var(--ax-card);border:1px solid var(--line);border-radius:18px;box-shadow:var(--ax-glow)}
+.ax-pad{padding:18px}
+.ax-section{margin-top:18px}
+.ax-section > h2{display:flex;align-items:center;justify-content:space-between;margin:0 0 10px;font-size:19px}
+.ax-section > h2 a{font:600 14px var(--body);color:var(--accent);text-decoration:none}
+.ax-btn{white-space:nowrap;display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:0 18px;border-radius:14px;cursor:pointer;
+  border:1px solid transparent;font:700 15px var(--body);text-decoration:none;
+  background:linear-gradient(180deg,var(--accent),var(--accent-2));color:var(--accent-fg);box-shadow:0 0 22px rgba(46,224,238,.28)}
+.ax-btn:hover{filter:brightness(1.08)}
+.ax-btn:disabled{opacity:.6;cursor:default}
+.ax-btn.ghost{background:transparent;color:var(--accent);border-color:var(--line);box-shadow:none}
+.ax-btn svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.ax-msg{margin:12px 0 0;padding:10px 14px;border-radius:12px;border:1px solid var(--line);background:var(--panel-2);color:var(--muted)}
+.ax-msg.err{border-color:#7a3340;background:var(--bad-soft);color:#ffd1d0}
+.ax-msg.ok{border-color:#1f6b52;background:var(--good-soft);color:#c9f7e3}
+.ax-muted{color:var(--muted)}
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+
+/* Stat tiles. */
+.ax-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.ax-stat{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;min-height:112px;padding:12px 6px;text-align:center;
+  border-radius:18px;border:1px solid var(--line);background:var(--ax-card);box-shadow:var(--ax-glow);color:var(--fg);text-decoration:none}
+.ax-stat svg{width:26px;height:26px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.ax-stat b{font-size:30px;line-height:1.1;color:var(--fg)}
+.ax-stat span{font-size:13px;color:var(--fg)}
+.ax-stat.t-accent{color:var(--accent)} .ax-stat.t-info{color:var(--info);border-color:#244a7a}
+.ax-stat.t-warn{color:var(--warn);border-color:#6b5520} .ax-stat.t-bad{color:var(--bad);border-color:#6b2c35} .ax-stat.t-good{color:var(--good);border-color:#1f6b52}
+a.ax-stat:hover{border-color:var(--line-hi)}
+
+/* Ask box. */
+.ax-section.ax-ask > h2,.ax-ask h2{display:flex;align-items:center;justify-content:flex-start;gap:10px;margin:0;font-size:22px}
+.ax-ask h2 svg{width:26px;height:26px;fill:var(--accent);filter:drop-shadow(0 0 8px rgba(46,224,238,.6))}
+.ax-ask p{margin:4px 0 14px;color:var(--muted)}
+.ax-askrow{display:flex;align-items:center;gap:8px;padding:6px 6px 6px 16px;border-radius:999px;border:1px solid var(--line-hi);background:rgba(5,22,32,.8)}
+.ax-askrow input{flex:1;min-width:0;border:0;background:transparent;color:var(--fg);font:16px var(--body);padding:10px 0;outline:none}
+.ax-askrow input::placeholder{color:#7f9aa8}
+.ax-askrow:focus-within{box-shadow:0 0 0 2px rgba(46,224,238,.35)}
+.ax-send{width:46px;height:46px;border-radius:50%;border:0;cursor:pointer;display:grid;place-items:center;flex:none;
+  background:linear-gradient(180deg,var(--accent),var(--accent-2));box-shadow:0 0 18px rgba(46,224,238,.45)}
+.ax-send svg{width:20px;height:20px;fill:var(--accent-fg)}
+
+/* Lists of work and of settings. */
+.ax-list{list-style:none;margin:0;padding:0}
+.ax-row{display:flex;align-items:center;gap:14px;padding:14px 16px;color:var(--fg);text-decoration:none;min-height:64px}
+.ax-list > li + li > .ax-row{border-top:1px solid rgba(22,64,90,.7)}
+.ax-list.cards{display:grid;grid-template-columns:minmax(0,1fr);gap:10px}
+.ax-list.ax-section{margin-top:18px}
+.ax-list.cards > li > .ax-row{border:1px solid var(--line);border-radius:18px;background:var(--ax-card);box-shadow:var(--ax-glow)}
+.ax-list.cards > li + li > .ax-row{border-top:1px solid var(--line)}
+a.ax-row:hover .ax-ico,button.ax-row:hover .ax-ico{border-color:var(--line-hi)}
+button.ax-row{width:100%;border:0;background:none;font:inherit;text-align:left;cursor:pointer}
+.ax-ico{width:46px;height:46px;flex:none;display:grid;place-items:center;border-radius:14px;border:1px solid var(--line);background:rgba(8,32,46,.9);color:var(--accent)}
+.ax-ico svg{width:24px;height:24px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.ax-main{flex:1;min-width:0}
+.ax-main strong{display:block;font-size:16px;line-height:1.3;overflow-wrap:anywhere}
+.ax-main small{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:3px;color:var(--muted);font-size:13.5px}
+.ax-chev{width:20px;height:20px;flex:none;stroke:var(--muted);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.ax-pill{display:inline-flex;align-items:center;padding:2px 10px;border-radius:999px;font-size:12.5px;font-weight:650;white-space:nowrap;
+  border:1px solid #244a7a;background:var(--info-soft);color:#a9cbff}
+.ax-pill.review{border-color:#6b5520;background:var(--warn-soft);color:var(--warn)}
+.ax-pill.blocked{border-color:#6b2c35;background:var(--bad-soft);color:#ffb3b1}
+.ax-pill.queued{border-color:#33505f;background:#13242e;color:#c5d6df}
+.ax-pill.done{border-color:#1f6b52;background:var(--good-soft);color:var(--good)}
+.ax-empty{padding:18px;color:var(--muted);text-align:center}
+
+/* Tabs on the Tasks page. */
+.ax-seg{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px;padding:4px;margin:16px 0 12px;border:1px solid var(--line);border-radius:16px;background:rgba(8,30,42,.6)}
+.ax-seg button{min-height:44px;border:1px solid transparent;border-radius:12px;background:none;color:var(--fg);font:600 15px var(--body);cursor:pointer}
+.ax-seg button[aria-selected="true"]{background:linear-gradient(180deg,rgba(46,224,238,.35),rgba(20,180,200,.18));border-color:rgba(46,224,238,.6);box-shadow:0 0 16px rgba(46,224,238,.25)}
+
+/* Form fields (sign-in and settings). */
+.ax-field{display:flex;align-items:center;gap:10px;min-height:54px;padding:0 14px;margin-top:12px;border-radius:14px;border:1px solid var(--line);background:rgba(4,20,30,.75)}
+.ax-field:focus-within{border-color:var(--line-hi);box-shadow:0 0 0 2px rgba(46,224,238,.25)}
+.ax-field > svg{width:20px;height:20px;flex:none;stroke:var(--muted);fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.ax-field input{flex:1;min-width:0;border:0;background:transparent;color:var(--fg);font:16px var(--body);padding:14px 0;outline:none}
+.ax-field input::placeholder{color:#7f9aa8}
+.ax-eye{width:40px;height:40px;flex:none;display:grid;place-items:center;border:0;border-radius:10px;background:none;color:var(--muted);cursor:pointer}
+.ax-eye svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+
+@media (max-width:520px){
+  .ax-stats{gap:8px}
+  .ax-stat{min-height:98px;border-radius:16px}
+  .ax-stat b{font-size:25px}
+  .ax-stat span{font-size:12px}
+  .ax-title h1{font-size:25px}
+  .ax-title svg{width:34px;height:34px}
 }

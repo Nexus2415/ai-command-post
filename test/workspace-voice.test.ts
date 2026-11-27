@@ -22,7 +22,7 @@ test("the workspace can be added to a phone's home screen", () => {
   const m = JSON.parse(read("manifest.webmanifest"));
   assert.match(html, /<link rel="manifest" href="manifest\.webmanifest">/);
   assert.match(html, /apple-touch-icon" href="icon-180\.png"/);
-  assert.equal(m.start_url, "/workspace.html");
+  assert.equal(m.start_url, "/home.html");
   assert.equal(m.display, "standalone");
   for (const i of m.icons) assert.ok(existsSync(new URL(`../dashboard/${i.src}`, import.meta.url)), i.src);
   assert.match(read("workspace-chat.css"), /@media \(pointer:coarse\)\{input,select,textarea\{font-size:16px\}\}/);

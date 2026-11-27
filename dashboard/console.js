@@ -156,8 +156,7 @@
     } catch (e) { const err = new Error("Network error: couldn't reach the server."); err.status = 0; throw err; }
     const j = await r.json().catch(() => ({}));
     if (r.status === 401 && retry !== false) {
-      const pw = window.prompt("Password for AI Command Post");
-      if (pw) { password = pw; return post(path, body, false); }
+      if (window.ACPSession) return window.ACPSession.expired();
     }
     if (!r.ok) { const err = new Error(errorMessage(r.status, j, path === "/api/intake" ? "intake" : "console")); err.status = r.status; throw err; }
     return j;
