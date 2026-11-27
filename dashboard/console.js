@@ -117,6 +117,18 @@
       { label: "AIs in last report (unverified)", value: engine.agentsOnline.map(reportedAgent).join(", ") || "None",
         tone: engine.agentsOnline.some(k => SUSPENDED.includes(k)) ? "warn" : null },
       { label: "Last run", value: c.planned + " planned, " + c.worked + " worked, " + c.reconciled + " reconciled, " + c.waiting + " waiting, " + c.errors + " errors", tone: c.errors ? "warn" : null },
+      ...scoreRows(engine.scorecard),
+    ];
+  }
+  // Scorecard (ARN-150): is the engine getting better? Proof means a link, and for code a PR whose checks passed.
+  function scoreRows(sc) {
+    const n = v => Number.isInteger(v) && v >= 0;
+    if (!sc || typeof sc !== "object" || !["worked", "proven", "unproven", "neededYou", "open", "windowDays"].every(k => n(sc[k]))) return [];
+    const days = "last " + sc.windowDays + " days" + (sc.partial ? ", newest tasks only" : "");
+    return [
+      { label: "Finished with proof (" + days + ")", value: sc.proven + " of " + sc.worked + " tasks" + (sc.unproven ? ", " + sc.unproven + " done without proof" : "") + (sc.open ? ", " + sc.open + " still open" : ""), tone: sc.unproven ? "warn" : null },
+      { label: "Needed you", value: sc.neededYou === 0 ? "0 times" : sc.neededYou + (sc.neededYou === 1 ? " time" : " times") + " (blocked, or reopened after done)", tone: sc.neededYou ? "warn" : null },
+      { label: "Cost per finished task", value: typeof sc.usdPerProven === "number" ? usd(sc.usdPerProven, 2) + " (" + usd(sc.spentUsd, 2) + " spent)" : "None finished yet (" + usd(Number(sc.spentUsd) || 0, 2) + " spent)", tone: null },
     ];
   }
   // A cap is a limit on spend, never a permission, and the report can't prove which calls ran.
