@@ -5,6 +5,7 @@ import { AGENTS, AGENT_LIST, agentFor, titleFor } from "./agents.ts";
 import { Budget, estimateTokens, ledgerContent } from "./budget.ts";
 import { isAgentKey, isSuspended, type AgentKey, type Config } from "./config.ts";
 import { extractJson } from "./json.ts";
+import { MAX_SCORED_TASKS, scorecard, type Outcome, type Scorecard } from "./scorecard.ts";
 import type { Issue, TaskStore } from "./linear.ts";
 import type { ClaimStore } from "./claims.ts";
 import { ProviderError, type ChatMessage, type ModelClient } from "./providers.ts";
@@ -654,7 +655,7 @@ export async function tick(deps: Deps): Promise<TickReport> {
     }
   }
   await saveLedger(d);
-  await publishStatus(d, report);
+  await publishStatus(d, report, await scoreRun(d, issues));
   d.log?.(JSON.stringify({ at: new Date().toISOString(), ...report, budget: d.budget.summary() }));
   return report;
 }
@@ -673,7 +674,33 @@ async function saveLedger(d: Deps): Promise<void> {
 }
 
 /** Rewrites the Linear status document the dashboard reads. A failure is logged, never fails the run. */
-async function publishStatus(d: Deps, report: TickReport): Promise<void> {
+/**
+ * The scorecard for the status report (ARN-150). Reads the newest result on each task the engine spent on, at most
+ * MAX_SCORED_TASKS of them; any failure leaves the scorecard out rather than showing wrong numbers.
+ */
+async function scoreRun(d: Deps, issues: Issue[]): Promise<Scorecard | undefined> {
+  if (!d.store.publishStatus) return undefined;
+  try {
+    const entries = d.budget.snapshot().entries;
+    const spentOn = new Set(entries.map((e) => e.issue));
+    const window = new Set(issues.map((i) => i.identifier));
+    const worked = issues
+      .filter((i) => !isQuestion(i) && !isCommand(i) && spentOn.has(i.identifier))
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    const scored = worked.slice(0, MAX_SCORED_TASKS);
+    const results = new Map<string, { status: Outcome; body: string }>();
+    for (const t of scored) {
+      const body = latestResult(await d.store.getComments(t.id), t.identifier, verifierFor(d.cfg.provenanceSecret, t.id));
+      if (body) results.set(t.identifier, { status: resultStatus(body) as Outcome, body });
+    }
+    return scorecard(scored, window, entries, results, worked.length > scored.length);
+  } catch (e) {
+    d.log?.(`scorecard not computed: ${(e as Error).message}`);
+    return undefined;
+  }
+}
+
+async function publishStatus(d: Deps, report: TickReport, score?: Scorecard): Promise<void> {
   if (!d.store.publishStatus) return;
   const b = d.budget.summary();
   const snapshot = {
@@ -691,6 +718,7 @@ async function publishStatus(d: Deps, report: TickReport): Promise<void> {
       waiting: report.waiting.length,
       errors: report.errors.length,
     },
+    ...(score ? { scorecard: score } : {}),
   };
   try {
     await d.store.publishStatus(statusContent(snapshot));

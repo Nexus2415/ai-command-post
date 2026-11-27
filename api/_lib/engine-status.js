@@ -15,6 +15,7 @@ export function statusContent(s) {
     `- Mode: ${s.dryRun ? "dry run" : "live writes"}`,
     `- Spend ${b.month}: $${b.spentUsd.toFixed(4)} of $${b.capUsd.toFixed(2)} cap (${b.calls} calls)`,
     ...(b.ledgerProblem ? [`- Paid calls blocked: ${b.ledgerProblem}`] : []),
+    ...(s.scorecard ? [`- Scorecard, last ${s.scorecard.windowDays} days: ${s.scorecard.proven} finished with proof, ${s.scorecard.neededYou} needed the owner, $${s.scorecard.spentUsd.toFixed(4)} spent`] : []),
     "",
     "```json",
     JSON.stringify(s),
@@ -25,6 +26,19 @@ export function statusContent(s) {
 const iso = v => typeof v === "string" && v.length <= 40 && Number.isFinite(Date.parse(v));
 const amount = v => typeof v === "number" && Number.isFinite(v) && v >= 0;
 const count = v => Number.isInteger(v) && v >= 0;
+
+const SCORE_COUNTS = ["windowDays", "worked", "proven", "unproven", "neededYou", "open"];
+/** The engine's scorecard (ARN-150), or null when missing or malformed. A bad scorecard never hides the rest. */
+export function parseScorecard(v) {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+  if (!SCORE_COUNTS.every(k => count(v[k])) || !amount(v.spentUsd) || typeof v.partial !== "boolean") return null;
+  if (v.usdPerProven !== null && !amount(v.usdPerProven)) return null;
+  if (v.proven + v.unproven + v.neededYou + v.open !== v.worked) return null;
+  return {
+    windowDays: v.windowDays, worked: v.worked, proven: v.proven, unproven: v.unproven, neededYou: v.neededYou, open: v.open,
+    spentUsd: v.spentUsd, usdPerProven: v.usdPerProven, partial: v.partial,
+  };
+}
 
 /** The validated snapshot from a status document, or null when it is missing or malformed. */
 export function parseStatus(content) {
@@ -45,6 +59,7 @@ export function parseStatus(content) {
     agentsOnline: AGENTS.filter(a => v.agentsOnline.includes(a)),
     budget: { month: b.month, spentUsd: b.spentUsd, capUsd: b.capUsd, calls: b.calls, ledgerProblem: b.ledgerProblem ? b.ledgerProblem.slice(0, 200) : null },
     counts: Object.fromEntries(COUNTS.map(k => [k, v.counts[k]])),
+    ...(parseScorecard(v.scorecard) ? { scorecard: parseScorecard(v.scorecard) } : {}),
   };
 }
 
