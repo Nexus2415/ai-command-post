@@ -118,14 +118,14 @@ test("a later message sends the side-by-side answers back labelled, as one turn"
 });
 
 test("compare needs 2 or 3 ready AIs and refuses before saving anything", async () => {
-  const { call, calls } = harness({ ...base, GEMINI_API_KEY: "synthetic-gemini", OPENAI_API_KEY: "" });
+  const { call, calls } = harness({ ...base, OPENAI_API_KEY: "" });
   const t = await thread(call);
   assert.equal((await call("compare", { threadId: t.id, content: "Q", models: ["claude"] })).status, 400);
   assert.equal((await call("compare", { threadId: t.id, content: "Q", models: ["claude", "chatgpt", "perplexity", "gemini"] })).status, 400);
   assert.equal((await call("compare", { threadId: t.id, content: "Q", models: ["claude", "nope"] })).status, 400);
   const off = await call("compare", { threadId: t.id, content: "Q", models: ["claude", "gemini"] });
   assert.equal(off.status, 409);
-  assert.match((off.body as any).error, /Gemini isn't available: Turned off by the owner/);
+  assert.match((off.body as any).error, /Gemini isn't available: No API key/);
   const keyless = await call("compare", { threadId: t.id, content: "Q", models: ["claude", "chatgpt"] });
   assert.match((keyless.body as any).error, /ChatGPT isn't available: No API key/);
   assert.equal(calls.length, 0);

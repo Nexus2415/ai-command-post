@@ -39,9 +39,17 @@ async function thread(call: any, model = "claude") {
   return (await call("create_thread", { projectId: p.project.id, title: "T", model })).body.thread;
 }
 
-test("the website's rates and suspensions match the engine's", () => {
-  assert.deepEqual(RATES, DEFAULT_RATES);
-  assert.deepEqual([...SUSPENDED_MODELS], [...SUSPENDED_AGENTS]);
+test("chat rates match the engine's, except Gemini, which chat meters at paid prices", () => {
+  const { gemini, ...rest } = RATES;
+  const { gemini: engineGemini, ...engineRest } = DEFAULT_RATES;
+  assert.deepEqual(rest, engineRest);
+  assert.deepEqual(gemini, { inputPerM: 0.3, outputPerM: 2.5, freeTier: false });
+  assert.ok(gemini.inputPerM >= engineGemini.inputPerM && gemini.outputPerM >= engineGemini.outputPerM);
+});
+
+test("Gemini is back in chat only; the engine still refuses it (ARN-147)", () => {
+  assert.deepEqual([...SUSPENDED_MODELS], []);
+  assert.deepEqual([...SUSPENDED_AGENTS], ["gemini"]);
 });
 
 test("a message gets a reply, saved with its real tokens and cost", async () => {
@@ -96,19 +104,19 @@ test("the monthly and per-thread caps stop the next reply before the call", asyn
   assert.equal((await month.call("chat", { threadId: t2.id, content: "2" })).status, 402);
 });
 
-test("suspended or keyless models are refused without a call", async () => {
-  const { call, calls } = setup({ ...base, OPENAI_API_KEY: "" });
+test("keyless models are refused without a call", async () => {
+  const { call, calls } = setup({ ...base, OPENAI_API_KEY: "", GEMINI_API_KEY: "", OPENROUTER_API_KEY: "" });
   const g = await thread(call, "gemini");
   const o = await thread(call, "chatgpt");
   const outG = await call("chat", { threadId: g.id, content: "Hi" });
   const outO = await call("chat", { threadId: o.id, content: "Hi" });
   assert.equal(outG.status, 409);
-  assert.match((outG.body as any).error, /Turned off by the owner/);
+  assert.match((outG.body as any).error, /No API key/);
   assert.equal(outO.status, 409);
   assert.match((outO.body as any).error, /No API key/);
   assert.equal(calls.length, 0);
   const m = (await call("models")).body as any;
-  assert.deepEqual(m.models.gemini, { ready: false, reason: "Turned off by the owner.", via: null });
+  assert.deepEqual(m.models.gemini, { ready: false, reason: "No API key added yet.", via: null });
   assert.equal(m.models.claude.ready, true);
 });
 

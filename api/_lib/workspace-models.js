@@ -10,13 +10,17 @@ import { fileTokens, hasPdf, toAnthropic, toOpenAi, withoutFileData } from "./wo
 export const RATES = Object.freeze({
   claude: { inputPerM: 2, outputPerM: 10, freeTier: false },
   chatgpt: { inputPerM: 0.25, outputPerM: 2, freeTier: false },
-  gemini: { inputPerM: 0, outputPerM: 0, freeTier: true },
+  // Chat meters Gemini at Google's paid list price for gemini-2.5-flash ($0.30 in / $2.50 out per million tokens,
+  // ai.google.dev/gemini-api/docs/pricing, checked 2026-11-27), never as free, so the spend caps always count it.
+  // The engine's own rate (src/budget.ts) stays as it is; the engine still never runs Gemini.
+  gemini: { inputPerM: 0.3, outputPerM: 2.5, freeTier: false },
   perplexity: { inputPerM: 1, outputPerM: 1, perRequestUsd: 0.012, freeTier: false },
 });
 
-// Same as SUSPENDED_AGENTS in src/config.ts (Darius blocked Gemini on 2026-10-09, ARN-115). Lifting it needs his
-// written decision and a reviewed change in both places.
-export const SUSPENDED_MODELS = Object.freeze(["gemini"]);
+// Models the Command chat refuses. Darius blocked Gemini everywhere on 2026-10-09 (ARN-115) and asked for it back on
+// 2026-11-27 (ARN-147). It is back in chat only, as an answerer under the workspace spend caps. The engine still
+// refuses it: SUSPENDED_AGENTS in src/config.ts and SUSPENDED_LEADS in api/intake.js are unchanged.
+export const SUSPENDED_MODELS = Object.freeze([]);
 
 const KEY_VARS = { claude: "ANTHROPIC_API_KEY", chatgpt: "OPENAI_API_KEY", gemini: "GEMINI_API_KEY", perplexity: "PERPLEXITY_API_KEY" };
 const MODEL_VARS = { claude: "ACP_MODEL_CLAUDE", chatgpt: "ACP_MODEL_CHATGPT", gemini: "ACP_MODEL_GEMINI", perplexity: "ACP_MODEL_PERPLEXITY" };
@@ -32,15 +36,18 @@ const OR_DEFAULT_IDS = {
   claude: "anthropic/claude-sonnet-5.5", chatgpt: "openai/gpt-5-mini", gemini: "google/gemini-2.5-flash", perplexity: "perplexity/sonar",
 };
 // ARN-126: through OpenRouter a slot may only reach its own vendor, so a model labelled Claude is always an
-// Anthropic model, and nothing can route to suspended Gemini under another name. Anything else is refused.
-const OR_VENDORS = { claude: "anthropic", chatgpt: "openai", perplexity: "perplexity" };
+// Anthropic model, and nothing can route to Gemini under another name. Anything else is refused.
+// ARN-147: the Gemini chat slot reaches only google/ models, and never a ":free" route (free routes may keep prompts
+// to train on).
+const OR_VENDORS = { claude: "anthropic", chatgpt: "openai", gemini: "google", perplexity: "perplexity" };
 export function openRouterIdOk(model, id) {
   const vendor = OR_VENDORS[model];
-  return Boolean(vendor) && typeof id === "string" && new RegExp(`^${vendor}/[A-Za-z0-9._:-]{1,100}$`).test(id);
+  if (!vendor || typeof id !== "string" || !new RegExp(`^${vendor}/[A-Za-z0-9._:-]{1,100}$`).test(id)) return false;
+  return !(model === "gemini" && /:free$/i.test(id));
 }
 // Smart routing (2026-11-25): a simple question may go to the same vendor's light model, about 20x cheaper.
 // Prices are OpenRouter's list prices of 2026-11-25 (anthropic/claude-haiku-5.5 $0.10/$0.50, openai/gpt-5-nano
-// $0.05/$0.40 per million tokens). Perplexity has no lighter model, and Gemini stays suspended.
+// $0.05/$0.40 per million tokens). Perplexity and Gemini have no lighter model here.
 export const LIGHT_RATES = Object.freeze({
   claude: { inputPerM: 0.1, outputPerM: 0.5, freeTier: false },
   chatgpt: { inputPerM: 0.05, outputPerM: 0.4, freeTier: false },

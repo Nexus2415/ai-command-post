@@ -44,10 +44,10 @@ test("only short, plain questions are routed light; anything in doubt gets the f
   ]) assert.equal(routeTier("claude", q), "full", q.slice(0, 40));
   assert.equal(routeTier("claude", "Hi there", { historyChars: 6_001 }), "full");
   assert.equal(routeTier("claude", "Hi there", { files: true }), "full");
-  // Perplexity has no lighter model; Gemini stays suspended either way.
+  // Perplexity and Gemini have no lighter model, so a "light" ask still gets the full one.
   assert.equal(routeTier("perplexity", "Hi there"), "full");
   assert.equal(routeTier("gemini", "Hi there"), "full");
-  assert.equal(modelStatus(base, "gemini", "light").ready, false);
+  assert.deepEqual(modelStatus(base, "gemini", "light"), { ready: true, reason: null, via: "openrouter", id: "google/gemini-2.5-flash" });
 });
 
 test("the light models are the same vendor's, and much cheaper", () => {

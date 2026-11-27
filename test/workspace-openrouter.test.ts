@@ -34,11 +34,11 @@ async function thread(call: any, model: string) {
   return (await call("create_thread", { projectId: p.project.id, title: "T", model })).body.thread;
 }
 
-test("with only an OpenRouter key, Claude, ChatGPT and Perplexity are ready and Gemini stays off", () => {
+test("with only an OpenRouter key, all four chat AIs are ready, Gemini included (ARN-147)", () => {
   assert.deepEqual(modelStatus(base, "claude"), { ready: true, reason: null, via: "openrouter", id: "anthropic/claude-sonnet-5.5" });
   assert.equal(modelStatus(base, "chatgpt").id, "openai/gpt-5-mini");
   assert.equal(modelStatus(base, "perplexity").id, "perplexity/sonar");
-  assert.deepEqual(modelStatus({ ...base, GEMINI_API_KEY: "x" }, "gemini"), { ready: false, reason: "Turned off by the owner." });
+  assert.deepEqual(modelStatus(base, "gemini"), { ready: true, reason: null, via: "openrouter", id: "google/gemini-2.5-flash" });
   assert.equal(modelStatus({ ...base, ACP_OPENROUTER_MODEL_CLAUDE: "anthropic/claude-opus-5.5" }, "claude").id, "anthropic/claude-opus-5.5");
   // A provider's own key wins over OpenRouter.
   assert.equal(modelStatus({ ...base, ANTHROPIC_API_KEY: "a" }, "claude").via, "direct");
@@ -65,6 +65,27 @@ test("a Claude reply goes through OpenRouter, costing the higher of its report a
   const t2 = await thread(low.call, "claude");
   const out2 = (await low.call("chat", { threadId: t2.id, content: "Hi" })).body as any;
   assert.equal(out2.message.cost_usd, Math.round(0.007 * OPENROUTER_FEE * 1e6) / 1e6);
+});
+
+test("a Gemini chat reply goes through OpenRouter and is never billed as free", async () => {
+  // Paid list rates: 10k in x $0.30/M + 2k out x $2.50/M = $0.008. OpenRouter reports $0 (as a free route would).
+  const { call, calls } = harness(base, () => orReply("Hi from Gemini", { prompt_tokens: 10_000, completion_tokens: 2_000, cost: 0 }));
+  const t = await thread(call, "gemini");
+  const out = (await call("chat", { threadId: t.id, content: "Hi" })).body as any;
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]!.url, "https://openrouter.ai/api/v1/chat/completions");
+  assert.equal(calls[0]!.body.model, "google/gemini-2.5-flash");
+  assert.equal(out.message.content, "Hi from Gemini");
+  assert.equal(out.message.cost_usd, Math.round(0.008 * OPENROUTER_FEE * 1e6) / 1e6);
+  assert.ok(estimateUsd("gemini", [{ role: "user", content: "x".repeat(3_000) }], base) > 0, "the cap check counts Gemini");
+});
+
+test("a Gemini chat stays inside the workspace caps and stops before the call", async () => {
+  const { call, calls } = harness({ ...base, ACP_WORKSPACE_MONTHLY_BUDGET_USD: "0.000001" }, () => orReply("ok", {}));
+  const t = await thread(call, "gemini");
+  const out = await call("chat", { threadId: t.id, content: "Hi" });
+  assert.equal(out.status, 402);
+  assert.equal(calls.length, 0);
 });
 
 test("the worst-case check adds the OpenRouter fee and stops before the call", async () => {
@@ -113,7 +134,7 @@ test("the models list says which AIs run through OpenRouter, and an OpenRouter e
   const m = (await call("models")).body as any;
   assert.equal(m.models.claude.via, "openrouter");
   assert.equal(m.models.chatgpt.via, "direct");
-  assert.equal(m.models.gemini.via, null);
+  assert.equal(m.models.gemini.via, "openrouter");
   const t = await thread(call, "claude");
   const out = await call("chat", { threadId: t.id, content: "Hi" });
   assert.equal(out.status, 502);
@@ -121,7 +142,7 @@ test("the models list says which AIs run through OpenRouter, and an OpenRouter e
   assert.match((out.body as any).error, /\(402\)/);
 });
 
-test("ARN-126: an OpenRouter slot only reaches its own vendor, so suspended Gemini can't run under another name", async () => {
+test("ARN-126: an OpenRouter slot only reaches its own vendor, so Gemini can't run under another name", async () => {
   for (const [model, v] of [["claude", "CLAUDE"], ["chatgpt", "CHATGPT"], ["perplexity", "PERPLEXITY"]] as const) {
     for (const id of ["google/gemini-2.5-flash", "google/gemini-2.5-pro:free", "openrouter/auto", "gemini-2.5-flash", "anthropic/../google/gemini", ""]) {
       if (!id) continue;
@@ -133,6 +154,11 @@ test("ARN-126: an OpenRouter slot only reaches its own vendor, so suspended Gemi
   assert.equal(modelStatus({ ...base, ACP_OPENROUTER_MODEL_CHATGPT: "openai/gpt-5" }, "chatgpt").ready, true);
   assert.equal(modelStatus({ ...base, ACP_OPENROUTER_MODEL_PERPLEXITY: "perplexity/sonar-pro" }, "perplexity").ready, true);
   assert.equal(modelStatus({ ...base, ACP_OPENROUTER_MODEL_CLAUDE: "openai/gpt-5" }, "claude").ready, false);
+  // ARN-147: the Gemini chat slot reaches Google only, and never a free route.
+  for (const id of ["anthropic/claude-sonnet-5.5", "openai/gpt-5", "google/gemini-2.5-pro:free", "openrouter/auto", "gemini-2.5-flash"]) {
+    assert.equal(modelStatus({ ...base, ACP_OPENROUTER_MODEL_GEMINI: id }, "gemini").ready, false, `gemini -> ${id}`);
+  }
+  assert.equal(modelStatus({ ...base, ACP_OPENROUTER_MODEL_GEMINI: "google/gemini-2.5-pro" }, "gemini").ready, true);
 
   const env = { ...base, ACP_OPENROUTER_MODEL_CLAUDE: "google/gemini-2.5-flash" };
   const { call, calls } = harness(env, () => orReply("should not happen", { prompt_tokens: 1, completion_tokens: 1 }));
