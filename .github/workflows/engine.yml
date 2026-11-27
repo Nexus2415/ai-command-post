@@ -35,6 +35,7 @@ jobs:
           ACP_MONTHLY_BUDGET_USD: ${{ vars.ACP_MONTHLY_BUDGET_USD || '0' }}
           ACP_LEDGER_RESET: ${{ vars.ACP_LEDGER_RESET }}
           ACP_ALLOW_PULL_REQUESTS: ${{ vars.ACP_ALLOW_PULL_REQUESTS || 'false' }}
+          ACP_MAX_STEPS: ${{ vars.ACP_MAX_STEPS || '6' }}
           ACP_LINEAR_TEAM_KEY: ${{ vars.ACP_LINEAR_TEAM_KEY || 'ARN' }}
           ACP_DEFAULT_LEAD: ${{ vars.ACP_DEFAULT_LEAD || 'claude' }}
           ACP_GITHUB_REPOS: ${{ vars.ACP_GITHUB_REPOS }}
