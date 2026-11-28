@@ -36,7 +36,7 @@ export interface Card {
 /** Durable identity of one review request: a new head is a new request, the same head never repeats. */
 const ACTIVE = new Set(["claude","chatgpt","perplexity","codex"]);
 const SHA = /^[a-f0-9]{40}$/;
-const safeBinding = (c: {taskId:string;repo:string;pr:number;headSha:string}) => /^ARN-[1-9]\\d{0,8}$/.test(c.taskId) && /^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(c.repo) && Number.isSafeInteger(c.pr) && c.pr>0 && SHA.test(c.headSha);
+const safeBinding = (c: {taskId:string;repo:string;pr:number;headSha:string}) => /^ARN-[1-9]\d{0,8}$/.test(c.taskId) && /^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(c.repo) && Number.isSafeInteger(c.pr) && c.pr>0 && SHA.test(c.headSha);
 export const requestKey = (repo: string, pr: number, headSha: string, reviewer: string) => `acp-review:${repo}#${pr}@${headSha}:${reviewer}`;
 
 /** Deterministic: never the implementer, least load first, then the order of `eligible`. */
