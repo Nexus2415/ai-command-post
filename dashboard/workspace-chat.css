@@ -166,3 +166,8 @@ details.srcs[open] > summary{color:var(--fg);border-color:var(--accent)}
 .m .part{margin:12px 0 0}
 .m .part b{color:var(--fg);font-weight:600}
 .srcs-body .part{margin:0}
+
+.rt-individual{display:grid;gap:6px;min-width:0}
+.rt-individual .rt-fold > summary{min-height:44px;overflow-wrap:anywhere}
+.rt-individual .rt-fold > summary::after{content:"▾";margin-left:auto;padding-left:8px}
+.rt-individual .rt-fold[open] > summary::after{content:"▴"}
