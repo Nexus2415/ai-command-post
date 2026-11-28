@@ -59,3 +59,15 @@ test("the Tools page shows the catalog, rendered without HTML parsing", () => {
   assert.match(js, /catalogId/);
   assert.doesNotMatch(js, /innerHTML|outerHTML|insertAdjacentHTML/);
 });
+
+test("plugin directory filters and scopes existing catalog, without bypassing review", () => {
+  const html = readFileSync(new URL("../dashboard/tools.html", import.meta.url), "utf8");
+  const js = readFileSync(new URL("../dashboard/tools.js", import.meta.url), "utf8");
+  for (const id of ["catSearch","catCategory","catScope","catStatus"]) assert.ok(html.includes('id="'+id+'"'));
+  assert.match(js, /catalog.setupNeeded/);
+  assert.match(js, /projectId: \$\("catScope"\).value \|\| null/);
+  assert.match(js, /post\("connector_preview", \{ catalogId: e.id, spec \}\)/);
+  assert.match(js, /confirm: preview.confirm/);
+  assert.match(js, /Connection status unknown/);
+  assert.match(js, /Name already saved/);
+});

@@ -148,8 +148,12 @@ details.file pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:300px;ov
   </div>
 
   <section class="panel card" aria-labelledby="catH">
-    <h2 id="catH">Catalog: ready-made tools</h2>
-    <p class="note">Free, read-only look-ups that need no key. Tap Review, check what it can reach, then confirm. Each lookup counts about 0.1¢ against the spend caps.</p>
+    <h2 id="catH">Plugin directory</h2>
+    <p class="note">Ready-made public read-only tools. No separate key required. Review permissions and scope before connecting. Each lookup counts about 0.1¢ against the spend caps.</p>
+    <div class="field"><label for="catSearch">Find a plugin</label><input id="catSearch" type="search" maxlength="120" placeholder="Search plugins"></div>
+    <div class="field"><label for="catCategory">Category</label><select id="catCategory" class="sel"><option value="">All categories</option></select></div>
+    <div class="field"><label for="catScope">Who can use a new plugin</label><select id="catScope" class="sel"></select></div>
+    <p id="catStatus" class="note" role="status"></p>
     <div id="catList" class="catgrid"><p class="empty">Loading…</p></div>
     <div id="catOut"></div>
   </section>

@@ -43,7 +43,7 @@
   async function load() {
     const o = await post("tools_overview");
     projects = o.projects || [];
-    fillScope($("mScope")); fillScope($("hScope"));
+    fillScope($("mScope")); fillScope($("hScope")); fillScope($("catScope"));
     const list = $("connList");
     list.replaceChildren();
     if (o.setupNeeded) list.append(el("p", "msg warn", "One setup step is still to do before you can add your own: the connectors table in the workspace database. Claude can do it once you say yes."));
@@ -67,7 +67,7 @@
       del.type = "button";
       del.addEventListener("click", guard(async () => {
         if (!window.confirm("Delete " + r.name + "? The AIs stop using it straight away.")) return;
-        await post("connector_delete", { id: r.id }); await load();
+        await post("connector_delete", { id: r.id }); await load(); await loadCatalog();
       }));
       top.append(el("span", "grow"), toggle, del);
       const more = el("details");
@@ -79,18 +79,44 @@
   }
   // Plugin catalog: ready-made look-up tools. Adding one goes through the same review and confirmation as any other;
   // the server uses its own copy of the entry, so only the project scope is chosen here.
+  let catalog = null;
   async function loadCatalog() {
-    const c = await post("catalog");
+    try {
+      catalog = await post("catalog");
+      if (!Array.isArray(catalog.entries) || typeof catalog.setupNeeded !== "boolean") throw new Error("Plugin directory is unavailable.");
+      const select = $("catCategory"), selected = select.value;
+      select.replaceChildren(el("option", null, "All categories"));
+      select.options[0].value = "";
+      for (const category of [...new Set(catalog.entries.map(e => e.category))].sort()) {
+        const opt = el("option", null, category); opt.value = category; select.append(opt);
+      }
+      if ([...select.options].some(o => o.value === selected)) select.value = selected;
+      renderCatalog();
+    } catch (e) {
+      catalog = null; $("catList").replaceChildren(el("p", "msg err", "Plugin directory could not be loaded. Connection status unknown."));
+      $("catStatus").textContent = ""; throw e;
+    }
+  }
+  function renderCatalog() {
+    if (!catalog) return;
     const list = $("catList"); list.replaceChildren();
-    for (const e of c.entries) {
+    const query = $("catSearch").value.trim().toLowerCase(), category = $("catCategory").value;
+    const entries = catalog.entries.filter(e => (!category || e.category === category) &&
+      [e.title,e.category,e.blurb,e.host].some(v => String(v || "").toLowerCase().includes(query)));
+    $("catStatus").textContent = entries.length + " of " + catalog.entries.length + " plugins" +
+      (catalog.setupNeeded ? " · Storage setup required; adding is unavailable." : "");
+    if (!entries.length) list.append(el("p", "empty", "No matching plugins."));
+    for (const e of entries) {
       const card = el("div", "conn");
-      card.append(el("span", "cat", e.category), el("strong", null, e.title), el("span", "note", e.blurb), el("span", "note", "Reaches only " + e.host));
-      if (e.added) card.append(el("span", "chip on", "Added"));
+      card.append(el("span", "cat", e.category), el("strong", null, e.title), el("span", "note", e.blurb),
+        el("span", "note", "Read-only · " + e.host));
+      if (catalog.setupNeeded) card.append(el("span", "chip off", "Setup required"));
+      else if (e.added) card.append(el("span", "chip", "Name already saved"), el("a", "btn ghost", "Manage saved tools"));
       else {
-        const b = el("button", "btn ghost", "Review " + e.title); b.type = "button";
+        const b = el("button", "btn ghost", "Review & connect"); b.type = "button";
         b.addEventListener("click", guard(async () => {
           const out = $("catOut");
-          const spec = { projectId: null };
+          const spec = { projectId: $("catScope").value || null };
           try {
             const preview = await post("connector_preview", { catalogId: e.id, spec });
             review(out, "http", preview.spec, preview, e.id);
@@ -99,9 +125,12 @@
         }));
         card.append(b);
       }
+      const manage = card.querySelector("a"); if (manage) manage.href = "#onH";
       list.append(card);
     }
   }
+  $("catSearch").addEventListener("input", renderCatalog);
+  $("catCategory").addEventListener("change", renderCatalog);
   function guard(fn) {
     return async (ev) => {
       if (ev && ev.preventDefault) ev.preventDefault();
@@ -207,5 +236,5 @@
   const sw = window.ACPStopSwitch.mount($("stopSwitch"), { post });
   sw.refresh();
   // One after the other, so the password is asked for once.
-  load().then(loadCatalog).catch((e) => say(e.message, "err"));
+  load().then(loadCatalog).catch((e) => { $("catList").replaceChildren(el("p", "msg err", "Plugin directory unavailable. Connection status unknown.")); say(e.message, "err"); });
 })();
