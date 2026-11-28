@@ -9,6 +9,7 @@ import type { Issue, StateType, TaskStore } from "../src/linear.ts";
 import { RECONCILED_MARKER, RESULT_MARKER, tick, type Deps } from "../src/orchestrator.ts";
 import type { ChatMessage, ModelClient } from "../src/providers.ts";
 import { STOPPED } from "../src/stop-switch.ts";
+import { fixture as visualFixture } from "./helpers/visual-goal-fixture.ts";
 
 class MemoryStore implements TaskStore {
   issues: Issue[] = [];
@@ -285,14 +286,21 @@ test("a blocked step pauses the goal for the owner with no paid call; later step
   assert.equal(store.bodies(goal.id).filter((b) => b.startsWith(PAUSED_MARKER)).length, 1);
 });
 
-test("a step that opens a draft PR stays In Progress until merged, and the next step waits for it", async () => {
+test("authorized synthetic image goal opens a draft PR, checks it, and waits for owner merge", async () => {
   const store = new MemoryStore();
-  const goal = store.add({ title: "[Goal] Code" });
+  const visual = visualFixture();
+  assert.equal((await visual.run()).status, "recorded");
+  const draft = visual.draft()!;
+  const goal = store.add({ id: draft.goalId, title: draft.title, description: draft.description });
+  assert.match(goal.description, /Observed: Blue square/);
   const drafts: unknown[] = [];
+  let checked = false;
   const f = (async (url: string, init: RequestInit = {}) => {
     const u = new URL(url);
     if (init.method === "PUT" && u.pathname.includes("/merge")) throw new Error("the engine must never merge");
     if (u.pathname === "/repos/acme/app/pulls" && init.method === "POST") drafts.push(JSON.parse(String(init.body)).draft);
+    if (u.pathname === "/repos/acme/app/pulls/7") return Response.json({ head: { sha: "synthetic-head" }, state: "open", draft: true });
+    if (u.pathname.includes("/check-runs")) { checked = true; return Response.json({ check_runs: [{ name: "Validate", status: "completed", conclusion: "success" }] }); }
     if (u.pathname === "/repos/acme/app") return Response.json({ default_branch: "main" });
     if (u.pathname.includes("/git/ref/heads/")) return Response.json({ object: { sha: "base" } });
     if (u.pathname === "/repos/acme/app/pulls" && init.method === "POST") return Response.json({ number: 7, html_url: "https://github.com/acme/app/pull/7", draft: JSON.parse(String(init.body)).draft });
@@ -301,6 +309,7 @@ test("a step that opens a draft PR stays In Progress until merged, and the next 
   const claude = scripted([
     planReply(2, "claude"),
     JSON.stringify({ tool: "github.open_pull_request", input: { repo: "acme/app", title: "Step 1", branch: "acp/step-1", files: [{ path: "a.ts", content: "a" }] } }),
+    JSON.stringify({ tool: "github.pr_checks", input: { repo: "acme/app", pr: 7 } }),
     done("Opened https://github.com/acme/app/pull/7, ALL PASSED."),
   ]);
   const d = deps(store, { claude });
@@ -310,6 +319,7 @@ test("a step that opens a draft PR stays In Progress until merged, and the next 
   const [s1, s2] = store.kids(goal.id);
   await tick(d);
   assert.deepEqual(drafts, [true], "the PR is a draft");
+  assert.equal(checked, true, "the actual PR-check tool ran against the synthetic head");
   assert.equal(store.state(s1!.id), "started", "held for the owner's merge");
   assert.ok(store.bodies(s1!.id).some((b) => b.startsWith(RESULT_MARKER) && /stays In Progress until its pull request is merged/.test(b)));
   const r = await tick(d);
