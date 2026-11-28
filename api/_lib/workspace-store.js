@@ -193,6 +193,8 @@ export function createMemoryStore({ control = false, shared = null } = {}) {
             .map(({ role, content, model, created_at }) => ({ role, content, model, created_at })),
         }));
     },
+    // Scope staging requires the dedicated database RPC; tests that exercise it inject a synthetic implementation.
+    saveBuildScope: async (_args) => { throw new StoreError("Visual scope storage unavailable"); },
     // Tests: reach a stored thread directly (e.g. to break its flag).
     _thread: (id) => threads.find((t) => t.id === id),
     listMessages: async (threadId) => messages.filter((m) => m.thread_id === threadId),
