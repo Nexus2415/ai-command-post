@@ -56,7 +56,7 @@ test("read aloud starts one chunk per callback and surfaces errors or silent sta
   assert.equal(utterances.length,2);
   utterances[1].onerror();
   assert.equal(button.textContent,"▶ Listen");
-  assert.match(notes.at(-1)!,/Audio could not start/);
+  assert.match(notes.at(-1)!,/Browser speech failed/);
   button.click();
   const silent = [...timers.values()].at(-1)!; silent();
   assert.equal(button.textContent,"▶ Listen");
@@ -71,6 +71,35 @@ test("audio test uses the same playback handler before any workspace API initial
   assert.match(read("workspace.html"), /id="audioTest"/);
   const js = read("workspace.js");
   assert.match(js, /const sample = el\("div", null, "This is a NEXIA audio test\./);
-  assert.ok(js.indexOf('$("audioTest").append(speakButton(sample))') < js.indexOf("guard(async () => { await loadStatus(); await loadProjects(); })()"));
-  assert.ok(js.includes('$("audioTest").append(speakButton(sample))'));
+  assert.ok(js.indexOf('$("audioTest").append(localTest, defaultTest, testStatus)') < js.indexOf("guard(async () => { await loadStatus(); await loadProjects(); })()"));
+  assert.ok(js.includes('$("audioTest").append(localTest, defaultTest, testStatus)'));
+});
+
+test("standalone test exposes browser callbacks without claiming audible success", () => {
+  const js = read("workspace.js");
+  const start = js.indexOf("  let speaking = null;");
+  const end = js.indexOf('  window.addEventListener("pagehide", () => stopSpeaking());', start);
+  const notes: string[] = [], utterances: any[] = [], timers = new Map<number, () => void>();
+  let id = 0;
+  const synth = { speaking:false,pending:false,paused:false,getVoices:()=>[{lang:"en-US",localService:true}],
+    speak:(u:any)=>utterances.push(u),cancel:()=>{},resume:()=>{} };
+  class Utterance { constructor(public text:string){} }
+  const context = {window:{speechSynthesis:synth,SpeechSynthesisUtterance:Utterance},navigator:{language:"en-US"},
+    say:()=>{}, report:(s:string)=>notes.push(s),setTimeout:(f:()=>void)=>{timers.set(++id,f);return id;},
+    clearTimeout:(n:number)=>timers.delete(n),el:()=>({textContent:"▶ Listen",setAttribute:()=>{},
+      addEventListener(_e:string,fn:()=>void){Object.assign(this,{click:fn});}})};
+  const b = runInNewContext(js.slice(start,end)+'\nspeakButton({childNodes:[{nodeType:3,textContent:"Test."}]}, report, true);', context);
+  b.click();
+  assert.equal(utterances[0].voice,undefined,"default voice retry does not force local voice");
+  utterances[0].onstart();
+  assert.match(notes.at(-1)!,/audible sound is not verified/);
+  utterances[0].onend();
+  assert.match(notes.at(-1)!,/Did you hear it/);
+  b.click();
+  utterances.at(-1).onstart();
+  [...timers.values()].at(-1)!();
+  assert.match(notes.at(-1)!,/did not finish/);
+  b.click();
+  utterances.at(-1).onerror({error:"voice-unavailable"});
+  assert.match(notes.at(-1)!,/voice-unavailable/);
 });
