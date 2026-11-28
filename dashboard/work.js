@@ -184,7 +184,14 @@
       if (j.issue?.id !== it.id || !Array.isArray(j.comments)) throw new Error("Task details could not be verified.");
       body.replaceChildren();
       body.append(el("p", "ax-muted", label(j.issue.lane) + " · Execution activity not verified"));
-      body.append(el("p", "ax-task-copy", j.issue.description || "No description."));
+      const description = String(j.issue.description || "").trim();
+      const first = description.split(/\n\s*\n/).find(p => p.trim()) || "No description.";
+      const summary = first.length > 500 ? first.slice(0, 497) + "…" : first;
+      body.append(el("h3", null, "Task summary"), el("p", "ax-task-copy", summary));
+      if (description && description !== summary) {
+        const more = el("details"); more.append(el("summary", null, "Full task description"),
+          el("p", "ax-task-copy", description)); body.append(more);
+      }
       const when = Date.parse(j.fetchedAt);
       if (Number.isFinite(when)) body.append(el("p", "ax-muted", "Read from Linear: " + new Date(when).toLocaleString()));
       body.append(el("h3", null, "Latest updates"));
