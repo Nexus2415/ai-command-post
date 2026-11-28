@@ -6,6 +6,12 @@
 // Bounds: a local file only (no URLs), up to 150 MB, 300 s and 4K. Frames every 12 s, or closer so a short clip
 // still gets 9 (same rule as dashboard/media-reader.js; a test keeps them identical).
 //
+// Hardening (ChatGPT review of #145): the input must be a regular file, not a symlink; only plain container formats
+// are opened (no playlists or concat lists that could pull in other local files); output goes to a NEW or EMPTY
+// folder, nothing is ever overwritten (-n), every output must be newly written and non-empty before it is hashed;
+// and the whole job has one deadline. This is the owner's standalone tool: an automated worker must give it a fresh
+// private folder of its own and must not hand it untrusted paths.
+//
 // It writes frames, the sound track and evidence.json, which records SHA-256 of the source and of every output, the
 // REQUESTED frame times (not the decoded frame's exact time), coverage gaps, and that transcription and any reading
 // of meaning were not performed. It calls no AI, sends nothing anywhere and approves nothing.
@@ -14,11 +20,13 @@
 
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { basename, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const MEDIA_LIMITS = Object.freeze({ maxBytes: 150_000_000, maxSeconds: 300, maxSide: 3840, intervalSeconds: 12, minFrames: 9, maxFrames: 27 });
+export const MEDIA_LIMITS = Object.freeze({ maxBytes: 150_000_000, maxSeconds: 300, maxSide: 3840, intervalSeconds: 12, minFrames: 9, maxFrames: 27, jobSeconds: 300 });
+// Container formats FFmpeg may open. Playlist and list formats (hls, concat, image2 patterns, ...) are left out on purpose.
+export const FORMATS = "mov,mp4,m4a,3gp,3g2,mj2,matroska,webm,mp3,wav,ogg,flac,aac";
 const EXTENSIONS = new Set([".mp4", ".m4v", ".mov", ".webm", ".mkv", ".mp3", ".wav", ".m4a", ".aac", ".ogg", ".opus", ".flac"]);
 
 export class MediaRefusal extends Error {}
@@ -79,24 +87,45 @@ export async function check(path: string): Promise<number> {
   if (/^[a-z][a-z0-9+.-]*:/i.test(path) && !/^[a-z]:[\\/]/i.test(path)) throw new MediaRefusal("Only a file on this computer can be read, not a link.");
   if (!EXTENSIONS.has(extname(path).toLowerCase())) throw new MediaRefusal(`${basename(path)} isn't a video or audio file type this reads (${[...EXTENSIONS].join(", ")}).`);
   let s;
-  try { s = await stat(path); } catch { throw new MediaRefusal(`${basename(path)} wasn't found.`); }
+  try { s = await lstat(path); } catch { throw new MediaRefusal(`${basename(path)} wasn't found.`); }
+  if (s.isSymbolicLink()) throw new MediaRefusal(`${basename(path)} is a shortcut (symlink); give the real file.`);
   if (!s.isFile()) throw new MediaRefusal(`${basename(path)} isn't a file.`);
   if (!s.size) throw new MediaRefusal(`${basename(path)} is empty.`);
   if (s.size > MEDIA_LIMITS.maxBytes) throw new MediaRefusal(`${basename(path)} is over ${MEDIA_LIMITS.maxBytes / 1e6} MB.`);
   return s.size;
 }
 
-export async function extract(input: string, outDir: string, opts: { run?: Run; now?: () => Date } = {}): Promise<Evidence> {
-  const exec = opts.run ?? run;
+/** Creates the output folder, or accepts an existing one only if it is a real, empty folder. */
+export async function freshFolder(dir: string): Promise<void> {
+  let s;
+  try { s = await lstat(dir); } catch { await mkdir(dir, { recursive: true }); return; }
+  if (s.isSymbolicLink() || !s.isDirectory()) throw new MediaRefusal("The output folder must be a real folder, not a file or shortcut.");
+  if ((await readdir(dir)).length) throw new MediaRefusal("The output folder must be new or empty; nothing is overwritten.");
+}
+
+/** Hash of a file this run just wrote: it must be a regular, non-empty file. */
+async function fresh(path: string): Promise<string> {
+  const s = await lstat(path);
+  if (!s.isFile() || s.isSymbolicLink() || !s.size) throw new Error("no output");
+  return sha(await readFile(path));
+}
+
+export async function extract(input: string, outDir: string, opts: { run?: Run; now?: () => Date; clock?: () => number } = {}): Promise<Evidence> {
+  const clock = opts.clock ?? Date.now, until = clock() + MEDIA_LIMITS.jobSeconds * 1000;
+  const base = opts.run ?? run;
+  const exec: Run = (cmd, args) => {
+    if (clock() > until) return Promise.reject(new MediaRefusal(`The job ran past its ${MEDIA_LIMITS.jobSeconds} s limit and was stopped.`));
+    return base(cmd, args);
+  };
   if (/^[a-z][a-z0-9+.-]*:/i.test(input) && !/^[a-z]:[\\/]/i.test(input)) throw new MediaRefusal("Only a file on this computer can be read, not a link.");
   const path = resolve(input);
   const bytes = await check(path);
-  const probe = parseProbe((await exec("ffprobe", ["-v", "error", "-protocol_whitelist", "file", "-show_format", "-show_streams", "-of", "json", path])).stdout);
+  const probe = parseProbe((await exec("ffprobe", ["-v", "error", "-protocol_whitelist", "file", "-format_whitelist", FORMATS, "-show_format", "-show_streams", "-of", "json", path])).stdout);
   if (!probe.duration) throw new MediaRefusal("The file's length couldn't be read.");
   if (probe.duration > MEDIA_LIMITS.maxSeconds) throw new MediaRefusal(`The file is ${Math.round(probe.duration)} s long; up to ${MEDIA_LIMITS.maxSeconds} s works.`);
   if (Math.max(probe.width, probe.height) > MEDIA_LIMITS.maxSide) throw new MediaRefusal(`The picture is ${probe.width}×${probe.height}; up to 4K works.`);
   if (!probe.hasVideo && !probe.hasAudio) throw new MediaRefusal("The file has no picture or sound.");
-  await mkdir(outDir, { recursive: true });
+  await freshFolder(outDir);
   const ev: Evidence = {
     source: { name: basename(path), bytes, sha256: sha(await readFile(path)), format: probe.format, duration: probe.duration, width: probe.width, height: probe.height },
     frames: [], audio: null, coverage: [], transcription: "not_performed", semantic: "not_performed", authority: "none",
@@ -107,9 +136,10 @@ export async function extract(input: string, outDir: string, opts: { run?: Run; 
     for (const [i, t] of times.entries()) {
       const file = `frame-${String(i + 1).padStart(3, "0")}.jpg`;
       try {
-        await exec("ffmpeg", ["-nostdin", "-v", "error", "-y", "-protocol_whitelist", "file", "-ss", String(t), "-i", path, "-map", "0:v:0", "-frames:v", "1", "-vf", "scale=640:640:force_original_aspect_ratio=decrease", join(outDir, file)]);
-        ev.frames.push({ index: i + 1, requestedSeconds: t, file, sha256: sha(await readFile(join(outDir, file))) });
-      } catch {
+        await exec("ffmpeg", ["-nostdin", "-v", "error", "-n", "-protocol_whitelist", "file", "-format_whitelist", FORMATS, "-ss", String(t), "-i", path, "-map", "0:v:0", "-frames:v", "1", "-vf", "scale=640:640:force_original_aspect_ratio=decrease", join(outDir, file)]);
+        ev.frames.push({ index: i + 1, requestedSeconds: t, file, sha256: await fresh(join(outDir, file)) });
+      } catch (e) {
+        if (e instanceof MediaRefusal) throw e;
         ev.coverage.push(`Frame at ${t} s could not be extracted.`);
       }
     }
@@ -117,8 +147,10 @@ export async function extract(input: string, outDir: string, opts: { run?: Run; 
     ev.coverage.push(`Frames are snapshots at the requested times; up to ${step} s between frames was not seen.`);
   } else ev.coverage.push("No picture: sound only.");
   if (probe.hasAudio) {
-    await exec("ffmpeg", ["-nostdin", "-v", "error", "-y", "-protocol_whitelist", "file", "-i", path, "-map", "0:a:0", "-ac", "1", "-ar", "16000", join(outDir, "audio.wav")]);
-    ev.audio = { file: "audio.wav", sha256: sha(await readFile(join(outDir, "audio.wav"))), sampleRate: 16000, channels: 1 };
+    await exec("ffmpeg", ["-nostdin", "-v", "error", "-n", "-protocol_whitelist", "file", "-format_whitelist", FORMATS, "-i", path, "-map", "0:a:0", "-ac", "1", "-ar", "16000", join(outDir, "audio.wav")]);
+    try {
+      ev.audio = { file: "audio.wav", sha256: await fresh(join(outDir, "audio.wav")), sampleRate: 16000, channels: 1 };
+    } catch { ev.coverage.push("The sound track could not be extracted."); }
   } else ev.coverage.push("No sound track.");
   ev.coverage.push("Speech was not transcribed and nothing was interpreted.");
   await writeFile(join(outDir, "evidence.json"), JSON.stringify(ev, null, 2) + "\n");

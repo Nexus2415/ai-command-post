@@ -545,7 +545,7 @@
   }
 
   // Videos and audio (ARN-147) are read here in the browser by media-reader.js, for free: a video becomes up to 3
-  // contact sheets of time-stamped frames, uploaded as ordinary images, and every file gets an evidence note (sizes,
+  // contact sheets of time-stamped frames, stored in the thread as ordinary images, and every file gets an evidence note (sizes,
   // SHA-256, frame times, a loud/quiet sound timeline, what was NOT done) attached as a text file. The original file
   // never leaves the browser. Speech is not transcribed.
   async function attachMedia(file) {
@@ -561,7 +561,9 @@
       await upload(new File([got.sheets[i]], base + " frames " + (i + 1) + " of " + got.sheets.length + ".jpg", { type: "image/jpeg" }));
     }
     files.push({ name: (base + " evidence.txt").slice(0, 120), text: got.note.slice(0, 30000) });
-    say("");
+    // Reading was free and local. Sending is not: the sheets are now stored in this thread like any image, and they
+    // reach an AI only when you press Send, through the usual spend caps, stop switch and rules.
+    say(file.name + " was read for free in your browser. " + (got.sheets.length ? "The " + got.sheets.length + " frame sheet" + (got.sheets.length === 1 ? "" : "s") + " and the evidence note go" : "The evidence note goes") + " to the AI only when you press Send, at the cost shown below.", "ok");
   }
 
   // Run one user action at a time and report failures on the page.

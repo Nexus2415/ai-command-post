@@ -2,7 +2,7 @@
 // generated on the spot from FFmpeg's own test pattern. No real media, no AI, no network.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, mkdtempSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -99,6 +99,7 @@ test("the workspace page loads the reader and routes videos and audio to it", ()
   assert.match(js, /await upload\(new File\(\[got\.sheets\[i\]\]/);
   assert.match(js, /files\.push\(\{ name: \(base \+ " evidence\.txt"\)/);
   assert.ok(!/fetch\(/.test(src), "the reader never calls the network");
+  assert.match(js, /read for free in your browser[\s\S]{0,200}only when you press Send/, "free reading is told apart from sending to an AI");
 });
 
 // ---- Local extractor (src/media.ts) ----
@@ -166,6 +167,50 @@ test("local extractor runs ChatGPT's bounded recipe and records evidence", async
     assert.deepEqual(audio.args.slice(audio.args.indexOf("-ac"), audio.args.indexOf("-ac") + 4), ["-ac", "1", "-ar", "16000"]);
     const saved = JSON.parse(readFileSync(join(dir, "out", "evidence.json"), "utf8"));
     assert.equal(saved.frames.length, 9);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("local extractor never overwrites: output folder must be new or empty, and a missing frame isn't hashed", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "acp-media-"));
+  try {
+    writeFileSync(join(dir, "v.mp4"), "synthetic");
+    mkdirSync(join(dir, "used"));
+    writeFileSync(join(dir, "used", "frame-001.jpg"), "stale");
+    const f = fakeRun(fakeProbe());
+    await assert.rejects(extract(join(dir, "v.mp4"), join(dir, "used"), { run: f.run }), /new or empty/);
+    assert.equal(f.calls.length, 1, "refused before anything is extracted");
+    symlinkSync(join(dir, "elsewhere"), join(dir, "link"));
+    await assert.rejects(extract(join(dir, "v.mp4"), join(dir, "link"), { run: fakeRun(fakeProbe()).run }), /real folder/);
+    // FFmpeg "succeeds" but writes nothing for frame 2: that frame becomes a coverage gap, never a hash of old bytes.
+    let n = 0;
+    const quiet: Run = async (cmd, args) => {
+      if (cmd === "ffprobe") return { stdout: fakeProbe() };
+      if (++n !== 2) writeFileSync(args[args.length - 1]!, "x" + n);
+      return { stdout: "" };
+    };
+    const ev = await extract(join(dir, "v.mp4"), join(dir, "out"), { run: quiet });
+    assert.equal(ev.frames.length, 8);
+    assert.ok(ev.coverage.some((c) => /could not be extracted/.test(c)));
+    for (const c of f.calls) assert.ok(!c.args.includes("-y"));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("local extractor refuses symlinked input, allows only plain container formats and stops at the job deadline", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "acp-media-"));
+  try {
+    writeFileSync(join(dir, "real.mp4"), "synthetic");
+    symlinkSync(join(dir, "real.mp4"), join(dir, "alias.mp4"));
+    await assert.rejects(extract(join(dir, "alias.mp4"), join(dir, "o1"), { run: fakeRun(fakeProbe()).run }), /symlink/);
+    const f = fakeRun(fakeProbe());
+    await extract(join(dir, "real.mp4"), join(dir, "o2"), { run: f.run });
+    for (const c of f.calls) {
+      const list = c.args[c.args.indexOf("-format_whitelist") + 1] ?? "";
+      assert.ok(list && !/hls|concat|image2|tee|lavfi/.test(list), `${c.cmd} restricts demuxers`);
+      if (c.cmd === "ffmpeg") assert.ok(c.args.includes("-n"), "never overwrite");
+    }
+    let now = 0;
+    const slow: Run = async (cmd, args) => { now += 100_000; return fakeRun(fakeProbe()).run(cmd, args); };
+    await assert.rejects(extract(join(dir, "real.mp4"), join(dir, "o3"), { run: slow, clock: () => now }), /past its 300 s limit/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
