@@ -127,10 +127,18 @@
   }
   function pill(status) { const p = el("span", "pill s-" + status); p.append(el("span", "dot"), document.createTextNode(PILL[status])); return p; }
   function taskLink(it, cls) {
-    const href = safeUrl(it.url);
-    const a = el(href ? "a" : "span", cls, it.title || it.id);
-    if (href) { a.href = href; a.target = "_blank"; a.rel = "noopener noreferrer"; }
-    return a;
+    const wrap = el("div", "ax-task-inline");
+    const a = el("button", "ax-task-toggle" + (cls ? " " + cls : ""), it.title || it.id);
+    a.type = "button"; a.setAttribute("aria-expanded", "false");
+    const detail = el("div", "ax-task-detail"); detail.hidden = true;
+    a.addEventListener("click", () => {
+      detail.hidden = !detail.hidden;
+      a.setAttribute("aria-expanded", String(!detail.hidden));
+      if (!detail.hidden) window.ACPWork.showTask(detail, it);
+      requestAnimationFrame(drawLinks);
+    });
+    wrap.append(a, detail);
+    return wrap;
   }
   function ring(node, pct, label) {
     node.replaceChildren();
@@ -143,7 +151,7 @@
 
   function renderStatus() {
     const t = totals(overview);
-    ring($("gRing"), overview ? (t.counted ? ((t.active + t.review) / t.counted) * 100 : 0) : 0, "Share of open work being worked now");
+    ring($("gRing"), overview ? (t.counted ? ((t.active + t.review) / t.counted) * 100 : 0) : 0, "Share of tasks marked in progress or in review");
     $("gAgents").textContent = overview ? aisWithOpenTasks(overview) : "—";
     const rows = $("gRows"); rows.replaceChildren();
     [["running", "In progress", t.active], ["review", "In review", t.review], ["queued", "Queued", t.queued], ["blocked", "Blocked", t.blocked], ["complete", "Complete", t.done]]
