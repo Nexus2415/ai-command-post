@@ -83,7 +83,7 @@ test("standalone test exposes browser callbacks without claiming audible success
   let id = 0;
   const synth = { speaking:false,pending:false,paused:false,getVoices:()=>[{lang:"en-US",localService:true}],
     speak:(u:any)=>utterances.push(u),cancel:()=>{},resume:()=>{} };
-  class Utterance { constructor(public text:string){} }
+  class Utterance { text: string; constructor(text:string){this.text=text;} }
   const context = {window:{speechSynthesis:synth,SpeechSynthesisUtterance:Utterance},navigator:{language:"en-US"},
     say:()=>{}, report:(s:string)=>notes.push(s),setTimeout:(f:()=>void)=>{timers.set(++id,f);return id;},
     clearTimeout:(n:number)=>timers.delete(n),el:()=>({textContent:"▶ Listen",setAttribute:()=>{},
