@@ -48,7 +48,21 @@
     const n = String(name || "").trim().slice(0, 40);
     return n ? part + ", " + n : part;
   }
-  const api = { counts, tab, activeWork, ownerName, resultBy, label, safeUrl, greeting, TABS };
+  // The per-agent projection only timestamps its newest working task. Do not extend that
+  // timestamp to other identifiers in the aggregated issues array.
+  function taskLive(activity, it, now = Date.now()) {
+    if (it?.lane !== "active" || !root.ACPLive || activity?.status !== "reported") return false;
+    const ttl = activity.ttlMs, read = Date.parse(activity.readAt);
+    if (!Number.isFinite(ttl) || ttl <= 0 || ttl > 240000 || !Number.isFinite(read) ||
+        read > now || now - read > ttl) return false;
+    return ["claude", "chatgpt", "perplexity"].some(key => {
+      const a = activity.agents?.[key], at = Date.parse(a?.at);
+      return a?.issue === it.id && Number.isFinite(at) && at <= now && now - at <= ttl &&
+        root.ACPLive.liveView(activity, key, now)?.state === "working" &&
+        root.ACPLive.taskWorking(activity, it.id, now);
+    });
+  }
+  const api = { counts, tab, activeWork, ownerName, resultBy, label, safeUrl, greeting, TABS, taskLive };
   root.ACPWork = api;
   if (typeof document === "undefined") return;
 
@@ -103,13 +117,14 @@
   }
   const CHEV = "M9 6l6 6-6 6";
   // Open the task locally. External navigation is an explicit, separate action.
-  function row(it) {
+  function row(it, activity) {
     const a = el("button", "ax-row");
     a.type = "button";
     a.setAttribute("aria-expanded", "false");
     const ico = el("span", "ax-ico");
     const assignedActive = it.lane === "active" && ["claude", "chatgpt", "perplexity", "codex"].includes(it.owner);
-    if (assignedActive) {
+    const live = taskLive(activity, it) && !document.hidden;
+    if (assignedActive || live) {
       ico.append(workerAvatar(false));
       ico.title = "Assigned work in progress; live execution not verified";
     } else ico.append(icon(GLYPH[it.owner] || GLYPH.none));
@@ -118,7 +133,7 @@
     const sub = el("small");
     const by = resultBy(it);
     sub.append(el("span", null, (it.id ? it.id + " · " : "") + ownerName(it.owner) + (by ? " · " + by : "")), el("span", "ax-pill " + (it.lane || ""), label(it.lane)));
-    if (assignedActive) sub.append(el("span", "ax-live-unknown", "Live activity unverified"));
+    if (assignedActive || live) sub.append(el("span", "ax-live-unknown", live ? "Recent worker heartbeat" : "Live activity unverified"));
     main.append(sub);
     a.append(ico, main);
     a.append(icon(CHEV, "ax-chev"));
@@ -131,7 +146,11 @@
       a.setAttribute("aria-expanded", String(open));
       if (open) showTask(detail, it);
     });
-    li.append(a, detail); return li;
+    li.append(a, detail);
+    li._workItem = it;
+    li.dataset.workerTask = it.id;
+    updateTaskMotion(li, activity, it);
+    return li;
   }
   // Only a real outstanding read animates. A Linear status is not a worker heartbeat.
   async function showTask(host, it) {
@@ -184,6 +203,41 @@
       retry.type = "button"; retry.addEventListener("click", () => showTask(host, it)); body.append(retry);
     }
   }
+  function updateTaskMotion(li, activity, it) {
+    const live = !document.hidden && taskLive(activity, it);
+    const sprite = li.querySelector(".ax-worker");
+    if (sprite) sprite.classList.toggle("ax-typing", live);
+    const status = li.querySelector(".ax-live-unknown");
+    if (status) status.textContent = live ? "Recent worker heartbeat" : "Live activity unverified";
+    const ico = li.querySelector(".ax-ico");
+    if (ico && sprite) ico.title = live ? "Recent authenticated worker heartbeat" : "Live execution not verified";
+  }
+  // One read-only board refresh per minute, no additional model request or per-task polling.
+  // Keep expanded rows and focus intact; expire cached motion locally between reads.
+  function watchActivity(initial) {
+    let report = initial?.activity, items = new Map(tasksOf(initial).map(it => [it.id, it])), busy = false;
+    const sync = () => {
+      for (const li of document.querySelectorAll("[data-worker-task]"))
+        updateTaskMotion(li, report, items.get(li.dataset.workerTask));
+    };
+    const refresh = async () => {
+      if (busy || document.hidden) return;
+      busy = true;
+      try {
+        const o = await load();
+        report = o?.activity;
+        items = new Map(tasksOf(o).map(it => [it.id, it]));
+      } catch { report = null; }
+      finally { busy = false; sync(); }
+    };
+    setInterval(sync, 1000);
+    setInterval(refresh, 60000);
+    document.addEventListener("visibilitychange", () => {
+      report = null; sync();
+      if (!document.hidden) refresh();
+    });
+    sync();
+  }
   async function load() {
     let r;
     try {
@@ -194,5 +248,5 @@
     if (!r.ok) throw new Error(typeof j.error === "string" ? j.error : "Couldn't load tasks (" + r.status + ").");
     return j;
   }
-  Object.assign(api, { el, icon, row, load, showTask, workerAvatar });
+  Object.assign(api, { el, icon, row, load, showTask, workerAvatar, watchActivity });
 })(typeof window !== "undefined" ? window : globalThis);
