@@ -94,7 +94,7 @@ test("the workspace page loads the reader and routes videos and audio to it", ()
   const js = readFileSync(new URL("../dashboard/workspace.js", import.meta.url), "utf8");
   assert.ok(html.indexOf('src="media-reader.js"') > -1 && html.indexOf('src="media-reader.js"') < html.indexOf('src="workspace.js"'));
   assert.match(html, /accept="[^"]*video\/\*[^"]*audio\/\*/);
-  assert.match(js, /ACPMedia\.kindOf\(file\)\) \{ await attachMedia\(file\)/);
+  assert.match(js, /ACPMedia\.kindOf\(file\)\) \{ await attachMedia\(file,scope\)/);
   // Sheets go through the existing image upload (shrunk, checked by the server) and the note through the text path.
   assert.match(js, /await upload\(new File\(\[got\.sheets\[i\]\]/);
   assert.match(js, /files\.push\(\{ name: \(base \+ " evidence\.txt"\)/);
