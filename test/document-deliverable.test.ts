@@ -52,7 +52,8 @@ test("existing tool handler creates a private file, retrieves after restart, exa
 });
 test("missing capability, dry run, invalid scope, stop, expired and malformed input refuse",async()=>{
   const call={tool:"document.create",input:spec};
-  for(const change of [(f:ReturnType<typeof fixture>)=>{f.env.document=undefined},f=>{f.env.dryRun=true},f=>f.stop(),f=>f.expire(),f=>f.share(),f=>{f.env.document=documentCapability(id(99),f.p)}]){
+  const changes: ((f: ReturnType<typeof fixture>)=>void)[] = [f=>{f.env.document=undefined},f=>{f.env.dryRun=true},f=>f.stop(),f=>f.expire(),f=>f.share(),f=>{f.env.document=documentCapability(id(99),f.p)}];
+  for(const change of changes){
     const f=fixture();try{change(f);assert.equal((await runTool(call,["document.create"],f.env)).ok,false);}finally{f.close()}
   }
   for(const x of [{...spec,filename:"../bad.docx"},{...spec,filename:"bad.pdf"},{...spec,threadId:id(4)},{...spec,title:"bad\u0000"},{...spec,sections:[]}])assert.throws(()=>renderDocx(x));
