@@ -25,3 +25,15 @@ test("ARN-159 animation is request-bound, not an inferred live worker", () => {
   assert.match(css, /prefers-reduced-motion:reduce/);
   assert.match(css, /\.ax-task-detail\[hidden\]/);
 });
+
+test("ARN-159 compact avatar never implies execution from task lane", () => {
+  const work = read("work.js"), css = read("nexia.css"), chat = read("workspace.js");
+  assert.match(work, /function workerAvatar\(typing = false\)/);
+  assert.match(work, /ico.append\(workerAvatar\(false\)\)/);
+  assert.match(work, /Live activity unverified/);
+  assert.doesNotMatch(work, /workerAvatar\(true\)/);
+  assert.match(chat, /window.ACPWork.workerAvatar\(true\)/);
+  assert.match(read("workspace.html"), /work\.js/);
+  assert.match(css, /\.ax-worker\.ax-typing \.ax-worker-left/);
+  assert.match(css, /\.ax-worker \*\{animation:none!important\}/);
+});
