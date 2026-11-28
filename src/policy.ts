@@ -16,6 +16,7 @@ export const TOOL_TIERS: Record<string, Tier> = {
   "firecrawl.search": "green",
   "firecrawl.scrape": "green",
   "linear.comment": "green",
+  "document.create": "green", // Bound synthetic capability additionally required by the tool handler.
   "vercel.list_deployments": "green",
   "vercel.deployment_status": "green",
   "github.pr_checks": "green",
