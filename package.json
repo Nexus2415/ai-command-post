@@ -12,6 +12,7 @@
     "test": "node --test test/*.test.ts",
     "typecheck": "tsc -p tsconfig.json",
     "eval": "node src/eval.ts",
+    "media": "node src/media.ts",
     "validate": "npm test && npm run typecheck"
   },
   "devDependencies": {

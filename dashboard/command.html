@@ -186,6 +186,8 @@ button,select{font:inherit;color:inherit}
 #orbActivity{font-size:11px;color:var(--muted);max-width:150px;margin:auto}
 </style>
 <link rel="stylesheet" href="nexia.css">
+<link rel="stylesheet" href="worker-activity.css">
+<script src="live-activity.js"></script>
 <header class="ax-head"><a class="nexia-brand" href="/home.html" aria-label="Arnexyia home"><svg class="ax-logo" aria-hidden="true" viewBox="0 0 40 40"><path fill="#7ff4ff" d="M20 3v15.5L11.5 36H3z"/><path fill="#16b6ca" d="M20 3 37 36h-8.5L20 18.5z"/><path fill="#2ee0ee" opacity=".55" d="M20 25.5 23.4 33h-6.8z"/></svg><span><strong class="ax-word">ARNEXYIA</strong><small class="ax-tag">The Intelligence Behind Operations.</small></span></a></header>
 <nav class="nexia-nav" aria-label="Main menu"><a class="nexia-brand" href="/home.html" aria-label="Arnexyia home"><svg class="ax-logo" aria-hidden="true" viewBox="0 0 40 40"><path fill="#7ff4ff" d="M20 3v15.5L11.5 36H3z"/><path fill="#16b6ca" d="M20 3 37 36h-8.5L20 18.5z"/><path fill="#2ee0ee" opacity=".55" d="M20 25.5 23.4 33h-6.8z"/></svg><span><strong class="ax-word">ARNEXYIA</strong><small class="ax-tag">The Intelligence Behind Operations.</small></span></a><div class="nexia-links"><a href="/home.html"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11 12 4l9 7v9a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/></svg><span>Home</span></a><a href="/workspace.html"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H10l-5 4v-4H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z"/><path d="M8.5 11h.01M12 11h.01M15.5 11h.01" stroke-width="2.6"/></svg><span>Command</span></a><a href="/tasks.html" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="m8 12 3 3 5-6"/></svg><span>Tasks</span></a><a href="/settings.html"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span>Settings</span></a></div></nav>
 
@@ -252,7 +254,7 @@ button,select{font:inherit;color:inherit}
       </section>
     </aside>
   </div>
-  <p class="foot">Read-only view of Linear. Status shows each AI's assigned work, not a live connection check. Refreshes every minute.</p>
+  <p class="foot">Read-only view of Linear. The status pill shows each AI's assigned work. The line under each name is live engine activity: it moves only while an engine run sends heartbeats, and says unknown when that can't be checked. Refreshes every minute.</p>
 </div>
 <script src="session.js"></script>
 <script src="work.js"></script>
