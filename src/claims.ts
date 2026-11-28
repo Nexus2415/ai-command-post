@@ -13,13 +13,14 @@
 // Table (db/workspace.sql): acp_claims(issue_id text primary key, executor, run_id, claimed_at).
 // A claim belongs to one engine RUN, not just one AI: two runs both acting as Claude must still not both proceed.
 // Each store instance gets its own run id. A later run of the SAME AI may take the row over only once the earlier
-// run must have ended: the engine job is killed after 12 minutes, so a row older than LEASE_MS belongs to a finished
-// run (that's how a task is retried next run). The takeover is a conditional update on the old run id, so two runs
+// run must have ended: GitHub kills the engine job after 25 minutes (engine.yml timeout-minutes), so a row older than
+// LEASE_MS belongs to a finished run (that's how a crashed run's task is resumed, src/recovery.ts). The lease used to
+// be 13 minutes from when the job limit was 12; the limit rose to 25 (ARN-149) and a guard test now keeps them apart. The takeover is a conditional update on the old run id, so two runs
 // can't both take it. Another AI's row is never taken over.
 import { randomUUID } from "node:crypto";
 type Fetch = typeof fetch;
-/** Longer than the engine job's 12-minute limit (.github/workflows/engine.yml timeout-minutes). */
-export const LEASE_MS = 13 * 60_000;
+/** Longer than the engine job's 25-minute limit (.github/workflows/engine.yml timeout-minutes); test/recovery.test.ts checks. */
+export const LEASE_MS = 30 * 60_000;
 
 export interface ClaimStore {
   /** Takes the claim for `executor` if nobody holds it. Returns who holds it afterwards (us, or the earlier winner). */

@@ -25,8 +25,9 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 
 export const MIN_SECRET = 32;
 export const SIG_PREFIX = "ACP-Signature: v1.";
-export type SignedKind = "claim" | "result";
-const SIG_LINE = /^[ \t>*_`]*ACP-Signature: v1\.(claim|result)\.([0-9a-f]{64})[ \t`*_]*$/im;
+/** "pr" signs the record of a pull request the engine opened (src/recovery.ts). */
+export type SignedKind = "claim" | "result" | "pr";
+const SIG_LINE = /^[ \t>*_`]*ACP-Signature: v1\.(claim|result|pr)\.([0-9a-f]{64})[ \t`*_]*$/im;
 
 /** A usable secret, or undefined when it is missing or too short to trust. */
 export function provenanceSecret(raw: string | undefined): string | undefined {

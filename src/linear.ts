@@ -27,6 +27,8 @@ export interface Issue {
    */
   childrenIncomplete?: true;
   createdAt: string;
+  /** When it last entered In Progress (Linear startedAt); null when never. Used to find runs that died (src/recovery.ts). */
+  startedAt?: string | null;
 }
 
 export interface TaskStore {
@@ -55,7 +57,7 @@ interface TeamInfo {
 /** Document pages findDoc reads (50 each) before giving up on an incomplete list. */
 const DOC_PAGES = 4;
 const ISSUE_FIELDS = `
-  id identifier title description url priority createdAt
+  id identifier title description url priority createdAt startedAt
   state { type name }
   labels { nodes { name } }
   assignee { name }
@@ -95,6 +97,7 @@ function toIssue(n: any): Issue {
     childIds: unique,
     ...(complete ? {} : { childrenIncomplete: true as const }),
     createdAt: n.createdAt,
+    startedAt: typeof n.startedAt === "string" ? n.startedAt : null,
   };
 }
 
