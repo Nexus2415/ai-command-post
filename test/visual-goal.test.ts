@@ -26,7 +26,8 @@ test("missing or altered authority, stale fence, cross-thread reference and unav
   assert.equal((await createVisualGoalIntake()(fixture().q)).status,"blocked");
 });
 test("post-vision stop, expired authority or injected URL never creates a goal",async()=>{
-  for(const change of [(f:ReturnType<typeof fixture>)=>f.stop(),f=>f.expire(),f=>f.stale()]){
+  const changes: ((f: ReturnType<typeof fixture>) => void)[] = [f=>f.stop(),f=>f.expire(),f=>f.stale()];
+  for(const change of changes){
     const f=fixture(),analyze=f.p.vision.analyze;f.p.vision.analyze=async(...a)=>{const r=await analyze(...a);change(f);return r;};
     assert.equal((await f.run()).status,"blocked");assert.equal(f.commits(),0);
   }
