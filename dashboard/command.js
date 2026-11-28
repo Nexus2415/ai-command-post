@@ -295,7 +295,10 @@
   function render() { renderStatus(); renderTree(); renderQueue(); renderActivity(); renderPerf(); }
 
   async function load() {
+    if ($("refresh").disabled) return;
     $("refresh").disabled = true;
+    $("orb").dataset.reading = "true";
+    $("orbActivity").textContent = "Checking task updates…";
     try {
       overview = await post({ action: "overview" });
       $("msg").hidden = !overview.hasNextPage;
@@ -307,7 +310,11 @@
       $("msg").textContent = e.message + (overview ? " Showing the last data received." : "");
       $("fresh").textContent = overview ? "Stale · " + fmtTime(overview.fetchedAt, true) : "Not loaded";
       $("fresh").className = "fresh warn";
-    } finally { $("refresh").disabled = false; }
+    } finally {
+      $("refresh").disabled = false;
+      delete $("orb").dataset.reading;
+      $("orbActivity").textContent = "Execution activity unverified";
+    }
     render();
   }
 
@@ -324,7 +331,7 @@
     window.addEventListener("resize", () => requestAnimationFrame(drawLinks));
     tick(); setInterval(tick, 15000);
     render(); load();
-    setInterval(() => { if (!document.hidden) load(); }, 60000);
+    setInterval(() => { if (!document.hidden && !document.querySelector(".ax-task-inline button[aria-expanded=true]")) load(); }, 60000);
   }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start); else start();
 })(typeof window !== "undefined" ? window : globalThis);
