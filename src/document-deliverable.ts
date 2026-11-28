@@ -56,6 +56,7 @@ export interface DocumentCapability {
   readonly taskId:string;
   create(input:unknown):Promise<DocumentReceipt>;
   retrieve(principal:string):Promise<DocumentRow>;
+  verify(receipt:DocumentReceipt):Promise<boolean>;
 }
 const keys=(g:DocumentGrant)=>JSON.stringify([g.artifactId,g.taskId,g.projectId,g.threadId,g.principal,g.expiresAt,g.syntheticOnly,g.maxBudgetMicros]);
 function match(a:DocumentReceipt,b:DocumentReceipt){
@@ -68,7 +69,7 @@ export function documentCapability(taskId:string,p:DocumentPorts):DocumentCapabi
     if(!g||g.taskId!==taskId||!uuid(g.artifactId)||!uuid(g.projectId)||!uuid(g.threadId)||!text(g.principal,200)||g.syntheticOnly!==true||g.maxBudgetMicros!==0||!Number.isSafeInteger(now)||!Number.isSafeInteger(g.expiresAt)||g.expiresAt<=now||g.expiresAt-now>86400000||await p.privateThread(g.projectId,g.threadId,g.principal)!==true||await p.stop()!=="off")throw new Error("Document scope unavailable");
     return structuredClone(g);
   }
-  return Object.freeze({taskId,async create(input:unknown){
+  const capability: DocumentCapability = {taskId,async create(input:unknown){
     const g=await current(),f=renderDocx(input);
     const receipt:DocumentReceipt={artifactId:g.artifactId,taskId:g.taskId,projectId:g.projectId,threadId:g.threadId,filename:f.filename,mime:f.mime,bytes:f.data.length,sha256:f.sha256};
     if(keys(await current())!==keys(g))throw new Error("Document scope changed");
@@ -83,5 +84,8 @@ export function documentCapability(taskId:string,p:DocumentPorts):DocumentCapabi
     const row=await p.get(g);
     if(!row||!Buffer.isBuffer(row.data)||row.receipt.artifactId!==g.artifactId||row.receipt.taskId!==g.taskId||row.receipt.projectId!==g.projectId||row.receipt.threadId!==g.threadId||row.receipt.mime!==DOCX_MIME||row.receipt.bytes!==row.data.length||row.receipt.sha256!==digest(row.data)||keys(await current())!==keys(g))throw new Error("Document unavailable or unverified");
     return {receipt:structuredClone(row.receipt),data:Buffer.from(row.data)};
-  }});
+  },async verify(receipt:DocumentReceipt){
+    try { const g=await current(),row=await capability.retrieve(g.principal); return match(receipt,row.receipt); } catch { return false; }
+  }};
+  return Object.freeze(capability);
 }

@@ -1,5 +1,5 @@
 import { decide, type PolicyContext } from "./policy.ts";
-import type { DocumentCapability } from "./document-deliverable.ts";
+import type { DocumentCapability, DocumentReceipt } from "./document-deliverable.ts";
 
 type Fetch = typeof fetch;
 
@@ -22,6 +22,7 @@ export interface ToolEnv {
   dryRun: boolean;
   /** ARN-169: explicitly bound synthetic capability; no production default. */
   document?: DocumentCapability;
+  documentReceipt?: DocumentReceipt;
   policy: PolicyContext;
   /** Posts a comment on the task being worked (linear.comment). */
   comment: (body: string) => Promise<void>;
@@ -487,7 +488,10 @@ const HANDLERS: Record<string, (input: Record<string, unknown>, env: ToolEnv) =>
   },
   async "document.create"(input, env) {
     if (!env.document || env.dryRun) throw new Error("Private document capability unavailable");
+    env.documentReceipt = undefined;
     const r = await env.document.create(input);
+    if (!await env.document.verify(r)) throw new Error("Private document bytes not independently confirmed by storage readback");
+    env.documentReceipt = r;
     return JSON.stringify({artifactId:r.artifactId,filename:r.filename,mime:r.mime,bytes:r.bytes,sha256:r.sha256});
   },
   async "linear.comment"(input, env) {

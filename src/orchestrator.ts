@@ -487,6 +487,7 @@ export async function work(d: Deps, task: Issue, agent: AgentKey, report: TickRe
   // Links the task names are fetchable; links in later tool results are added as they arrive (exact match only).
   const env: ToolEnv = { ...d.toolEnv(task), allowedUrls: new Set(urlsIn(`${task.title}\n${task.description}`)), openedBranches: new Set(), openedPullRequests: [] };
   if (env.document?.taskId !== task.id) env.document = undefined;
+  env.documentReceipt = undefined; // Never borrow a receipt from an earlier attempt.
   // Only offer tools whose credentials are configured, so a worker never plans around a tool that can't run.
   const tools = profile.tools.filter(
     (t) => TOOL_DOCS[t] && (t !== "document.create" || !!env.document && !env.dryRun) && !(t.startsWith("firecrawl.") && !env.firecrawlKey) && !(t.startsWith("github.") && !env.githubToken && !env.githubAuth) && !(t.startsWith("vercel.") && !env.vercelToken),
@@ -601,8 +602,11 @@ export async function work(d: Deps, task: Issue, agent: AgentKey, report: TickRe
     messages.push({ role: "assistant", content: out });
     const j = extractJson(out);
     if (j && typeof j["final"] === "string") {
-      const status = j["status"] === "blocked" ? "blocked" : "done";
-      const result = `${RESULT_MARKER} (${profile.name}, ${status})\n\n${j["final"]}`;
+      const claimedDone = j["status"] !== "blocked";
+      const verifiedDoc = env.document && env.documentReceipt && await env.document.verify(env.documentReceipt).catch(() => false) && !await haltReason(d.halt) ? env.documentReceipt : null;
+      const missingDoc = claimedDone && !!env.document && !verifiedDoc;
+      const status = !claimedDone || missingDoc ? "blocked" : "done";
+      const result = `${RESULT_MARKER} (${profile.name}, ${status})\n\n${missingDoc ? "Required private document has no confirmed current receipt; no completion recorded." : j["final"]}${verifiedDoc ? `\n\nVerified artifact: ${verifiedDoc.filename}; ${verifiedDoc.bytes} bytes; SHA-256 ${verifiedDoc.sha256}; artifact ${verifiedDoc.artifactId}` : ""}`;
       const prs = env.openedPullRequests ?? [];
       if (status === "done" && opts.holdForMerge && prs.length) {
         // A goal step with a pull request stays In Progress until the owner merges it, so the next step builds on it.
