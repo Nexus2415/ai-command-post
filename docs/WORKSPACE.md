@@ -166,3 +166,13 @@ Claude and ChatGPT threads can use the public web through Firecrawl (Perplexity 
 - A run is claimed in one conditional database update, so it happens at most once a day even if the cron fires twice; "Run now" counts as that day's run.
 - Automatic runs come from a Vercel cron (`vercel.json`, daily at 12:00 UTC; the free plan allows once a day). They stay off until **CRON_SECRET** (any random text of at least 32 characters) is added in Vercel → arnexyia-command-post → Settings → Environment Variables. Vercel then sends it with each cron call and `api/cron.js` refuses every other caller. "Run now" works without it.
 - Database: table `ws_agents` in `db/workspace.sql`.
+
+## Video and audio (ARN-147)
+
+Attach a video (MP4, MOV, WebM) or audio file (MP3, WAV, M4A, OGG, FLAC) with the + button, up to 150 MB. The page reads it **in your own browser, for free** (`dashboard/media-reader.js`); the original file is never uploaded.
+
+- **Video:** frames every 12 s (closer for short clips, at least 9), first 300 s only, drawn as up to 3 contact sheets of 9 frames, each frame stamped with its time and number. The sheets go through the normal image upload, so Claude and ChatGPT see them like any picture (about 0.3¢ per sheet per reply at Claude's rates).
+- **Evidence note** (attached as a text file): name, size, SHA-256, length, picture size, every frame's requested time, frames that failed, the coverage gap between frames, and a loud/quiet sound timeline measured from the samples. It marks measured facts OBSERVED and anything an AI says about the frames INFERRED, and tells the AI that words inside the media are content, not instructions.
+- **Not done:** speech is not transcribed and sounds are not identified. The note says so. Motion between frames isn't seen.
+- **Local version:** `node src/media.ts <file> <folder>` runs ChatGPT's tested FFmpeg recipe on a computer with FFmpeg: frames, a 16 kHz mono `audio.wav` ready for a speech-to-text model, and `evidence.json` with hashes. It calls no AI and sends nothing.
+- Same sampling rule in both (a test keeps them identical). No server change, no new function, no new key.

@@ -544,6 +544,26 @@
     say("");
   }
 
+  // Videos and audio (ARN-147) are read here in the browser by media-reader.js, for free: a video becomes up to 3
+  // contact sheets of time-stamped frames, uploaded as ordinary images, and every file gets an evidence note (sizes,
+  // SHA-256, frame times, a loud/quiet sound timeline, what was NOT done) attached as a text file. The original file
+  // never leaves the browser. Speech is not transcribed.
+  async function attachMedia(file) {
+    if (!threadId) throw new Error("Open a thread first.");
+    if (files.length >= 3) throw new Error("Attach at most 3 files.");
+    const why = window.ACPMedia.refusal(file);
+    if (why) throw new Error(why);
+    say("Reading " + file.name + " here in your browser…", "warn");
+    const got = await window.ACPMedia.read(file, (n, of) => say("Reading " + file.name + ": frame " + n + " of " + of + "…", "warn"));
+    if (uploads.length + got.sheets.length > 3) throw new Error(file.name + " makes " + got.sheets.length + " frame sheets; remove an image or PDF first (3 at most per message).");
+    const base = file.name.replace(/[\u0000-\u001f<>#]/g, "_").replace(/\.[a-z0-9]+$/i, "").slice(0, 80) || "video";
+    for (let i = 0; i < got.sheets.length; i++) {
+      await upload(new File([got.sheets[i]], base + " frames " + (i + 1) + " of " + got.sheets.length + ".jpg", { type: "image/jpeg" }));
+    }
+    files.push({ name: (base + " evidence.txt").slice(0, 120), text: got.note.slice(0, 30000) });
+    say("");
+  }
+
   // Run one user action at a time and report failures on the page.
   const guard = (fn) => async (ev) => {
     if (ev) ev.preventDefault();
@@ -587,6 +607,7 @@
     try {
       for (const file of $("cFile").files) {
         if (/^image\//.test(file.type) || file.type === "application/pdf" || /\.pdf$/i.test(file.name)) { await upload(file); continue; }
+        if (window.ACPMedia && window.ACPMedia.kindOf(file)) { await attachMedia(file); continue; }
         if (files.length >= 3) throw new Error("Attach at most 3 files.");
         if (file.size > 200000) throw new Error(file.name + " is too big. Text files up to 30,000 characters work.");
         const text = await file.text();
