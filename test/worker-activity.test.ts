@@ -6,6 +6,7 @@ import * as wa from "../api/_lib/worker-activity.js";
 const { HEARTBEAT_TTL_MS, LEASE_MS, RECENT_MS } = wa;
 const projectActivity = (x: any): any => wa.projectActivity(x);
 const readActivity = (env: any, f: any, now: number): Promise<any> => wa.readActivity(env, f, now);
+const { ROW_LIMIT, CLAIM_LIMIT } = wa;
 import { handle } from "../api/console.js";
 import { activitySinkFrom, memoryActivity, supabaseActivity } from "../src/activity.ts";
 import { memoryClaims } from "../src/claims.ts";
@@ -85,8 +86,13 @@ test("late, duplicate and out-of-order rows: a terminal row beats any heartbeat"
 
 test("mismatched fence: rows from a run that lost the claim, or from another AI, are ignored", () => {
   const rows = [row("started", 40_000, { run: "run-old" }), row("step", 10_000, { run: "run-old" })];
-  assert.equal(project(rows, [claim("iss-1", "acp:claude", "run-new")]).claude.state, "idle", "old run fenced out");
-  assert.equal(project(rows, [claim("iss-1", "acp:chatgpt", "run-old")]).claude.state, "idle", "claim held as another AI");
+  // The old run's rows are fenced out; the new run holds a live claim but wrote nothing, so that is unknown, not idle.
+  const moved = project(rows, [claim("iss-1", "acp:claude", "run-new")]);
+  assert.equal(moved.claude.state, "unknown", "old run fenced out, new claim unseen");
+  assert.match(moved.claude.reason, /claimed but no activity/);
+  const other = project(rows, [claim("iss-1", "acp:chatgpt", "run-old")]);
+  assert.equal(other.claude.state, "idle", "claim held as another AI: Claude's rows don't count");
+  assert.equal(other.chatgpt.state, "unknown", "and ChatGPT holds a live claim with no rows of its own");
   assert.equal(project(rows, []).claude.state, "idle", "no claim at all");
   const p = projectActivity({ ok: true, rows, claims: [claim("iss-1", "acp:claude", "run-new")], nowMs: NOW });
   assert.equal(p.dropped, 2);
@@ -97,8 +103,9 @@ test("stale and future time: aged heartbeats and expired leases are not live; fu
   assert.equal(stale.claude.state, "unknown");
   const lease = project([row("started", 30_000), row("step", 10_000)], [claim("iss-1", "acp:claude", "run-a", LEASE_MS + 1_000)]);
   assert.equal(lease.claude.state, "unknown", "fresh rows under a claim older than the engine's lease can't be a live run");
-  const future = project([row("started", -5 * 60_000), row("step", -6 * 60_000)], [claim("iss-1", "acp:claude", "run-a")]);
-  assert.equal(future.claude.state, "idle", "rows dated in the future are not trusted");
+  const future = projectActivity({ ok: true, rows: [row("started", -5 * 60_000), row("step", -6 * 60_000)], claims: [claim("iss-1", "acp:claude", "run-a", LEASE_MS + 60_000)], nowMs: NOW });
+  assert.equal(future.dropped, 2, "rows dated in the future are not trusted");
+  assert.equal(future.agents.claude.state, "idle");
 });
 
 test("malformed rows are dropped, never guessed into a state", () => {
@@ -108,7 +115,7 @@ test("malformed rows are dropped, never guessed into a state", () => {
     { ...row("step", 10_000), executor: "acp:eve" }, { ...row("step", 10_000), identifier: "<b>x</b>" }, { ...row("step", 10_000), issue_id: "a,b" }, null, "row",
   ];
   const p = projectActivity({ ok: true, rows: bad, claims, nowMs: NOW });
-  assert.equal(p.agents.claude.state, "idle");
+  assert.equal(p.agents.claude.state, "unknown", "a live claim whose rows are all unreadable is unknown");
   assert.equal(p.dropped, bad.length);
 });
 
@@ -137,7 +144,7 @@ function fakeDb(rows: any[], claims: any[], fail?: "activity" | "claims" | "thro
   return { f, seen };
 }
 
-test("readActivity: reads a day of rows and only the claims they name, with GETs only", async () => {
+test("readActivity: claims, then rows, then claims again, by time, with GETs only", async () => {
   const db = fakeDb([row("started", 40_000), row("step", 10_000)], [claim("iss-1", "acp:claude", "run-a")]);
   const r = await readActivity(DB, db.f, NOW);
   assert.equal(r.status, "reported");
@@ -145,8 +152,10 @@ test("readActivity: reads a day of rows and only the claims they name, with GETs
   assert.equal(r.readAt, new Date(NOW).toISOString());
   assert.equal(r.ttlMs, HEARTBEAT_TTL_MS);
   assert.ok(db.seen.every(s => s.startsWith("GET ")), "read-only");
-  assert.match(db.seen[0]!, /acp_activity\?select=run_id,issue_id,seq,identifier,executor,kind,step,at&at=gte\./);
-  assert.match(db.seen[1]!, /acp_claims\?select=issue_id,executor,run_id,claimed_at&issue_id=in\.\(iss-1\)/);
+  assert.equal(db.seen.length, 3);
+  assert.match(db.seen[0]!, /acp_claims\?select=issue_id,executor,run_id,claimed_at&claimed_at=gte\.[^&]+&order=claimed_at\.desc&limit=1000$/);
+  assert.match(db.seen[1]!, /acp_activity\?select=run_id,issue_id,seq,identifier,executor,kind,step,at&at=gte\.[^&]+&order=at\.desc&limit=1000$/);
+  assert.equal(db.seen[2], db.seen[0]);
 });
 
 test("readActivity outage: missing table, failing claims read, network error or no database all read unknown", async () => {
@@ -238,7 +247,7 @@ test("engine: blocked, stopped and returned tasks each end with their own termin
     const activity = memoryActivity("run-x");
     let checks = 0;
     await tick(deps(store, { chatgpt: scripted([TOOL, DONE]) }, { activity, halt: async () => (++checks <= 3 ? null : STOPPED) }));
-    assert.equal(kinds(activity), "started,step,step,stopped");
+    assert.equal(kinds(activity), "started,step,stopped", "the refused call never counts as a heartbeat");
   }
   {
     // A transient provider failure before any tool ran returns the task to Todo: released, which reads idle.
@@ -278,7 +287,9 @@ test("sink: a failing telemetry write never stops the task and is logged once", 
 // ---------- the Team map view ----------
 
 const src = readFileSync(new URL("../dashboard/command.js", import.meta.url), "utf8");
+const live = readFileSync(new URL("../dashboard/live-activity.js", import.meta.url), "utf8");
 const sandbox: any = {};
+vm.runInNewContext(live, sandbox);
 vm.runInNewContext(src, sandbox);
 const core = sandbox.ACPCommandCore;
 const report = (agents: object, o: object = {}) => ({ status: "reported", readAt: iso(5_000), ttlMs: HEARTBEAT_TTL_MS, agents, ...o });
@@ -287,7 +298,8 @@ test("Team map: each of the five states gets its own avatar state and words", ()
   const v = (a: object) => core.liveView(report({ claude: a }), "claude", NOW);
   const w = v({ state: "working", issue: "ARN-12", step: 3, at: iso(40_000) });
   assert.equal(w.state, "working");
-  assert.match(w.detail, /^ARN-12 · step 3 · heartbeat 40s ago$/);
+  assert.equal(w.label, "Working");
+  assert.match(w.detail, /^ARN-12 · step 3 · last heartbeat 40s ago$/);
   assert.equal(v({ state: "idle" }).label, "Idle");
   assert.equal(v({ state: "blocked", issue: "ARN-12", at: iso(120_000) }).detail, "ARN-12 · 2 min ago");
   assert.equal(v({ state: "blocked", issue: "ARN-12", at: iso(120_000), stopped: true }).label, "Stopped");
@@ -302,6 +314,7 @@ test("Team map fails closed: no report, failed read, stale check, aged heartbeat
   assert.equal(unk(undefined), "unknown");
   assert.equal(unk({ status: "unavailable" }), "unknown");
   assert.equal(unk({ status: "unconfigured" }), "unknown");
+  assert.equal(unk({ status: "incomplete", readAt: iso(1_000), ttlMs: HEARTBEAT_TTL_MS, agents: { claude: { state: "working", issue: "ARN-1", at: iso(1_000) } } }), "unknown");
   assert.equal(unk(report({ claude: { state: "working", issue: "ARN-1", at: iso(1_000) } }, { readAt: iso(HEARTBEAT_TTL_MS + 1_000) })), "unknown", "page stopped refreshing");
   assert.equal(unk(report({ claude: { state: "working", issue: "ARN-1", at: iso(HEARTBEAT_TTL_MS + 1_000) } })), "unknown");
   assert.equal(unk(report({ claude: { state: "working", issue: "<img>", at: iso(1_000) } })), "unknown");
@@ -327,4 +340,112 @@ test("Team map: only working animates, motion respects reduced motion and hidden
   assert.match(html, /<link rel="stylesheet" href="nexia.css">\n<link rel="stylesheet" href="worker-activity.css">/);
   assert.match(src, /visibilitychange/);
   assert.match(src, /badge\.classList\.add\("live", "live-" \+ live\.state\)/);
+});
+
+// ---------- review corrections (ChatGPT, PR #146) ----------
+
+test("bounded reads: a claim that changes between the two claim reads is unknown, not working", async () => {
+  const rows = [row("started", 40_000), row("step", 10_000)];
+  let n = 0;
+  const f = (async (url: any) => {
+    const u = String(url);
+    if (u.includes("/acp_activity")) return Response.json(rows);
+    n++;
+    // The second claims read sees another run take the task over while the rows were being read.
+    return Response.json([n === 1 ? claim("iss-1", "acp:claude", "run-a") : claim("iss-1", "acp:claude", "run-b", 1_000)]);
+  }) as typeof fetch;
+  const r = await readActivity(DB, f, NOW);
+  assert.equal(r.status, "reported");
+  assert.equal(r.agents.claude.state, "unknown");
+  assert.match(r.agents.claude.reason, /changed while it was read/);
+});
+
+test("bounded reads: a full page of rows or claims is incomplete, never trimmed into a state", async () => {
+  const many = Array.from({ length: ROW_LIMIT }, (_, i) => row("step", 10_000, { seq: i + 2 }));
+  for (const [rows, claims] of [[many, [claim("iss-1", "acp:claude", "run-a")]], [[row("step", 10_000)], Array.from({ length: CLAIM_LIMIT }, (_, i) => claim("iss-" + i, "acp:claude", "run-" + i))]] as const) {
+    const r = await readActivity(DB, fakeDb(rows as any[], claims as any[]).f, NOW);
+    assert.equal(r.status, "incomplete");
+    assert.deepEqual(Object.values(r.agents).map((a: any) => a.state), ["unknown", "unknown", "unknown", "unknown"]);
+  }
+});
+
+test("empty telemetry with a live claim is unknown; an old finished claim with no rows is idle", () => {
+  assert.equal(project([], [claim("iss-1", "acp:perplexity", "run-a", 30_000)]).perplexity.state, "unknown");
+  assert.equal(project([], [claim("iss-1", "acp:perplexity", "run-a", LEASE_MS + 30_000)]).perplexity.state, "idle");
+});
+
+test("claim times are validated: a future or unreadable claim time fences nothing and reads unknown", () => {
+  const rows = [row("started", 40_000), row("step", 10_000)];
+  for (const bad of [{ ...claim("iss-1", "acp:claude", "run-a"), claimed_at: iso(-10 * 60_000) }, { ...claim("iss-1", "acp:claude", "run-a"), claimed_at: "yesterday" }]) {
+    const p = projectActivity({ ok: true, rows, claims: [bad], nowMs: NOW });
+    assert.equal(p.agents.claude.state, "unknown");
+    assert.match(p.agents.claude.reason, /claim time is invalid/);
+    assert.equal(p.dropped, 2);
+  }
+});
+
+test("admission: a run that only started (no model call admitted yet) is unknown, not working", () => {
+  const a = project([row("started", 5_000)], [claim("iss-1", "acp:claude", "run-a", 6_000)]);
+  assert.equal(a.claude.state, "unknown");
+  assert.match(a.claude.reason, /no model call admitted/);
+});
+
+test("Linear cross-check: a fresh heartbeat on a task Linear shows as done or back in Todo is unknown", () => {
+  const rows = [row("started", 40_000), row("step", 10_000)], claims = [claim("iss-1", "acp:claude", "run-a")];
+  for (const state of ["completed", "canceled", "unstarted"]) {
+    const p = projectActivity({ ok: true, rows, claims, linear: new Map([["ARN-12", state]]), nowMs: NOW });
+    assert.equal(p.agents.claude.state, "unknown", state);
+    assert.match(p.agents.claude.reason, /no longer shows it in progress/);
+  }
+  assert.equal(projectActivity({ ok: true, rows, claims, linear: new Map([["ARN-12", "started"]]), nowMs: NOW }).agents.claude.state, "working");
+});
+
+test("console overview: the board's own Linear states cross-check a working report", async () => {
+  const env = { ACP_SITE_PASSWORD: "pw", LINEAR_API_KEY: "lin", ...DB };
+  const req = { method: "POST", headers: { "x-acp-password": "pw" }, body: { action: "overview" } };
+  const node = { id: "iss-1", identifier: "ARN-12", title: "[Claude] x", url: "https://linear.app/a/issue/ARN-12", priority: 0, updatedAt: iso(1), completedAt: iso(1),
+    team: { id: "faa75915-076f-479a-a3fb-92af2369e6c3" }, project: { id: "e8cf8cda-3347-4310-aea5-e6b7c7b95b4f" }, parent: null, state: { name: "Done", type: "completed" }, labels: { nodes: [] }, assignee: null };
+  const db = fakeDb([row("started", 40_000), row("step", 10_000)], [claim("iss-1", "acp:claude", "run-a")]);
+  const f = (async (url: any, init: any) => {
+    if (String(url).includes("supabase")) return db.f(url, init);
+    const q = JSON.parse(init.body).query as string;
+    if (q.includes("ConsoleEngineStatus")) return Response.json({ data: { project: { documents: { nodes: [], pageInfo: { hasNextPage: false } } } } });
+    if (q.includes("ConsoleResults")) return Response.json({ data: { issues: { nodes: [] } } });
+    return Response.json({ data: { issues: { nodes: [node], pageInfo: { hasNextPage: false } } } });
+  }) as typeof fetch;
+  const r: any = await handle(req, env, f, () => new Date(NOW));
+  assert.equal(r.status, 200);
+  assert.equal(r.body.activity.agents.claude.state, "unknown");
+});
+
+test("engine admission: a model call refused before it goes out writes no heartbeat", async () => {
+  // Stop everything is open when the run starts and closed at the first model call's own check.
+  const store = new Store(); store.add({ title: "[ChatGPT] check docs" });
+  const activity = memoryActivity("run-b");
+  let checks = 0;
+  const chatgpt: ModelClient = { async chat() { throw new Error("must not be called"); } };
+  await tick(deps(store, { chatgpt }, { activity, halt: async () => (++checks <= 1 ? null : STOPPED) }));
+  assert.equal(kinds(activity), "started,stopped");
+});
+
+test("sink: a terminal row is retried once; a heartbeat is not", async () => {
+  const calls: string[] = [];
+  let fail = true;
+  const f = (async (_u: any, init: any) => { calls.push(JSON.parse(init.body).kind); if (fail) { fail = false; return new Response("{}", { status: 503 }); } return new Response(null, { status: 201 }); }) as typeof fetch;
+  const sink = supabaseActivity("https://x.supabase.co", "k", "run", f, () => NOW);
+  await sink.record({ id: "i1", identifier: "ARN-1" }, "acp:claude", "done");
+  assert.deepEqual(calls, ["done", "done"]);
+  fail = true; calls.length = 0;
+  await sink.record({ id: "i1", identifier: "ARN-1" }, "acp:claude", "step", 1);
+  assert.deepEqual(calls, ["step"]);
+});
+
+test("task rows: taskWorking is true only for a fresh working report naming that task", () => {
+  const L = sandbox.ACPLive;
+  const rep = report({ claude: { state: "working", issue: "ARN-12", at: iso(20_000), issues: ["ARN-12"] } });
+  assert.equal(L.taskWorking(rep, "ARN-12", NOW), true);
+  assert.equal(L.taskWorking(rep, "ARN-13", NOW), false);
+  assert.equal(L.taskWorking({ ...rep, status: "unavailable" }, "ARN-12", NOW), false);
+  assert.equal(L.taskWorking(rep, "ARN-12", NOW + HEARTBEAT_TTL_MS), false, "the report ages out");
+  assert.equal(L.taskWorking(report({ claude: { state: "completed", issue: "ARN-12", at: iso(20_000) } }), "ARN-12", NOW), false);
 });

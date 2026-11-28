@@ -1,8 +1,8 @@
 // Worker activity telemetry (ARN-163): what an engine run is doing on a task RIGHT NOW, written as it happens.
 //
 // A Linear lane or a claim says who owns a task, not that anyone is working on it. So the run that holds a task's
-// claim (src/claims.ts) writes one small row per lifecycle step to acp_activity: started, a heartbeat before every
-// model reply ("step"), and one terminal row (done, blocked, stopped, released). The Team map reads these back
+// claim (src/claims.ts) writes one small row per lifecycle step to acp_activity: started, a heartbeat once each
+// model call has passed the stop switch and budget checks and is about to go out ("step"), and one terminal row (done, blocked, stopped, released). The Team map reads these back
 // (api/_lib/worker-activity.js) and only animates an AI while a fresh heartbeat from the claim-holding run exists.
 //
 // Rules:
@@ -15,6 +15,7 @@ type Fetch = typeof fetch;
 
 export const ACTIVITY_KINDS = ["started", "step", "done", "blocked", "stopped", "released"] as const;
 export type ActivityKind = (typeof ACTIVITY_KINDS)[number];
+const TERMINAL_KINDS: readonly ActivityKind[] = ["done", "blocked", "stopped", "released"];
 
 export interface ActivityEvent {
   issueId: string;
@@ -54,9 +55,17 @@ export function supabaseActivity(url: string, key: string, runId: string, f: Fet
         issue_id: issue.id, identifier: issue.identifier, executor, run_id: runId, seq: next(issue.id), kind,
         step: Number.isInteger(step) ? step : null, at: new Date(now()).toISOString(),
       };
+      // A terminal row is what ends "working" before the heartbeat ages out, so it gets one retry. The unique key
+      // (run_id, issue_id, seq) makes the retry harmless if the first write did land.
+      const tries = TERMINAL_KINDS.includes(kind) ? 2 : 1;
       try {
-        const res = await f(endpoint, { method: "POST", headers, body: JSON.stringify(row), signal: AbortSignal.timeout(5_000) });
-        if (!res.ok) throw new Error(`activity store ${res.status}`);
+        for (let i = 1; ; i++) {
+          try {
+            const res = await f(endpoint, { method: "POST", headers, body: JSON.stringify(row), signal: AbortSignal.timeout(5_000) });
+            if (!res.ok) throw new Error(`activity store ${res.status}`);
+            break;
+          } catch (e) { if (i >= tries) throw e; }
+        }
       } catch (e) {
         // Logged once per run: a missing table (migration not applied yet) shouldn't flood the run log.
         if (!warned) log(`activity telemetry not written (${(e as Error).message}); the Team map will show this AI as unknown, not working`);

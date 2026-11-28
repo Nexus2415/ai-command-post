@@ -257,6 +257,7 @@ async function callModel(
   messages: ChatMessage[],
   maxOut: number,
   meta?: { truncated?: boolean },
+  onAdmitted?: () => Promise<void>,
 ): Promise<string | { blocked: string }> {
   // Stop everything is checked in code before every paid call, never left to the model.
   const stop = await haltReason(d.halt);
@@ -269,6 +270,8 @@ async function callModel(
   // Reserve the worst-case charge before the request. A paid call can be billed even when the response is lost
   // (timeout, dropped connection, malformed body), so recording only after success would let retries exceed the cap.
   d.budget.record({ agent, issue: issue.identifier, inputTokens: est, outputTokens: maxOut });
+  // Every check passed and the call is about to go out: only now is the worker really working (ARN-163).
+  if (onAdmitted) await onAdmitted();
   const r = await client.chat(messages, { maxOutputTokens: maxOut });
   if (meta) meta.truncated = r.truncated === true;
   return r.text;
@@ -531,11 +534,10 @@ export async function work(d: Deps, task: Issue, agent: AgentKey, report: TickRe
   let toolCallAttempted = false;
   for (let step = 1; step <= d.cfg.maxStepsPerTask; step++) {
     const left = d.cfg.maxStepsPerTask - step;
-    await mark("step", step);
     const meta: { truncated?: boolean } = {};
     let out: string | { blocked: string };
     try {
-      out = await callModel(d, agent, task, messages, maxOut, meta);
+      out = await callModel(d, agent, task, messages, maxOut, meta, () => mark("step", step));
     } catch (e) {
       const reason = e instanceof Error ? e.message : String(e);
       if (!toolCallAttempted) {
