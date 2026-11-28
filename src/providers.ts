@@ -29,16 +29,19 @@ export class ProviderError extends Error {
   }
 }
 
-// Metered engine calls have exactly one admission/ledger reservation each. Retrying within
-// this transport would create another potentially billable request without a fresh admission.
-// The legacy suspended Gemini client retains its free-tier fixture retry behavior.
+// Metered engine calls have exactly one admission/ledger reservation each, so a request the
+// provider may have processed (5xx, lost response) is never repeated here. "Busy" answers are the
+// exception: 429 (rate limited) and 529 (overloaded) are refused before any work and are not
+// billed, so waiting and asking again costs nothing and keeps one blip from blocking a task.
+// The legacy suspended Gemini client retains its wider free-tier retry behavior.
+const BUSY = new Set([429, 529]);
 const RETRYABLE = new Set([429, 500, 502, 503, 504, 529]);
 let retryDelaysMs = [5_000, 15_000];
 export function setRetryDelays(ms: number[]): void {
   retryDelaysMs = ms;
 }
 
-async function postJson(f: Fetch, provider: string, url: string, headers: Record<string, string>, body: unknown, retryBusy = false): Promise<any> {
+async function postJson(f: Fetch, provider: string, url: string, headers: Record<string, string>, body: unknown, retryOn: ReadonlySet<number> = BUSY): Promise<any> {
   let res: Response;
   let text: string;
   for (let attempt = 0; ; attempt++) {
@@ -51,7 +54,7 @@ async function postJson(f: Fetch, provider: string, url: string, headers: Record
     });
     text = await res.text();
     const wait = retryDelaysMs[attempt];
-    if (res.ok || !retryBusy || !RETRYABLE.has(res.status) || wait === undefined) break;
+    if (res.ok || !retryOn.has(res.status) || wait === undefined) break;
     await new Promise((r) => setTimeout(r, wait));
   }
   if (!res.ok) throw new ProviderError(provider, res.status, text.slice(0, 500));
@@ -118,7 +121,7 @@ export function geminiClient(apiKey: string, model: string, f: Fetch = fetch): M
           contents: rest.map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] })),
           generationConfig: { maxOutputTokens },
         },
-        true, // Legacy free-tier client only; buildClients refuses suspended Gemini.
+        RETRYABLE, // Legacy free-tier client only; buildClients refuses suspended Gemini.
       );
       const text = (j.candidates?.[0]?.content?.parts ?? []).map((p: any) => p.text ?? "").join("");
       return {
