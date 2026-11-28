@@ -186,3 +186,21 @@ button.ax-row{width:100%;border:0;background:none;font:inherit;text-align:left;c
   .ax-title h1{font-size:25px}
   .ax-title svg{width:34px;height:34px}
 }
+
+/* ARN-159: in-app task details, explicit external navigation, and request-bound animation. */
+.ax-task-detail{padding:0 16px 16px;min-width:0;overflow-wrap:anywhere;color:var(--fg)}
+.ax-task-detail[hidden]{display:none}
+.ax-task-body{font-size:14px;min-width:0}
+.ax-task-copy{white-space:pre-wrap;overflow-wrap:anywhere;margin:8px 0}
+.ax-task-update{padding:12px 0;border-top:1px solid var(--line);min-width:0}
+.ax-task-update strong{font-size:12px;color:var(--muted)}
+.ax-linear-link{display:inline-flex;align-items:center;min-height:44px;color:var(--accent);font-weight:650;font-size:14px}
+.ax-row[aria-expanded="true"] .ax-chev{transform:rotate(90deg)}
+.ax-reading{display:flex;align-items:center;gap:12px;color:var(--accent)}
+.ax-reading::before{content:"";width:18px;height:18px;flex:none;border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:ax-read-spin .9s linear infinite}
+@keyframes ax-read-spin{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.ax-reading::before{animation:none}}
+.ax-task-toggle{background:none;border:0;padding:4px 0;color:inherit;text-align:left;font:inherit;cursor:pointer;overflow-wrap:anywhere;max-width:100%;min-height:44px}
+.ax-task-toggle:hover{color:var(--accent);text-decoration:underline}
+.ax-task-inline{min-width:0;max-width:100%}
+.ax-task-inline .ax-task-detail{padding:6px 0 12px}
