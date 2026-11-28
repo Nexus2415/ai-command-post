@@ -34,5 +34,10 @@
   function displayName() {
     try { return (root.localStorage.getItem("acp.name") || "").slice(0, 40); } catch (e) { return ""; }
   }
+  // Every page that uses sessions also loads the version check (no per-page edits).
+  if (root.document && root.document.head && !root.document.getElementById("acp-version")) {
+    const s = root.document.createElement("script"); s.id = "acp-version"; s.src = "/version.js"; s.defer = true;
+    root.document.head.appendChild(s);
+  }
   root.ACPSession = { call, current, expired, signOut, safeNext, displayName };
 })(typeof window !== "undefined" ? window : globalThis);
