@@ -62,7 +62,10 @@
         root.ACPLive.taskWorking(activity, it.id, now);
     });
   }
-  const api = { counts, tab, activeWork, ownerName, resultBy, label, safeUrl, greeting, TABS, taskLive };
+  const validIssueId = id => typeof id === "string" && /^ARN-[1-9]\d{0,8}$/.test(id);
+  const validThread = (j,id) => j?.issue?.id === id && typeof j.issue.description === "string" && typeof j.hasPreviousPage === "boolean" && Array.isArray(j.comments) && j.comments.every(c => c && typeof c.id === "string" && typeof c.body === "string" && Number.isFinite(Date.parse(c.createdAt)));
+  const validOverview = o => !!o && Array.isArray(o.issues) && typeof o.hasNextPage === "boolean" && Number.isFinite(Date.parse(o.fetchedAt)) && o.issues.every(it => it && validIssueId(it.id) && Object.hasOwn(RANK,it.lane)) && new Set(o.issues.map(it => it.id)).size === o.issues.length;
+  const api = { counts, tab, activeWork, ownerName, resultBy, label, safeUrl, greeting, TABS, taskLive, validIssueId, validThread, validOverview };
   root.ACPWork = api;
   if (typeof document === "undefined") return;
 
@@ -144,10 +147,11 @@
       const open = detail.hidden;
       detail.hidden = !open;
       a.setAttribute("aria-expanded", String(open));
-      if (open) showTask(detail, it);
+      if (open) showTask(detail, li._workItem); else detail._taskRead = null;
     });
     li.append(a, detail);
     li._workItem = it;
+    li._workSignature = JSON.stringify(it);
     li.dataset.workerTask = it.id;
     updateTaskMotion(li, activity, it);
     return li;
@@ -168,7 +172,7 @@
     const loading = el("p", "ax-reading", "Reading task details…");
     loading.setAttribute("role", "status");
     body.append(loading);
-    if (!/^ARN-[1-9]\\d{0,8}$/.test(String(it.id))) {
+    if (!validIssueId(it.id)) {
       body.replaceChildren(el("p", "ax-muted", "Task details unavailable: invalid issue identifier."));
       return;
     }
@@ -181,7 +185,7 @@
       if (!r.ok) throw new Error("Couldn't load task details.");
       const j = await r.json();
       if (host._taskRead !== token || !host.isConnected) return;
-      if (j.issue?.id !== it.id || !Array.isArray(j.comments)) throw new Error("Task details could not be verified.");
+      if (!validThread(j, it.id)) throw new Error("Task details could not be verified.");
       body.replaceChildren();
       body.append(el("p", "ax-muted", label(j.issue.lane) + " · Execution activity not verified"));
       const description = String(j.issue.description || "").trim();
@@ -221,7 +225,26 @@
   }
   // One read-only board refresh per minute, no additional model request or per-task polling.
   // Keep expanded rows and focus intact; expire cached motion locally between reads.
-  function watchActivity(initial) {
+  function renderRows(list,items,activity,emptyText) {
+    const old = new Map(Array.from(list.children).filter(n => n.dataset.workerTask).map(n => [n.dataset.workerTask,n]));
+    const wanted = new Set(items.map(it => it.id));
+    for (const node of Array.from(list.children)) if (!wanted.has(node.dataset.workerTask)) node.remove();
+    if (!items.length) { list.replaceChildren(el("li","ax-empty",emptyText)); return; }
+    items.forEach((it,index) => {
+      let node=old.get(it.id);
+      if (!node || node._workSignature !== JSON.stringify(it)) {
+        const prev=node, opened=prev?.querySelector(".ax-task-detail")?.hidden === false, focused=prev?.contains(document.activeElement);
+        node=row(it,activity);
+        if (prev?.parentNode===list) prev.replaceWith(node);
+        if (opened) { node.querySelector(".ax-task-detail").hidden=false; node.querySelector("button").setAttribute("aria-expanded","true"); }
+        if (list.children[index]!==node) list.insertBefore(node,list.children[index]||null);
+        if (opened) showTask(node.querySelector(".ax-task-detail"),it);
+        if (focused) node.querySelector("button").focus({preventScroll:true});
+      } else if (list.children[index]!==node) list.insertBefore(node,list.children[index]||null);
+      updateTaskMotion(node,activity,it);
+    });
+  }
+  function watchActivity(initial,onOverview,onStale) {
     let report = initial?.activity, items = new Map(tasksOf(initial).map(it => [it.id, it])), busy = false;
     const sync = () => {
       for (const li of document.querySelectorAll("[data-worker-task]"))
@@ -234,7 +257,8 @@
         const o = await load();
         report = o?.activity;
         items = new Map(tasksOf(o).map(it => [it.id, it]));
-      } catch { report = null; }
+        onOverview?.(o);
+      } catch { report = null; onStale?.(); }
       finally { busy = false; sync(); }
     };
     setInterval(sync, 1000);
@@ -248,12 +272,13 @@
   async function load() {
     let r;
     try {
-      r = await fetch("/api/console", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "overview" }) });
+      r = await fetch("/api/console", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "overview" }), signal: AbortSignal.timeout(25000) });
     } catch (e) { throw new Error("Network error: couldn't reach the server."); }
     if (r.status === 401 && root.ACPSession) return root.ACPSession.expired();
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(typeof j.error === "string" ? j.error : "Couldn't load tasks (" + r.status + ").");
+    if (!validOverview(j)) throw new Error("Task board response incomplete.");
     return j;
   }
-  Object.assign(api, { el, icon, row, load, showTask, workerAvatar, watchActivity });
+  Object.assign(api, { el, icon, row, load, showTask, workerAvatar, watchActivity, renderRows });
 })(typeof window !== "undefined" ? window : globalThis);
