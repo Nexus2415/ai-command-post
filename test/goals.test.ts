@@ -299,8 +299,8 @@ test("authorized synthetic image goal opens a draft PR, checks it, and waits for
     const u = new URL(url);
     if (init.method === "PUT" && u.pathname.includes("/merge")) throw new Error("the engine must never merge");
     if (u.pathname === "/repos/acme/app/pulls" && init.method === "POST") drafts.push(JSON.parse(String(init.body)).draft);
-    if (u.pathname === "/repos/acme/app/pulls/7") return Response.json({ head: { sha: "synthetic-head" }, state: "open", draft: true });
-    if (u.pathname.includes("/check-runs")) { checked = true; return Response.json({ check_runs: [{ name: "Validate", status: "completed", conclusion: "success" }] }); }
+    if (u.pathname === "/repos/acme/app/pulls/7") return Response.json({ head: { sha: "a".repeat(40) }, state: "open", draft: true });
+    if (u.pathname.includes("/check-runs")) { checked = true; return Response.json({ check_runs: [{ id: 1, name: "Validate", status: "completed", conclusion: "success", app: { slug: "github-actions" } }] }); }
     if (u.pathname === "/repos/acme/app") return Response.json({ default_branch: "main" });
     if (u.pathname.includes("/git/ref/heads/")) return Response.json({ object: { sha: "base" } });
     if (u.pathname === "/repos/acme/app/pulls" && init.method === "POST") return Response.json({ number: 7, html_url: "https://github.com/acme/app/pull/7", draft: JSON.parse(String(init.body)).draft });
@@ -314,7 +314,7 @@ test("authorized synthetic image goal opens a draft PR, checks it, and waits for
   ]);
   const d = deps(store, { claude });
   const base = d.toolEnv;
-  d.toolEnv = (i) => ({ ...base(i), githubToken: "t", f, policy: { allowPullRequests: true, allowedRepos: ["acme/app"] } });
+  d.toolEnv = (i) => ({ ...base(i), githubToken: "t", f, sleep: async () => {}, policy: { allowPullRequests: true, allowedRepos: [draft.repository] } });
   await tick(d);
   const [s1, s2] = store.kids(goal.id);
   await tick(d);
