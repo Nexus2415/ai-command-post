@@ -81,3 +81,8 @@ test("ARN-175 board refresh updates both pages with fresh activity",()=>{
  assert.match(read("work.js"),/onOverview\?\.\(o\)/);
  assert.match(read("work.js"),/onStale\?\.\(\)/);
 });
+
+test("ARN-175 preserves the exact focused descendant when moving an unchanged task",()=>{
+ assert.match(read("work.js"), /const focused = node\.contains\(document\.activeElement\) \? document\.activeElement : null;\s*list\.insertBefore\(node,list\.children\[index\]\|\|null\);\s*if \(focused && document\.activeElement!==focused && focused\.isConnected\) focused\.focus\(\{preventScroll:true\}\)/);
+ assert.match(read("tasks.js"),/overview = \{\.\.\.overview, activity:null\}/);
+});

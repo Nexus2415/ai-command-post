@@ -240,7 +240,11 @@
         if (list.children[index]!==node) list.insertBefore(node,list.children[index]||null);
         if (opened) showTask(node.querySelector(".ax-task-detail"),it);
         if (focused) node.querySelector("button").focus({preventScroll:true});
-      } else if (list.children[index]!==node) list.insertBefore(node,list.children[index]||null);
+      } else if (list.children[index]!==node) {
+        const focused = node.contains(document.activeElement) ? document.activeElement : null;
+        list.insertBefore(node,list.children[index]||null);
+        if (focused && document.activeElement!==focused && focused.isConnected) focused.focus({preventScroll:true});
+      }
       updateTaskMotion(node,activity,it);
     });
   }

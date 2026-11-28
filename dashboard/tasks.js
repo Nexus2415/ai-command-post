@@ -45,7 +45,7 @@
       show();
       };
       apply(await W.load());
-      W.watchActivity(overview,apply,() => { const m=$("tMsg"); m.hidden=false; m.className="ax-msg err"; m.textContent="Refresh unavailable. Showing last known tasks; activity unverified."; });
+      W.watchActivity(overview,apply,() => { const m=$("tMsg"); m.hidden=false; m.className="ax-msg err"; if (overview) overview = {...overview, activity:null}; m.textContent="Refresh unavailable. Showing last known tasks; activity unverified."; });
     } catch (e) {
       $("tList").replaceChildren(W.el("li", "ax-empty", "Tasks couldn't be loaded."));
       const m = $("tMsg"); m.hidden = false; m.className = "ax-msg err"; m.textContent = e.message;
