@@ -9,6 +9,8 @@ export interface ChatResult {
   text: string;
   inputTokens: number;
   outputTokens: number;
+  /** True when the provider stopped because the reply hit the output-token limit, so the text is cut off. */
+  truncated?: boolean;
 }
 
 export interface ModelClient {
@@ -74,7 +76,7 @@ export function anthropicClient(apiKey: string, model: string, f: Fetch = fetch)
         { model, max_tokens: maxOutputTokens, system, messages: rest },
       );
       const text = (j.content ?? []).filter((b: any) => b.type === "text").map((b: any) => b.text).join("");
-      return { text, inputTokens: j.usage?.input_tokens ?? 0, outputTokens: j.usage?.output_tokens ?? 0 };
+      return { text, inputTokens: j.usage?.input_tokens ?? 0, outputTokens: j.usage?.output_tokens ?? 0, truncated: j.stop_reason === "max_tokens" };
     },
   };
 }
@@ -89,7 +91,12 @@ export function chatCompletionsClient(provider: string, baseUrl: string, apiKey:
       const text = j.choices?.[0]?.message?.content ?? "";
       const citations: string[] = Array.isArray(j.citations) ? j.citations : [];
       const withCites = citations.length ? `${text}\n\nSources:\n${citations.map((c) => `- ${c}`).join("\n")}` : text;
-      return { text: withCites, inputTokens: j.usage?.prompt_tokens ?? 0, outputTokens: j.usage?.completion_tokens ?? 0 };
+      return {
+        text: withCites,
+        inputTokens: j.usage?.prompt_tokens ?? 0,
+        outputTokens: j.usage?.completion_tokens ?? 0,
+        truncated: j.choices?.[0]?.finish_reason === "length",
+      };
     },
   };
 }
@@ -114,6 +121,7 @@ export function geminiClient(apiKey: string, model: string, f: Fetch = fetch): M
         text,
         inputTokens: j.usageMetadata?.promptTokenCount ?? 0,
         outputTokens: j.usageMetadata?.candidatesTokenCount ?? 0,
+        truncated: j.candidates?.[0]?.finishReason === "MAX_TOKENS",
       };
     },
   };

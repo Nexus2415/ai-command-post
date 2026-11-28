@@ -16,7 +16,7 @@ export const AGENTS: Record<AgentKey, AgentProfile> = {
     name: "Claude",
     role: "Engineering, architecture, code review and security-sensitive technical work.",
     match: /\bclaude\b|anthropic/i,
-    tools: ["github.read_file", "github.list_tree", "github.search_issues", "github.open_pull_request", "github.update_pull_request", "github.pr_checks", "linear.comment", "firecrawl.scrape", "vercel.list_deployments", "vercel.deployment_status"],
+    tools: ["github.read_file", "github.read_files", "github.list_tree", "github.search_issues", "github.open_pull_request", "github.update_pull_request", "github.pr_checks", "linear.comment", "firecrawl.scrape", "vercel.list_deployments", "vercel.deployment_status"],
   },
   chatgpt: {
     key: "chatgpt",
