@@ -10,6 +10,7 @@ import { RECONCILED_MARKER, RESULT_MARKER, tick, type Deps } from "../src/orches
 import type { ChatMessage, ModelClient } from "../src/providers.ts";
 import { STOPPED } from "../src/stop-switch.ts";
 import { fixture as visualFixture } from "./helpers/visual-goal-fixture.ts";
+import { independentReview } from "../src/review-check.ts";
 
 class MemoryStore implements TaskStore {
   issues: Issue[] = [];
@@ -289,9 +290,15 @@ test("a blocked step pauses the goal for the owner with no paid call; later step
 test("authorized synthetic image goal opens a draft PR, checks it, and waits for owner merge", async () => {
   const store = new MemoryStore();
   const visual = visualFixture();
+  const commit = visual.p.commit;
+  visual.p.commit = async (grant, draft) => {
+    const receipt = await commit(grant, draft);
+    store.add({ id: draft.goalId, title: draft.title, description: draft.description });
+    return receipt;
+  };
   assert.equal((await visual.run()).status, "recorded");
   const draft = visual.draft()!;
-  const goal = store.add({ id: draft.goalId, title: draft.title, description: draft.description });
+  const goal = store.issues.find(i => i.id === draft.goalId)!;
   assert.match(goal.description, /Observed: Blue square/);
   const drafts: unknown[] = [];
   let checked = false;
@@ -306,12 +313,13 @@ test("authorized synthetic image goal opens a draft PR, checks it, and waits for
     if (u.pathname === "/repos/acme/app/pulls" && init.method === "POST") return Response.json({ number: 7, html_url: "https://github.com/acme/app/pull/7", draft: JSON.parse(String(init.body)).draft });
     return Response.json({});
   }) as unknown as typeof fetch;
+  const seen: ChatMessage[][] = [];
   const claude = scripted([
     planReply(2, "claude"),
     JSON.stringify({ tool: "github.open_pull_request", input: { repo: "acme/app", title: "Step 1", branch: "acp/step-1", files: [{ path: "a.ts", content: "a" }] } }),
     JSON.stringify({ tool: "github.pr_checks", input: { repo: "acme/app", pr: 7 } }),
     done("Opened https://github.com/acme/app/pull/7, ALL PASSED."),
-  ]);
+  ], seen);
   const d = deps(store, { claude });
   const base = d.toolEnv;
   d.toolEnv = (i) => ({ ...base(i), githubToken: "t", f, sleep: async () => {}, policy: { allowPullRequests: true, allowedRepos: [draft.repository] } });
@@ -320,6 +328,12 @@ test("authorized synthetic image goal opens a draft PR, checks it, and waits for
   await tick(d);
   assert.deepEqual(drafts, [true], "the PR is a draft");
   assert.equal(checked, true, "the actual PR-check tool ran against the synthetic head");
+  assert.ok(seen.some(messages => messages.some(m => m.role === "user" && m.content.includes("ALL PASSED") && m.content.includes("Validate: success"))));
+  const logins = new Map<string, AgentKey>([["builder[bot]", "claude"], ["reviewer[bot]", "perplexity"]]);
+  const pr = { author: "builder[bot]", headSha: "a".repeat(40), reviews: [{ login: "reviewer[bot]", state: "APPROVED", commitId: "b".repeat(40), submittedAt: "2026-11-28T12:00:00Z" }] };
+  assert.equal(independentReview(pr, logins).status, "missing", "stale review is not accepted");
+  pr.reviews[0]!.commitId = pr.headSha;
+  assert.equal(independentReview(pr, logins).status, "approved", "different synthetic reviewer and exact head");
   assert.equal(store.state(s1!.id), "started", "held for the owner's merge");
   assert.ok(store.bodies(s1!.id).some((b) => b.startsWith(RESULT_MARKER) && /stays In Progress until its pull request is merged/.test(b)));
   const r = await tick(d);
