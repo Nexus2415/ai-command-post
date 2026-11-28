@@ -207,7 +207,7 @@ test("the page uses the same round markers as the server and offers the roundtab
   for (const v of ["single", "check", "discuss"]) assert.match(html, new RegExp(`name="cMode" value="${v}"`));
   assert.match(html, /value="check" checked/);
   assert.match(html, /title="One AI answers\. Cheapest[^"]*cent/);
-  assert.match(js, /modes\.get\(projectId\) \|\| "check"/);
+  assert.match(js, /modes\.get\(projectId\) \|\| \(fromTasksDiscussion \? "discuss" : "check"\)/);
   assert.match(js, /modes\.set\(projectId, v\)/);
   assert.match(js, /post\("check", \{ threadId \}\)/);
   assert.match(js, /step: "join"/);
