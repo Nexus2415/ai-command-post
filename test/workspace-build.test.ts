@@ -62,3 +62,15 @@ test("composer Build mode intercepts Send before any chat and explicitly refuses
   assert.match(html, /disabled>Start autonomous build \(not yet available\)/);
   assert.doesNotMatch(js, /post\("build_submit"/);
 });
+
+
+test("unreadable stop state, missing image and project mismatch fail closed", async () => {
+  const { call, store, args, calls } = await setup();
+  assert.equal((await call("build_preview", { ...args, projectId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" })).status, 403);
+  assert.equal((await call("build_preview", { ...args, files: [] })).status, 400);
+  const pdf = ((await call("upload_file", { threadId: args.threadId, name: "synthetic.pdf", mime: "application/pdf", data: Buffer.from("%PDF-1.7 synthetic").toString("base64") })).body as any).file;
+  assert.equal((await call("build_preview", { ...args, files: [pdf.id] })).status, 400);
+  store.getControl = async () => { throw Error("unavailable"); };
+  assert.equal((await call("build_preview", args)).status, 423);
+  assert.equal(calls(), 0);
+});

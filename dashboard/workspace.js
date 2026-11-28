@@ -8,7 +8,7 @@
   let projectId = null, threadId = null, busy = false, status = null, files = [], lastState = null, threadPrivate = null;
   // Images and PDFs uploaded to the open thread for the next message (ids from upload_file), up to 3.
   let uploads = [];
-  let buildMode = false, buildEpoch = 0;
+  let buildMode = false, buildEpoch = 0, buildModeEpoch = 0;
   // While an answer is on its way: the label of the working indicator under your message (null when idle), and the
   // newest message of yours the server has saved, so a failed send knows whether your text still needs restoring.
   let working = null, lastUserSaved = "";
@@ -187,7 +187,7 @@
   }
 
   function closeThread() {
-    resetBuild();
+    resetBuild(true);
     stopSpeaking();
     $("cH").textContent = "No thread open";
     $("cModel").hidden = true;
@@ -200,7 +200,7 @@
   }
 
   async function openThread(id) {
-    if (id !== threadId) { resetBuild(); stopSpeaking(); uploads = []; showFiles(); }
+    if (id !== threadId) { resetBuild(true); stopSpeaking(); uploads = []; showFiles(); }
     threadId = id;
     const { thread, messages } = await post("get_thread", { threadId: id });
     $("welcome").hidden = true;
@@ -632,8 +632,9 @@
   }));
   // Build preview is a distinct composer mode; it never falls through to ordinary chat.
   function invalidateBuild() { buildEpoch++; $("cBuildResult").textContent = ""; }
-  function resetBuild() {
-    buildMode = false; invalidateBuild();
+  function resetBuild(leavingThread = false) {
+    if (leavingThread && buildMode) { $("cText").value = ""; files = []; uploads = []; showFiles(); }
+    buildMode = false; buildModeEpoch++; invalidateBuild();
     $("cBuildPanel").hidden = true; $("cBuild").setAttribute("aria-expanded", "false");
     $("cBuildSynthetic").checked = false; $("cSend").setAttribute("aria-label", "Send");
     $("cText").placeholder = "Ask a question…"; $("cMode").hidden = false;
@@ -641,21 +642,21 @@
   $("cBuild").addEventListener("click", guard(async () => {
     if (buildMode) { resetBuild(); showMode(); syncMic(); return; }
     if (!threadId || threadPrivate !== true) throw new Error("Make this thread private before preparing a visual build.");
-    buildMode = true; invalidateBuild();
+    buildMode = true; buildModeEpoch++; invalidateBuild();
     $("cBuildPanel").hidden = false; $("cBuild").setAttribute("aria-expanded", "true");
     $("cSend").setAttribute("aria-label", "Preview build (does not start)");
     $("cText").placeholder = "Describe the build you want…"; $("cMode").hidden = true; syncMic();
     $("cOptsBtn").hidden = true; $("cSmart").hidden = true; setOpts(false);
     $("cBuildRepo").replaceChildren(el("option", null, "Loading repositories…"));
-    const epoch = buildEpoch, t = threadId;
+    const epoch = buildModeEpoch, t = threadId;
     try {
       const out = await post("build_options");
-      if (epoch !== buildEpoch || !buildMode || t !== threadId) return;
+      if (epoch !== buildModeEpoch || !buildMode || t !== threadId) return;
       const select = $("cBuildRepo"); select.replaceChildren();
       const placeholder = el("option", null, "Choose an allowed repository"); placeholder.value = ""; select.append(placeholder);
       for (const repo of out.repositories || []) { const option = el("option", null, repo); option.value = repo; select.append(option); }
       if (!out.repositories?.length) $("cBuildResult").textContent = "No engine repositories are configured. Nothing can start.";
-    } catch (e) { if (epoch === buildEpoch) $("cBuildResult").textContent = e.message; }
+    } catch (e) { if (epoch === buildModeEpoch) $("cBuildResult").textContent = e.message; }
   }));
   for (const id of ["cText", "cBuildRepo", "cBuildSynthetic"]) $(id).addEventListener("input", invalidateBuild);
   async function previewBuild() {
@@ -671,7 +672,7 @@
       if (!p || p.goalCreated !== false || p.dispatchAvailable !== false || p.modelCalled !== false) throw new Error("Preview could not be verified.");
       $("cBuildResult").textContent = ["Preview only — no goal created, $0 model cost", p.repository, p.content,
         ...p.references.map(f => f.name + " · SHA-256 " + f.sha256), "Observed: " + p.observed.join(" "),
-        "Unknown: " + p.unknown.join(" "), "Acceptance: " + p.acceptance.join(" ")].join("\\n");
+        "Unknown: " + p.unknown.join(" "), "Acceptance: " + p.acceptance.join(" ")].join("\n");
     } catch (e) { if (epoch === buildEpoch) $("cBuildResult").textContent = e.message; }
     finally { $("cSend").disabled = halted; }
   }
