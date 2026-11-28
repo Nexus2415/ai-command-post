@@ -10,7 +10,7 @@ import type { Issue, TaskStore } from "./linear.ts";
 import type { ClaimStore } from "./claims.ts";
 import type { ActivityKind, ActivitySink } from "./activity.ts";
 import { ProviderError, type ChatMessage, type ModelClient } from "./providers.ts";
-import { runTool, TOOL_DOCS, urlsIn, type ToolCall, type ToolEnv } from "./tools.ts";
+import { currentDocumentReceipt, runTool, TOOL_DOCS, urlsIn, type ToolCall, type ToolEnv } from "./tools.ts";
 import { haltReason, STOPPED, UNREADABLE, type StopCheck } from "./stop-switch.ts";
 import { MAX_RECOVERIES, prRecord, RECOVERY_MARKER, recoveryContext, strandedRun, type Stranded } from "./recovery.ts";
 import { isGoal, orderedSteps, PAUSED_MARKER, progressLine, RUN_MARKER, runsUsed, stepContext, stepFinished, stepGate } from "./goals.ts";
@@ -603,7 +603,8 @@ export async function work(d: Deps, task: Issue, agent: AgentKey, report: TickRe
     const j = extractJson(out);
     if (j && typeof j["final"] === "string") {
       const claimedDone = j["status"] !== "blocked";
-      const verifiedDoc = env.document && env.documentReceipt && await env.document.verify(env.documentReceipt).catch(() => false) && !await haltReason(d.halt) ? env.documentReceipt : null;
+      const receipt = currentDocumentReceipt(env);
+      const verifiedDoc = env.document && receipt && await env.document.verify(receipt).catch(() => false) && !await haltReason(d.halt) ? receipt : null;
       const missingDoc = claimedDone && !!env.document && !verifiedDoc;
       const status = !claimedDone || missingDoc ? "blocked" : "done";
       const result = `${RESULT_MARKER} (${profile.name}, ${status})\n\n${missingDoc ? "Required private document has no confirmed current receipt; no completion recorded." : j["final"]}${verifiedDoc ? `\n\nVerified artifact: ${verifiedDoc.filename}; ${verifiedDoc.bytes} bytes; SHA-256 ${verifiedDoc.sha256}; artifact ${verifiedDoc.artifactId}` : ""}`;

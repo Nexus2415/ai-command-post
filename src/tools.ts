@@ -544,6 +544,8 @@ export const TOOL_DOCS: Record<string, string> = {
   "vercel.deployment_status": '{"id":"dpl_... or url","teamId?":"team_..."} — state and error of one deployment (read-only)',
 };
 
+export function currentDocumentReceipt(env: ToolEnv): DocumentReceipt | undefined { return env.documentReceipt; }
+
 export async function runTool(call: ToolCall, allowed: string[], env: ToolEnv): Promise<ToolResult> {
   if (!allowed.includes(call.tool)) return { ok: false, output: `Tool ${call.tool} is not available to this agent` };
   const handler = Object.hasOwn(HANDLERS, call.tool) ? HANDLERS[call.tool] : undefined;
