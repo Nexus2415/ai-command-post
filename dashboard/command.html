@@ -99,7 +99,7 @@ button,select{font:inherit;color:inherit}
 /* the tree */
 .tree{position:relative;display:grid;grid-template-columns:minmax(0,1fr) minmax(190px,240px) minmax(0,1fr);gap:40px 56px;align-items:center;padding:8px 0}
 .links{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:0;overflow:visible}
-.link{fill:none;stroke:var(--st);stroke-width:1.6;stroke-dasharray:6 5;animation:flow 1.6s linear infinite}
+.link{fill:none;stroke:var(--st);stroke-width:1.6;stroke-dasharray:6 5;animation:none}
 .link.glow{stroke-width:6;stroke-dasharray:none;opacity:.18;filter:blur(2px);animation:none}
 .tip{fill:var(--st);filter:drop-shadow(0 0 4px var(--st))}
 @keyframes flow{to{stroke-dashoffset:-22}}
@@ -111,8 +111,8 @@ button,select{font:inherit;color:inherit}
     repeating-radial-gradient(circle at 50% 50%,rgba(51,214,255,.10) 0 1px,transparent 1px 14px);
   box-shadow:0 0 40px rgba(51,214,255,.55),0 0 120px rgba(47,125,255,.35),inset 0 0 40px rgba(51,214,255,.45);
   border:1.5px solid rgba(120,225,255,.85)}
-.orb::before,.orb::after{content:"";position:absolute;inset:-12px;border-radius:50%;border:1px dashed rgba(51,214,255,.55);animation:spin 40s linear infinite}
-.orb::after{inset:-24px;border:1px solid rgba(51,214,255,.18);border-top-color:rgba(51,214,255,.8);animation-duration:12s}
+.orb::before,.orb::after{content:"";position:absolute;inset:-12px;border-radius:50%;border:1px dashed rgba(51,214,255,.55);animation:none}
+.orb::after{inset:-24px;border:1px solid rgba(51,214,255,.18);border-top-color:rgba(51,214,255,.8);animation:none}
 @keyframes spin{to{transform:rotate(360deg)}}
 .orb h2{margin:0;text-transform:uppercase;font:800 clamp(13px,1.3vw,18px)/1 var(--display);letter-spacing:.1em;text-shadow:0 0 10px var(--cyan)}
 .orb p{margin:0;font:500 11.5px/1.5 var(--mono);color:#b9dcf5}
@@ -181,6 +181,9 @@ button,select{font:inherit;color:inherit}
 }
 @media (max-width:420px){.nbody{grid-template-columns:minmax(0,1fr)}.gs,.donut{grid-template-columns:90px 1fr}.ringbox{width:90px}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+.orb[data-reading="true"]::before{animation:spin 8s linear infinite}
+.orb[data-reading="true"]::after{animation:spin 3s linear infinite}
+#orbActivity{font-size:11px;color:var(--muted);max-width:150px;margin:auto}
 </style>
 <link rel="stylesheet" href="nexia.css">
 <header class="ax-head"><a class="nexia-brand" href="/home.html" aria-label="Arnexyia home"><svg class="ax-logo" aria-hidden="true" viewBox="0 0 40 40"><path fill="#7ff4ff" d="M20 3v15.5L11.5 36H3z"/><path fill="#16b6ca" d="M20 3 37 36h-8.5L20 18.5z"/><path fill="#2ee0ee" opacity=".55" d="M20 25.5 23.4 33h-6.8z"/></svg><span><strong class="ax-word">ARNEXYIA</strong><small class="ax-tag">The Intelligence Behind Operations.</small></span></a></header>
@@ -228,6 +231,7 @@ button,select{font:inherit;color:inherit}
           <h2>Orchestrator</h2>
           <p>Plan | Route | Review<br>Approve | Resolve</p>
           <span class="open" id="orbOpen">Loading…</span>
+          <span id="orbActivity" role="status">Execution activity unverified</span>
         </div>
         <div class="col" id="treeRight"></div>
       </section>
