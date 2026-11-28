@@ -215,3 +215,6 @@ button.ax-row{width:100%;border:0;background:none;font:inherit;text-align:left;c
 @keyframes ax-worker-blink{50%{opacity:0}}
 @media(max-width:700px){.ax-ico svg.ax-worker,.ax-worker{width:34px;height:34px}}
 @media(prefers-reduced-motion:reduce){.ax-worker *{animation:none!important}}
+
+.ax-live-unknown{color:var(--muted)}
+html[data-hidden] .ax-worker *{animation-play-state:paused!important}
