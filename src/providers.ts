@@ -29,14 +29,16 @@ export class ProviderError extends Error {
   }
 }
 
-// Free tiers often answer "busy" (429/5xx) for a few seconds; retry those before giving up on the tick.
+// Metered engine calls have exactly one admission/ledger reservation each. Retrying within
+// this transport would create another potentially billable request without a fresh admission.
+// The legacy suspended Gemini client retains its free-tier fixture retry behavior.
 const RETRYABLE = new Set([429, 500, 502, 503, 504, 529]);
 let retryDelaysMs = [5_000, 15_000];
 export function setRetryDelays(ms: number[]): void {
   retryDelaysMs = ms;
 }
 
-async function postJson(f: Fetch, provider: string, url: string, headers: Record<string, string>, body: unknown): Promise<any> {
+async function postJson(f: Fetch, provider: string, url: string, headers: Record<string, string>, body: unknown, retryBusy = false): Promise<any> {
   let res: Response;
   let text: string;
   for (let attempt = 0; ; attempt++) {
@@ -44,11 +46,12 @@ async function postJson(f: Fetch, provider: string, url: string, headers: Record
       method: "POST",
       headers: { "content-type": "application/json", ...headers },
       body: JSON.stringify(body),
+      redirect: "error", // Do not silently repeat a POST or send its body to a different origin.
       signal: AbortSignal.timeout(120_000),
     });
     text = await res.text();
     const wait = retryDelaysMs[attempt];
-    if (res.ok || !RETRYABLE.has(res.status) || wait === undefined) break;
+    if (res.ok || !retryBusy || !RETRYABLE.has(res.status) || wait === undefined) break;
     await new Promise((r) => setTimeout(r, wait));
   }
   if (!res.ok) throw new ProviderError(provider, res.status, text.slice(0, 500));
@@ -115,6 +118,7 @@ export function geminiClient(apiKey: string, model: string, f: Fetch = fetch): M
           contents: rest.map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] })),
           generationConfig: { maxOutputTokens },
         },
+        true, // Legacy free-tier client only; buildClients refuses suspended Gemini.
       );
       const text = (j.candidates?.[0]?.content?.parts ?? []).map((p: any) => p.text ?? "").join("");
       return {
