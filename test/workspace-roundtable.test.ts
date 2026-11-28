@@ -215,7 +215,9 @@ test("the page uses the same round markers as the server and offers the roundtab
   assert.match(js, /others\.slice\(0, 1\)/);
   assert.doesNotMatch(js, /window\.confirm\("Run a roundtable/);
   // A finished roundtable shows the agreed answer, with each AI's own answer and the conflict round folded under it.
-  assert.match(js, /Each AI's own answer \(/);
+  assert.match(js, /fold\(nameOf\(m\) \+ " answer", rowOf\(\[m\], "answer"\)\)/);
+  assert.match(js, /aria-label", "Individual AI responses"/);
+  assert.match(js, /Discussion needs at least two ready AIs/);
   assert.match(js, /How they settled their disagreements/);
   assert.doesNotMatch(js, /innerHTML/, "messages are untrusted text");
 });
@@ -269,4 +271,13 @@ test("checker and critique prompts don't count live web facts as wrong just beca
   for (const p of [checkPrompt("Temp now?", "71°F"), critiquePrompt("Temp now?", "71°F", ["I can't check live data."])]) {
     assert.match(p, /never call an answer wrong only because you can't check current or live information yourself/);
   }
+});
+
+test("Tasks opens a Discussion composer and does not send on navigation", async () => {
+  const {readFileSync} = await import("node:fs");
+  const html = readFileSync(new URL("../dashboard/tasks.html", import.meta.url), "utf8");
+  const js = readFileSync(new URL("../dashboard/workspace.js", import.meta.url), "utf8");
+  assert.match(html, /href="\/workspace\.html\?mode=discuss"/);
+  assert.match(js, /fromTasksDiscussion \? "discuss" : "check"/);
+  assert.match(js, /return finishRoundtable\(models, r1\.roundtableUsd, who\(r1\.failed\)\)/);
 });
