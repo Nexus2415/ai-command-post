@@ -301,11 +301,11 @@ test("authorized synthetic image goal opens a draft PR, checks it, and waits for
   const goal = store.issues.find(i => i.id === draft.goalId)!;
   assert.match(goal.description, /Observed: Blue square/);
   const drafts: unknown[] = [];
-  let checked = false;
+  let checked = false, outOfScopeFetches = 0;
   const f = (async (url: string, init: RequestInit = {}) => {
     const u = new URL(url);
     if (init.method === "PUT" && u.pathname.includes("/merge")) throw new Error("the engine must never merge");
-    assert.ok(!u.pathname.includes("/repos/acme/other"), "out-of-scope repository is never fetched");
+    if(u.pathname.includes("/repos/acme/other")) { outOfScopeFetches++; throw new Error("out-of-scope request"); }
     if (u.pathname === "/repos/acme/app/pulls" && init.method === "POST") drafts.push(JSON.parse(String(init.body)).draft);
     if (u.pathname === "/repos/acme/app/pulls/7") return Response.json({ head: { sha: "a".repeat(40) }, state: "open", draft: true });
     if (u.pathname.includes("/check-runs")) { checked = true; return Response.json({ check_runs: [{ id: 1, name: "Validate", status: "completed", conclusion: "success", app: { slug: "github-actions" } }] }); }
@@ -336,6 +336,7 @@ test("authorized synthetic image goal opens a draft PR, checks it, and waits for
   await tick(d);
   assert.deepEqual(drafts, [true], "the PR is a draft");
   assert.equal(checked, true, "the actual PR-check tool ran against the synthetic head");
+  assert.equal(outOfScopeFetches,0,"no network call to the other globally allowed repository");
   assert.ok(seen.some(messages => messages.some(m => m.role === "user" && m.content.includes("ALL PASSED") && m.content.includes("Validate: success"))));
   const logins = new Map<string, AgentKey>([["builder[bot]", "claude"], ["reviewer[bot]", "perplexity"]]);
   const pr = { author: "builder[bot]", headSha: "a".repeat(40), reviews: [{ login: "reviewer[bot]", state: "APPROVED", commitId: "b".repeat(40), submittedAt: "2026-11-28T12:00:00Z" }] };
@@ -347,4 +348,15 @@ test("authorized synthetic image goal opens a draft PR, checks it, and waits for
   const r = await tick(d);
   assert.ok(r.waiting.some((w) => w.startsWith(`${s2!.identifier}: earlier step ${s1!.identifier} is In Progress`)));
   assert.equal(store.state(s2!.id), "unstarted");
+});
+
+
+test("visual planning discards a returned plan when the trusted scope expires during inference", async()=>{
+  const store=new MemoryStore(), goal=store.add({title:"[Goal] Synthetic visual build",description:"[ACP visual scope required]"});
+  let revoked=false;
+  const d=deps(store,{claude:{async chat(){revoked=true;return {text:planReply(1),inputTokens:100,outputTokens:50};}}});
+  d.visualScope=async id=>id===goal.id&&!revoked?{goalId:id,repository:"acme/app",syntheticOnly:true,expiresAt:Date.now()+60000}:null;
+  const result=await tick(d);
+  assert.equal(store.kids(goal.id).length,0);
+  assert.ok(result.waiting.some(w=>w.includes("verified visual scope unavailable")));
 });

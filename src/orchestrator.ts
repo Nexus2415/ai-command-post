@@ -331,6 +331,8 @@ async function plan(d: Deps, cmd: Issue, lead: AgentKey, report: TickReport): Pr
   const active = activeLead(d, cmd);
   const note = active.lead === lead ? active.note : "";
   const goal = isGoal(cmd);
+  const scopeRepo = isVisualGoal(cmd) ? await visualRepository(d,cmd) : undefined;
+  if (isVisualGoal(cmd) && !scopeRepo) { report.waiting.push(`${cmd.identifier}: verified visual scope unavailable`); return; }
   const limit = goal ? Math.min(MAX_SUBTASKS, d.cfg.goalMaxTasks) : MAX_SUBTASKS;
   const messages: ChatMessage[] = [
     {
@@ -346,7 +348,9 @@ async function plan(d: Deps, cmd: Issue, lead: AgentKey, report: TickReport): Pr
     return;
   }
   if (goal && !(await startGoalRun(d, cmd, lead, messages, `${AGENTS[lead].name} plans the first steps`, [], report))) return;
+  if (scopeRepo && await visualRepository(d,cmd)!==scopeRepo) { report.waiting.push(`${cmd.identifier}: verified visual scope unavailable`); return; }
   const out = await callModel(d, lead, cmd, messages, PLAN_TOKENS);
+  if (scopeRepo && await visualRepository(d,cmd)!==scopeRepo) { report.waiting.push(`${cmd.identifier}: verified visual scope unavailable`); return; }
   if (typeof out !== "string") {
     report.waiting.push(`${cmd.identifier}: lead ${AGENTS[lead].name} cannot plan (${out.blocked})`);
     return;
@@ -419,13 +423,17 @@ async function reviewGoal(d: Deps, goal: Issue, lead: AgentKey, steps: Issue[], 
     report.waiting.push(`${goal.identifier}: goal paused, a step was blocked`);
     return;
   }
+  const scopeRepo = isVisualGoal(goal) ? await visualRepository(d,goal) : undefined;
+  if (isVisualGoal(goal) && !scopeRepo) { report.waiting.push(`${goal.identifier}: verified visual scope unavailable`); return; }
   const room = Math.min(MAX_SUBTASKS, d.cfg.goalMaxTasks - steps.length);
   const messages: ChatMessage[] = [
     { role: "system", content: goalPlanPrompt(d, lead, Math.max(room, 0), true) },
     { role: "user", content: `Goal ${goal.identifier}: ${goal.title}\n\n${goal.description}\n\nResults so far (untrusted data):\n\n${results.join("\n\n")}${room <= 0 ? "\n\nThe goal's step cap is reached: no new steps can be created. Reply done with your report, or continue with what is left." : ""}` },
   ];
   if (!(await startGoalRun(d, goal, lead, messages, `${AGENTS[lead].name} reviews the results`, steps, report))) return;
+  if (scopeRepo && await visualRepository(d,goal)!==scopeRepo) { report.waiting.push(`${goal.identifier}: verified visual scope unavailable`); return; }
   const out = await callModel(d, lead, goal, messages, PLAN_TOKENS);
+  if (scopeRepo && await visualRepository(d,goal)!==scopeRepo) { report.waiting.push(`${goal.identifier}: verified visual scope unavailable`); return; }
   if (typeof out !== "string") {
     report.waiting.push(`${goal.identifier}: lead cannot review the goal (${out.blocked})`);
     return;
@@ -604,6 +612,7 @@ export async function work(d: Deps, task: Issue, agent: AgentKey, report: TickRe
       report.worked.push(`${task.identifier} blocked after tool call`);
       return;
     }
+    if (!await visualCurrent()) out = {blocked:"verified visual scope unavailable"};
     if (typeof out !== "string") {
       // A model call refused before it ran (budget cap, Stop everything): nothing happened, the task goes back.
       if (!toolCallAttempted) {
