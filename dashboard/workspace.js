@@ -8,7 +8,7 @@
   let projectId = null, threadId = null, busy = false, status = null, files = [], lastState = null, threadPrivate = null;
   // Images and PDFs uploaded to the open thread for the next message (ids from upload_file), up to 3.
   let uploads = [];
-  let buildMode = false, buildEpoch = 0, buildModeEpoch = 0;
+  let buildMode = false, buildEpoch = 0, buildModeEpoch = 0, buildTicket = null;
   // While an answer is on its way: the label of the working indicator under your message (null when idle), and the
   // newest message of yours the server has saved, so a failed send knows whether your text still needs restoring.
   let working = null, lastUserSaved = "";
@@ -631,7 +631,7 @@
     } finally { $("cFile").value = ""; showFiles(); }
   }));
   // Build preview is a distinct composer mode; it never falls through to ordinary chat.
-  function invalidateBuild() { buildEpoch++; $("cBuildResult").textContent = ""; }
+  function invalidateBuild() { buildEpoch++; buildTicket = null; $("cBuildSave").disabled = true; $("cBuildResult").textContent = ""; }
   function resetBuild(leavingThread = false) {
     if (leavingThread && buildMode) { $("cText").value = ""; files = []; uploads = []; showFiles(); }
     buildMode = false; buildModeEpoch++; invalidateBuild();
@@ -659,20 +659,37 @@
     } catch (e) { if (epoch === buildModeEpoch) $("cBuildResult").textContent = e.message; }
   }));
   for (const id of ["cText", "cBuildRepo", "cBuildSynthetic"]) $(id).addEventListener("input", invalidateBuild);
+  const buildArgs = () => ({threadId,projectId,repository:$("cBuildRepo").value,content:$("cText").value,files:uploads.map(u=>u.id),syntheticOnly:$("cBuildSynthetic").checked});
+  $("cBuildSave").addEventListener("click",guard(async()=>{
+    if (!buildMode || !buildTicket || halted || threadPrivate !== true) return;
+    const epoch=buildEpoch, t=threadId, ticket=buildTicket;
+    $("cBuildSave").disabled=true;
+    try {
+      const out=await post("build_save_scope",{...buildArgs(),ticket});
+      if (epoch!==buildEpoch || t!==threadId || !buildMode) return;
+      if (out.scope?.state!=="scope_saved" || out.scope.dispatchAvailable!==false || out.scope.goalCreated!==false) throw new Error("Scope save not confirmed.");
+      $("cBuildResult").textContent += "\nSaved private scope: "+out.scope.id+". No goal or execution was started.";
+      buildTicket=null;
+    } catch(e){ if(epoch===buildEpoch) $("cBuildResult").textContent += "\n"+e.message; }
+    finally { if(epoch===buildEpoch) $("cBuildSave").disabled=!buildTicket||halted; }
+  }));
   async function previewBuild() {
     if (!threadId || threadPrivate !== true || files.length) throw new Error("Build preview needs a private thread and image attachments only.");
-    const epoch = ++buildEpoch, t = threadId;
+    invalidateBuild();
+    const epoch = buildEpoch, t = threadId;
     $("cBuildResult").textContent = "Checking scoped references…";
     $("cSend").disabled = true;
     try {
-      const out = await post("build_preview", { threadId: t, projectId, repository: $("cBuildRepo").value,
-        content: $("cText").value, files: uploads.map(u => u.id), syntheticOnly: $("cBuildSynthetic").checked });
+      const out = await post("build_preview", buildArgs());
       if (epoch !== buildEpoch || !buildMode || t !== threadId) return;
       const p = out.preview;
       if (!p || p.goalCreated !== false || p.dispatchAvailable !== false || p.modelCalled !== false) throw new Error("Preview could not be verified.");
+      buildTicket=out.scopeTicket||null;
+      $("cBuildSave").disabled=!buildTicket||halted;
       $("cBuildResult").textContent = ["Preview only — no goal created, $0 model cost", p.repository, p.content,
         ...p.references.map(f => f.name + " · SHA-256 " + f.sha256), "Observed: " + p.observed.join(" "),
-        "Unknown: " + p.unknown.join(" "), "Acceptance: " + p.acceptance.join(" ")].join("\n");
+        "Unknown: " + p.unknown.join(" "), "Acceptance: " + p.acceptance.join(" "),
+        buildTicket?"Save the reviewed scope before the preview expires.":"Sign in as the configured owner to save scope."].join("\n");
     } catch (e) { if (epoch === buildEpoch) $("cBuildResult").textContent = e.message; }
     finally { $("cSend").disabled = halted; }
   }

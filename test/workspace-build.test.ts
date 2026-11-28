@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { handle } from "../api/workspace.js";
 import { createMemoryStore } from "../api/_lib/workspace-store.js";
+import { makeSessionToken, SESSION_COOKIE } from "../api/_lib/site-auth.js";
 import { readFileSync } from "node:fs";
 
 const env = { ACP_SITE_PASSWORD: "synthetic-password", ACP_WORKSPACE_DB_URL: "https://synthetic.supabase.co",
@@ -73,4 +74,34 @@ test("unreadable stop state, missing image and project mismatch fail closed", as
   store.getControl = async () => { throw Error("unavailable"); };
   assert.equal((await call("build_preview", args)).status, 423);
   assert.equal(calls(), 0);
+});
+
+test("only named owner session can save the exact reviewed scope; no dispatch or model call", async()=>{
+  const {call,store,args,calls}=await setup();
+  const ownerEnv={...env,ACP_OWNER_EMAIL:"owner@example.test"};
+  const cookie=SESSION_COOKIE+"="+makeSessionToken(ownerEnv,"owner@example.test",false,Date.parse("2026-11-28T12:00:00Z"));
+  const h={origin:headers.origin,host:headers.host,cookie};
+  let writes=0;
+  const staged=new Map<string,any>();
+  Object.assign(store,{saveBuildScope:async (p:any)=>{const old=staged.get(p.p_id);if(old){assert.deepEqual(old,p);return {scope_id:p.p_id,outcome:"already_saved"};} staged.set(p.p_id,p);writes++;return {scope_id:p.p_id,outcome:"saved"};}});
+  const ticket=((await call("build_preview",args,ownerEnv,h)).body as any).scopeTicket;
+  assert.ok(ticket?.id);
+  assert.equal(((await call("build_preview",args,ownerEnv)).body as any).scopeTicket,undefined);
+  assert.equal((await call("build_save_scope",{...args,ticket},ownerEnv)).status,403);
+  assert.equal((await call("build_save_scope",{...args,content:"changed",ticket},ownerEnv,h)).status,409);
+  assert.equal((await call("build_save_scope",{...args,ticket:{...ticket,signature:"0".repeat(64)}},ownerEnv,h)).status,409);
+  assert.equal((await call("build_save_scope",{...args,ticket:{...ticket,expiresAt:1}},ownerEnv,h)).status,409);
+  const other={...h,cookie:SESSION_COOKIE+"="+makeSessionToken(ownerEnv,"other@example.test",false,Date.parse("2026-11-28T12:00:00Z"))};
+  assert.equal((await call("build_save_scope",{...args,ticket},ownerEnv,other)).status,403);
+  assert.equal(writes,0);
+  const saved=await call("build_save_scope",{...args,ticket},ownerEnv,h);
+  assert.equal(saved.status,200);
+  assert.deepEqual((saved.body as any).scope,{id:ticket.id,state:"scope_saved",dispatchAvailable:false,goalCreated:false,costUsd:0});
+  assert.equal((await call("build_save_scope",{...args,ticket},ownerEnv,h)).status,200);
+  assert.equal(writes,1);
+  const row=staged.get(ticket.id);assert.equal(row.p_manifest.files[0].id,args.files[0]);
+  assert.doesNotMatch(JSON.stringify(row),/base64|owner@example/);
+  await call("set_control",{stopped:true});
+  assert.equal((await call("build_save_scope",{...args,ticket},ownerEnv,h)).status,423);
+  assert.equal(calls(),0);
 });
