@@ -8,6 +8,8 @@
   let projectId = null, threadId = null, busy = false, status = null, files = [], lastState = null, threadPrivate = null;
   // Images and PDFs uploaded to the open thread for the next message (ids from upload_file), up to 3.
   let uploads = [];
+  let buildMode = false, buildEpoch = 0, buildModeEpoch = 0, buildTicket = null;
+  let rec = null; // Speech session identity; initialized before any thread/stop callback.
   // While an answer is on its way: the label of the working indicator under your message (null when idle), and the
   // newest message of yours the server has saved, so a failed send knows whether your text still needs restoring.
   let working = null, lastUserSaved = "";
@@ -186,6 +188,7 @@
   }
 
   function closeThread() {
+    resetBuild(true);
     stopSpeaking();
     $("cH").textContent = "No thread open";
     $("cModel").hidden = true;
@@ -198,9 +201,11 @@
   }
 
   async function openThread(id) {
-    if (id !== threadId) { stopSpeaking(); uploads = []; showFiles(); }
+    if (id !== threadId) { resetBuild(true); threadPrivate = null; stopSpeaking(); uploads = []; showFiles(); }
     threadId = id;
+    const p = projectId;
     const { thread, messages } = await post("get_thread", { threadId: id });
+    if (threadId !== id || projectId !== p) return;
     $("welcome").hidden = true;
     setDrawer(false);
     $("cH").textContent = thread.title;
@@ -352,6 +357,7 @@
   // no other thread's AI can see it. Unknown (the database update isn't applied yet): treated as private.
   function showPrivacy(p) {
     threadPrivate = p;
+    if (p !== true && buildMode) { resetBuild(); showMode(); syncMic(); say("Private build draft cleared because the thread is no longer verified private.", "warn"); }
     const b = $("cPrivacy");
     b.hidden = false;
     b.disabled = p !== true && p !== false;
@@ -495,6 +501,7 @@
 
   // Text files picked for the next message, up to 3. They are read here and sent as text, never uploaded as files.
   function showFiles() {
+    invalidateBuild();
     const row = $("cFiles"); row.replaceChildren();
     files.forEach((f, i) => {
       const chip = el("span", "chip", f.name + " (" + f.text.length.toLocaleString() + " characters)");
@@ -535,7 +542,12 @@
     for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
     return btoa(bin);
   }
-  async function upload(file) {
+  const attachmentScope = () => ({threadId, projectId, buildMode, epoch:buildModeEpoch});
+  function assertAttachmentScope(s) {
+    if (!s.threadId || s.threadId!==threadId || s.projectId!==projectId || s.buildMode!==buildMode || s.epoch!==buildModeEpoch || (s.buildMode && threadPrivate!==true)) throw new Error("Attachment context changed; choose the file again.");
+  }
+  async function upload(file, scope=attachmentScope()) {
+    assertAttachmentScope(scope);
     if (!threadId) throw new Error("Open a thread first.");
     if (uploads.length >= 3) throw new Error("Attach at most 3 images or PDFs.");
     const pdf = file.type === "application/pdf" || /\.pdf$/i.test(file.name);
@@ -546,7 +558,10 @@
     const name = file.name.replace(/[\u0000-\u001f<>#]/g, "_").slice(0, 120) || "file";
     const mime = pdf ? "application/pdf" : blob.type || file.type;
     say("Uploading " + name + "…", "warn");
-    const { file: saved } = await post("upload_file", { threadId, name: pdf || mime === "image/gif" ? name : name.replace(/\.[a-z0-9]+$/i, "") + ".jpg", mime, data: await base64(blob) });
+    const data = await base64(blob);
+    assertAttachmentScope(scope);
+    const { file: saved } = await post("upload_file", { threadId:scope.threadId, name: pdf || mime === "image/gif" ? name : name.replace(/\.[a-z0-9]+$/i, "") + ".jpg", mime, data });
+    assertAttachmentScope(scope);
     uploads.push(saved);
     say("");
   }
@@ -555,18 +570,22 @@
   // contact sheets of time-stamped frames, stored in the thread as ordinary images, and every file gets an evidence note (sizes,
   // SHA-256, frame times, a loud/quiet sound timeline, what was NOT done) attached as a text file. The original file
   // never leaves the browser. Speech is not transcribed.
-  async function attachMedia(file) {
+  async function attachMedia(file, scope=attachmentScope()) {
+    assertAttachmentScope(scope);
+    if (scope.buildMode) throw new Error("Build mode accepts reference images only.");
     if (!threadId) throw new Error("Open a thread first.");
     if (files.length >= 3) throw new Error("Attach at most 3 files.");
     const why = window.ACPMedia.refusal(file);
     if (why) throw new Error(why);
     say("Reading " + file.name + " here in your browser…", "warn");
     const got = await window.ACPMedia.read(file, (n, of) => say("Reading " + file.name + ": frame " + n + " of " + of + "…", "warn"));
+    assertAttachmentScope(scope);
     if (uploads.length + got.sheets.length > 3) throw new Error(file.name + " makes " + got.sheets.length + " frame sheets; remove an image or PDF first (3 at most per message).");
     const base = file.name.replace(/[\u0000-\u001f<>#]/g, "_").replace(/\.[a-z0-9]+$/i, "").slice(0, 80) || "video";
     for (let i = 0; i < got.sheets.length; i++) {
-      await upload(new File([got.sheets[i]], base + " frames " + (i + 1) + " of " + got.sheets.length + ".jpg", { type: "image/jpeg" }));
+      await upload(new File([got.sheets[i]], base + " frames " + (i + 1) + " of " + got.sheets.length + ".jpg", { type: "image/jpeg" }), scope);
     }
+    assertAttachmentScope(scope);
     files.push({ name: (base + " evidence.txt").slice(0, 120), text: got.note.slice(0, 30000) });
     // Reading was free and local. Sending is not: the sheets are now stored in this thread like any image, and they
     // reach an AI only when you press Send, through the usual spend caps, stop switch and rules.
@@ -614,18 +633,88 @@
   $("cAttach").addEventListener("click", () => $("cFile").click());
   $("cFile").addEventListener("change", guard(async () => {
     try {
-      for (const file of $("cFile").files) {
-        if (/^image\//.test(file.type) || file.type === "application/pdf" || /\.pdf$/i.test(file.name)) { await upload(file); continue; }
-        if (window.ACPMedia && window.ACPMedia.kindOf(file)) { await attachMedia(file); continue; }
+      const scope=attachmentScope();
+      for (const file of Array.from($("cFile").files)) {
+        assertAttachmentScope(scope);
+        if(scope.buildMode && !/^image\//.test(file.type)) throw new Error("Build mode accepts reference images only.");
+        if (/^image\//.test(file.type) || file.type === "application/pdf" || /\.pdf$/i.test(file.name)) { await upload(file,scope); continue; }
+        if (window.ACPMedia && window.ACPMedia.kindOf(file)) { await attachMedia(file,scope); continue; }
         if (files.length >= 3) throw new Error("Attach at most 3 files.");
         if (file.size > 200000) throw new Error(file.name + " is too big. Text files up to 30,000 characters work.");
         const text = await file.text();
+        assertAttachmentScope(scope);
         if (!text.trim() || text.includes("\u0000")) throw new Error(file.name + " isn't a text file, or it's empty.");
         if (text.length > 30000) throw new Error(file.name + " is over 30,000 characters. Attach a shorter file.");
         files.push({ name: file.name.replace(/[\u0000-\u001f<>]/g, "_").slice(0, 120), text });
       }
     } finally { $("cFile").value = ""; showFiles(); }
   }));
+  // Build preview is a distinct composer mode; it never falls through to ordinary chat.
+  function invalidateBuild() { buildEpoch++; buildTicket = null; $("cBuildSave").disabled = true; $("cBuildResult").textContent = ""; }
+  function resetBuild(leavingThread = false) {
+    abortRecognition();
+    const wasBuild=buildMode;
+    buildMode = false; buildModeEpoch++; invalidateBuild();
+    if (wasBuild) { $("cText").value = ""; files = []; uploads = []; showFiles(); }
+    $("cBuildPanel").hidden = true; $("cBuild").setAttribute("aria-expanded", "false");
+    $("cBuildSynthetic").checked = false; $("cSend").setAttribute("aria-label", "Send");
+    $("cText").placeholder = "Ask a question…"; $("cMode").hidden = false;
+  }
+  $("cBuild").addEventListener("click", guard(async () => {
+    if (buildMode) { resetBuild(); showMode(); syncMic(); return; }
+    if (!threadId || threadPrivate !== true) throw new Error("Make this thread private before preparing a visual build.");
+    abortRecognition(); // Never leave a hidden microphone session active in private Build mode.
+    buildMode = true; buildModeEpoch++; invalidateBuild();
+    $("cBuildPanel").hidden = false; $("cBuild").setAttribute("aria-expanded", "true");
+    $("cSend").setAttribute("aria-label", "Preview build (does not start)");
+    $("cText").placeholder = "Describe the build you want…"; $("cMode").hidden = true; syncMic();
+    $("cOptsBtn").hidden = true; $("cSmart").hidden = true; setOpts(false);
+    $("cBuildRepo").replaceChildren(el("option", null, "Loading repositories…"));
+    const epoch = buildModeEpoch, t = threadId;
+    try {
+      const out = await post("build_options");
+      if (epoch !== buildModeEpoch || !buildMode || t !== threadId) return;
+      const select = $("cBuildRepo"); select.replaceChildren();
+      const placeholder = el("option", null, "Choose an allowed repository"); placeholder.value = ""; select.append(placeholder);
+      for (const repo of out.repositories || []) { const option = el("option", null, repo); option.value = repo; select.append(option); }
+      if (!out.repositories?.length) $("cBuildResult").textContent = "No engine repositories are configured. Nothing can start.";
+    } catch (e) { if (epoch === buildModeEpoch) $("cBuildResult").textContent = e.message; }
+  }));
+  for (const id of ["cText", "cBuildRepo", "cBuildSynthetic"]) $(id).addEventListener("input", invalidateBuild);
+  const buildArgs = () => ({threadId,projectId,repository:$("cBuildRepo").value,content:$("cText").value,files:uploads.map(u=>u.id),syntheticOnly:$("cBuildSynthetic").checked});
+  $("cBuildSave").addEventListener("click",guard(async()=>{
+    if (!buildMode || !buildTicket || halted || threadPrivate !== true) return;
+    const epoch=buildEpoch, t=threadId, ticket=buildTicket;
+    $("cBuildSave").disabled=true;
+    try {
+      const out=await post("build_save_scope",{...buildArgs(),ticket});
+      if (epoch!==buildEpoch || t!==threadId || !buildMode) return;
+      if (out.scope?.state!=="scope_saved" || out.scope.dispatchAvailable!==false || out.scope.goalCreated!==false) throw new Error("Scope save not confirmed.");
+      $("cBuildResult").textContent += "\nSaved private scope: "+out.scope.id+". No goal or execution was started.";
+      buildTicket=null;
+    } catch(e){ if(epoch===buildEpoch) $("cBuildResult").textContent += "\n"+e.message; }
+    finally { if(epoch===buildEpoch) $("cBuildSave").disabled=!buildTicket||halted; }
+  }));
+  async function previewBuild() {
+    if (!threadId || threadPrivate !== true || files.length) throw new Error("Build preview needs a private thread and image attachments only.");
+    invalidateBuild();
+    const epoch = buildEpoch, t = threadId;
+    $("cBuildResult").textContent = "Checking scoped references…";
+    $("cSend").disabled = true;
+    try {
+      const out = await post("build_preview", buildArgs());
+      if (epoch !== buildEpoch || !buildMode || t !== threadId) return;
+      const p = out.preview;
+      if (!p || p.goalCreated !== false || p.dispatchAvailable !== false || p.modelCalled !== false) throw new Error("Preview could not be verified.");
+      buildTicket=out.scopeTicket||null;
+      $("cBuildSave").disabled=!buildTicket||halted;
+      $("cBuildResult").textContent = ["Preview only — no goal created, $0 model cost", p.repository, p.content,
+        ...p.references.map(f => f.name + " · SHA-256 " + f.sha256), "Observed: " + p.observed.join(" "),
+        "Unknown: " + p.unknown.join(" "), "Acceptance: " + p.acceptance.join(" "),
+        buildTicket?"Save the reviewed scope before the preview expires.":"Sign in as the configured owner to save scope."].join("\n");
+    } catch (e) { if (epoch === buildEpoch) $("cBuildResult").textContent = e.message; }
+    finally { $("cSend").disabled = halted; }
+  }
   // Like a chat app: the moment you press Send the box empties, your message appears in the conversation with a
   // "thinking" line under it, and the answer replaces that line when it arrives. If the message never reached the
   // server, your text and files go back into the box with the reason, so nothing is lost.
@@ -648,6 +737,7 @@
   }
   function clearPending() { for (const n of $("mList").querySelectorAll(".pending,.thinking")) n.remove(); }
   $("cForm").addEventListener("submit", guard(async () => {
+    if (buildMode) { await previewBuild(); return; }
     const text = $("cText").value;
     if (!text.trim() && !files.length && !uploads.length) return;
     const sentFiles = files.slice(), sentUploads = uploads.slice();
@@ -749,6 +839,7 @@
   const savedMode = () => modes.get(projectId) || (fromTasksDiscussion ? "discuss" : "check");
   function mode() { const r = document.querySelector('#cMode input:checked'); return r ? r.value : "single"; }
   function showMode() {
+    if (buildMode) { $("cOptsBtn").hidden = true; $("cSmart").hidden = true; return; }
     const how = mode();
     $("cOptsBtn").hidden = how !== "discuss";
     // Discussion always uses each AI's full model.
@@ -797,7 +888,10 @@
   // Make this thread private, or shared with the project again. Reversible at any time.
   $("cPrivacy").addEventListener("click", guard(async () => {
     if (!threadId || (threadPrivate !== true && threadPrivate !== false)) return;
-    const { thread } = await post("set_private", { threadId, private: !threadPrivate });
+    const t=threadId, p=projectId;
+    if (threadPrivate===true && buildMode) { resetBuild(); showMode(); syncMic(); }
+    const { thread } = await post("set_private", { threadId:t, private: !threadPrivate });
+    if(t!==threadId || p!==projectId) return;
     showPrivacy(thread.private);
     await loadThreads();
   }));
@@ -809,6 +903,7 @@
   // and disables sending; the server refuses all AI work until it is turned back on.
   function setHalted(s) {
     halted = Boolean(s.stopped);
+    if (halted) { abortRecognition(); invalidateBuild(); }
     // Runs before the stop request is sent, so only the page's earlier requests are cancelled.
     if (halted && s.local) for (const c of [...inflight]) c.abort();
     $("cSend").disabled = halted;
@@ -856,31 +951,45 @@
   // service, Safari to Apple's); you still check it and press send. Listen: an answer is read aloud by the device's
   // own voice. Both are free, nothing is recorded or stored here, and neither sends anything to the AIs by itself.
   const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  let rec = null;
   // The microphone takes the send button's place while the box is empty, as in other chat apps.
   function syncMic() {
     const mic = $("cMic");
-    if (!Recognition) { mic.hidden = true; $("cSend").hidden = false; return; }
+    if (buildMode || !Recognition) { mic.hidden = true; $("cSend").hidden = false; return; }
     const empty = !$("cText").value.trim() && !files.length && !uploads.length;
     mic.hidden = !(empty || rec);
     $("cSend").hidden = !mic.hidden;
   }
+  function abortRecognition() {
+    const session=rec;
+    if (!session) return;
+    rec=null; // Fence callbacks BEFORE asking the browser to cancel its session.
+    session.onresult=null; session.onerror=null; session.onend=null;
+    try { session.abort(); } catch { try { session.stop(); } catch { /* Browser already ended it. */ } }
+    $("cMic").classList.remove("on"); $("cMic").setAttribute("aria-pressed", "false");
+    if ($("pageMsg").textContent.startsWith("Listening")) say("");
+    syncMic();
+  }
   $("cMic").addEventListener("click", () => {
+    if (buildMode || halted || !threadId || !Recognition) return;
     if (rec) { rec.stop(); return; }
     const before = $("cText").value.trim() ? $("cText").value.replace(/\s*$/, " ") : "";
-    rec = new Recognition();
-    rec.lang = navigator.language || "en-US"; rec.interimResults = true; rec.continuous = true;
-    rec.onresult = (e) => { let t = ""; for (const r of e.results) t += r[0].transcript; $("cText").value = before + t.trimStart(); grow(); };
-    rec.onerror = (e) => {
+    const scope=attachmentScope(), session=new Recognition();
+    rec=session;
+    const current=()=>rec===session && scope.threadId===threadId && scope.projectId===projectId && scope.epoch===buildModeEpoch && !buildMode && !halted;
+    session.lang = navigator.language || "en-US"; session.interimResults = true; session.continuous = true;
+    session.onresult = (e) => { if (!current()) return; let t = ""; for (const r of e.results) t += r[0].transcript; $("cText").value = before + t.trimStart(); grow(); };
+    session.onerror = (e) => {
+      if (!current()) return;
       if (e.error === "not-allowed" || e.error === "service-not-allowed") say("The microphone is blocked. Allow it for this site in the browser's settings, then tap the microphone again.", "err");
       else if (e.error !== "aborted" && e.error !== "no-speech") say("Talking didn't work this time (" + e.error + "). Try again, or type.", "err");
     };
-    rec.onend = () => {
+    session.onend = () => {
+      if (!current()) return;
       rec = null; $("cMic").classList.remove("on"); $("cMic").setAttribute("aria-pressed", "false");
       if ($("pageMsg").textContent.startsWith("Listening")) say("");
       syncMic(); $("cText").focus();
     };
-    try { rec.start(); } catch (e) { rec = null; say("Talking isn't available right now. Type instead.", "err"); return; }
+    try { session.start(); } catch (e) { if (rec===session) rec = null; say("Talking isn't available right now. Type instead.", "err"); return; }
     $("cMic").classList.add("on"); $("cMic").setAttribute("aria-pressed", "true");
     say("Listening… tap the microphone again when you're done. Check the text, then send.", "warn");
   });

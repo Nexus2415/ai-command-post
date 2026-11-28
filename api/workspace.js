@@ -22,6 +22,7 @@ import {
 } from "./_lib/workspace-actions.js";
 
 import { CATALOG, catalogEntry } from "./_lib/workspace-catalog.js";
+import { buildRepositories, buildOwner, previewWithTicket, saveVisualScope } from "./_lib/workspace-build.js";
 import {
   AgentProblem, MAX_AGENTS, RUN_NOW_GAP_MS, checkAgent, cronReady, dayStart, describeSchedule, extractCheckpoint, isDue, monthKey,
   runMessage, threadTitle,
@@ -239,6 +240,15 @@ async function checkConnector(store, args, env, deps) {
 }
 
 const ACTIONS = Object.freeze({
+  async build_options(store, args, env) {
+    return { repositories: buildRepositories(env), dispatchAvailable: false };
+  },
+  async build_preview(store, args, env, deps) {
+    return previewWithTicket(store,args,env,deps.buildOwner,deps.now().getTime());
+  },
+  async build_save_scope(store,args,env,deps) {
+    return saveVisualScope(store,args,env,deps.buildOwner,deps.now().getTime());
+  },
   async list_projects(store) {
     return { projects: await store.listProjects() };
   },
@@ -1008,7 +1018,8 @@ export async function handle(req, env, makeStore = createSupabaseStore, deps = {
   if (!args || typeof args !== "object" || Array.isArray(args)) return error(400, "Invalid arguments.");
 
   try {
-    const out = await ACTIONS[body.action](makeStore(env, d.fetch), args, env, d);
+    const buildContext = body.action === "build_preview" || body.action === "build_save_scope" ? { ...d, buildOwner: buildOwner(req,env,d.now().getTime()) } : d;
+    const out = await ACTIONS[body.action](makeStore(env, d.fetch), args, env, buildContext);
     return "status" in out ? out : { status: 200, body: out };
   } catch (e) {
     if (e instanceof StoreError || e?.name === "TimeoutError" || e instanceof TypeError) {

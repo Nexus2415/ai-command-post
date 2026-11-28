@@ -138,6 +138,8 @@ export function createSupabaseStore(env, f = fetch) {
       `ws_agents?id=eq.${id}&enabled=is.true&or=${encodeURIComponent(`(last_run_at.is.null,last_run_at.lt."${before}")`)}&select=${AGENT_COLS}`,
       { last_run_at: at, last_status: "Running…" }, "return=representation"))[0] ?? null,
     // Approval gate (api/_lib/workspace-actions.js). A missing table means no proposals can be saved or approved.
+    // ARN-164: immutable scope staging only. This RPC never grants execution or creates a goal.
+    saveBuildScope: async (args) => one(await call("POST","rpc/ws_save_visual_scope",args)),
     listActions: (threadId) => call("GET", `ws_actions?select=${ACTION_COLS}&thread_id=eq.${threadId}&order=created_at.desc&limit=50`),
     getAction: async (id) => (await call("GET", `ws_actions?select=${ACTION_COLS}&id=eq.${id}`))[0] ?? null,
     addAction: async (a) => one(await call("POST", `ws_actions?select=${ACTION_COLS}`, a)),
@@ -191,6 +193,8 @@ export function createMemoryStore({ control = false, shared = null } = {}) {
             .map(({ role, content, model, created_at }) => ({ role, content, model, created_at })),
         }));
     },
+    // Scope staging requires the dedicated database RPC; tests that exercise it inject a synthetic implementation.
+    saveBuildScope: async (_args) => { throw new StoreError("Visual scope storage unavailable"); },
     // Tests: reach a stored thread directly (e.g. to break its flag).
     _thread: (id) => threads.find((t) => t.id === id),
     listMessages: async (threadId) => messages.filter((m) => m.thread_id === threadId),

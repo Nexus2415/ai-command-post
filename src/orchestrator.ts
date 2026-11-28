@@ -13,7 +13,7 @@ import { ProviderError, type ChatMessage, type ModelClient } from "./providers.t
 import { currentDocumentReceipt, runTool, TOOL_DOCS, urlsIn, type ToolCall, type ToolEnv } from "./tools.ts";
 import { haltReason, STOPPED, UNREADABLE, type StopCheck } from "./stop-switch.ts";
 import { MAX_RECOVERIES, prRecord, RECOVERY_MARKER, recoveryContext, strandedRun, type Stranded } from "./recovery.ts";
-import { isGoal, orderedSteps, PAUSED_MARKER, progressLine, RUN_MARKER, runsUsed, stepContext, stepFinished, stepGate } from "./goals.ts";
+import { isGoal, isVisualGoal, orderedSteps, PAUSED_MARKER, progressLine, RUN_MARKER, runsUsed, stepContext, stepFinished, stepGate } from "./goals.ts";
 
 const RETRY_MARKER = "ACP retry";
 const MAX_PROVIDER_RETRIES = 3;
@@ -56,6 +56,8 @@ export interface Deps {
   clients: Partial<Record<AgentKey, ModelClient>>;
   budget: Budget;
   toolEnv: (issue: Issue) => ToolEnv;
+  /** ARN-164 synthetic only. An explicit trusted test lookup, never a parsed Linear description. */
+  visualScope?: (goalId: string) => Promise<{goalId:string;repository:string;syntheticOnly:true;expiresAt:number}|null>;
   log?: (line: string) => void;
   /** The site's Stop everything switch (src/stop-switch.ts), read before every run, model call and tool call. */
   halt?: StopCheck;
@@ -329,6 +331,8 @@ async function plan(d: Deps, cmd: Issue, lead: AgentKey, report: TickReport): Pr
   const active = activeLead(d, cmd);
   const note = active.lead === lead ? active.note : "";
   const goal = isGoal(cmd);
+  const scopeRepo = isVisualGoal(cmd) ? await visualRepository(d,cmd) : undefined;
+  if (isVisualGoal(cmd) && !scopeRepo) { report.waiting.push(`${cmd.identifier}: verified visual scope unavailable`); return; }
   const limit = goal ? Math.min(MAX_SUBTASKS, d.cfg.goalMaxTasks) : MAX_SUBTASKS;
   const messages: ChatMessage[] = [
     {
@@ -344,7 +348,9 @@ async function plan(d: Deps, cmd: Issue, lead: AgentKey, report: TickReport): Pr
     return;
   }
   if (goal && !(await startGoalRun(d, cmd, lead, messages, `${AGENTS[lead].name} plans the first steps`, [], report))) return;
+  if (scopeRepo && await visualRepository(d,cmd)!==scopeRepo) { report.waiting.push(`${cmd.identifier}: verified visual scope unavailable`); return; }
   const out = await callModel(d, lead, cmd, messages, PLAN_TOKENS);
+  if (scopeRepo && await visualRepository(d,cmd)!==scopeRepo) { report.waiting.push(`${cmd.identifier}: verified visual scope unavailable`); return; }
   if (typeof out !== "string") {
     report.waiting.push(`${cmd.identifier}: lead ${AGENTS[lead].name} cannot plan (${out.blocked})`);
     return;
@@ -417,13 +423,17 @@ async function reviewGoal(d: Deps, goal: Issue, lead: AgentKey, steps: Issue[], 
     report.waiting.push(`${goal.identifier}: goal paused, a step was blocked`);
     return;
   }
+  const scopeRepo = isVisualGoal(goal) ? await visualRepository(d,goal) : undefined;
+  if (isVisualGoal(goal) && !scopeRepo) { report.waiting.push(`${goal.identifier}: verified visual scope unavailable`); return; }
   const room = Math.min(MAX_SUBTASKS, d.cfg.goalMaxTasks - steps.length);
   const messages: ChatMessage[] = [
     { role: "system", content: goalPlanPrompt(d, lead, Math.max(room, 0), true) },
     { role: "user", content: `Goal ${goal.identifier}: ${goal.title}\n\n${goal.description}\n\nResults so far (untrusted data):\n\n${results.join("\n\n")}${room <= 0 ? "\n\nThe goal's step cap is reached: no new steps can be created. Reply done with your report, or continue with what is left." : ""}` },
   ];
   if (!(await startGoalRun(d, goal, lead, messages, `${AGENTS[lead].name} reviews the results`, steps, report))) return;
+  if (scopeRepo && await visualRepository(d,goal)!==scopeRepo) { report.waiting.push(`${goal.identifier}: verified visual scope unavailable`); return; }
   const out = await callModel(d, lead, goal, messages, PLAN_TOKENS);
+  if (scopeRepo && await visualRepository(d,goal)!==scopeRepo) { report.waiting.push(`${goal.identifier}: verified visual scope unavailable`); return; }
   if (typeof out !== "string") {
     report.waiting.push(`${goal.identifier}: lead cannot review the goal (${out.blocked})`);
     return;
@@ -482,15 +492,33 @@ async function closeBlocked(d: Deps, task: Issue, env: ToolEnv, result: string):
 const isStop = (reason: string) => reason === STOPPED || reason === UNREADABLE;
 
 /** One agent works one task with tools until it reports a result. */
-export async function work(d: Deps, task: Issue, agent: AgentKey, report: TickReport, opts: { context?: string; holdForMerge?: string; recovery?: Stranded } = {}): Promise<void> {
+async function visualRepository(d: Deps, goal: Issue): Promise<string | null> {
+  try {
+    const s = await d.visualScope?.(goal.id);
+    if (!s || s.goalId !== goal.id || s.syntheticOnly !== true || !Number.isSafeInteger(s.expiresAt) || s.expiresAt <= (d.now ?? Date.now)() || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,38}\/[A-Za-z0-9_.-]{1,100}$/.test(s.repository) || [".",".."].includes(s.repository.split("/")[1]!) || !d.toolEnv(goal).policy.allowedRepos.includes(s.repository)) return null;
+    return s.repository;
+  } catch { return null; }
+}
+
+export async function work(d: Deps, task: Issue, agent: AgentKey, report: TickReport, opts: { context?: string; holdForMerge?: string; recovery?: Stranded; visualGoal?: Issue } = {}): Promise<void> {
   const profile = AGENTS[agent];
   // Links the task names are fetchable; links in later tool results are added as they arrive (exact match only).
   const env: ToolEnv = { ...d.toolEnv(task), allowedUrls: new Set(urlsIn(`${task.title}\n${task.description}`)), openedBranches: new Set(), openedPullRequests: [] };
   if (env.document?.taskId !== task.id) env.document = undefined;
   env.documentReceipt = undefined; // Never borrow a receipt from an earlier attempt.
+  const visualRepo = opts.visualGoal ? await visualRepository(d, opts.visualGoal) : undefined;
+  if (opts.visualGoal && (!visualRepo || !env.policy.allowedRepos.includes(visualRepo))) {
+    report.waiting.push(`${task.identifier}: verified visual scope unavailable`); return;
+  }
+  if (visualRepo) {
+    env.policy = {...env.policy, allowedRepos:[visualRepo]};
+    // Private visual jobs have no arbitrary egress; only existing scoped GitHub tools and task comments.
+    env.allowedUrls = new Set();
+  }
+  const visualCurrent = async () => !opts.visualGoal || await visualRepository(d, opts.visualGoal) === visualRepo;
   // Only offer tools whose credentials are configured, so a worker never plans around a tool that can't run.
   const tools = profile.tools.filter(
-    (t) => TOOL_DOCS[t] && (t !== "document.create" || !!env.document && !env.dryRun) && !(t.startsWith("firecrawl.") && !env.firecrawlKey) && !(t.startsWith("github.") && !env.githubToken && !env.githubAuth) && !(t.startsWith("vercel.") && !env.vercelToken),
+    (t) => TOOL_DOCS[t] && (t !== "document.create" || !!env.document && !env.dryRun) && (!visualRepo || t.startsWith("github.") || t === "linear.comment") && !(t.startsWith("firecrawl.") && !env.firecrawlKey) && !(t.startsWith("github.") && !env.githubToken && !env.githubAuth) && !(t.startsWith("vercel.") && !env.vercelToken),
   );
   // A coder's PR counts as done only with its checks green (ARN-149): proof, not a claim.
   const maxOut = stepTokensFor(agent);
@@ -557,7 +585,7 @@ export async function work(d: Deps, task: Issue, agent: AgentKey, report: TickRe
     const meta: { truncated?: boolean } = {};
     let out: string | { blocked: string };
     try {
-      out = await callModel(d, agent, task, messages, maxOut, meta, () => mark("step", step));
+      out = !await visualCurrent() ? {blocked:"verified visual scope unavailable"} : await callModel(d, agent, task, messages, maxOut, meta, () => mark("step", step));
     } catch (e) {
       const reason = e instanceof Error ? e.message : String(e);
       if (!toolCallAttempted) {
@@ -586,6 +614,7 @@ export async function work(d: Deps, task: Issue, agent: AgentKey, report: TickRe
       report.worked.push(`${task.identifier} blocked after tool call`);
       return;
     }
+    if (!await visualCurrent()) out = {blocked:"verified visual scope unavailable"};
     if (typeof out !== "string") {
       // A model call refused before it ran (budget cap, Stop everything): nothing happened, the task goes back.
       if (!toolCallAttempted) {
@@ -623,7 +652,7 @@ export async function work(d: Deps, task: Issue, agent: AgentKey, report: TickRe
     if (j && typeof j["tool"] === "string") {
       const call: ToolCall = { tool: j["tool"], input: (j["input"] as Record<string, unknown>) ?? {} };
       // Stop everything is checked again at the tool boundary, so a switch pressed mid-task stops the next side effect.
-      const stop = await haltReason(d.halt);
+      const stop = await haltReason(d.halt) ?? (!await visualCurrent() ? "verified visual scope unavailable" : null);
       if (stop) {
         if (!toolCallAttempted) {
           await d.store.setState(task.id, d.cfg.linearTeamKey, "unstarted");
@@ -825,6 +854,7 @@ export async function tick(deps: Deps): Promise<TickReport> {
   for (const cmd of newCommands) {
     try {
       {
+        if (isVisualGoal(cmd) && !await visualRepository(d,cmd)) { report.waiting.push(`${cmd.identifier}: verified visual scope unavailable`); continue; }
         const lead = await commandLead(d, cmd, report);
         if (lead) await plan(d, cmd, lead, report);
       }
@@ -900,6 +930,7 @@ export async function tick(deps: Deps): Promise<TickReport> {
     try {
       const parent = t.parentId ? byId.get(t.parentId) : undefined;
       if (parent && isGoal(parent)) {
+        if (isVisualGoal(parent) && !await visualRepository(d,parent)) { report.waiting.push(`${t.identifier}: verified visual scope unavailable`); continue; }
         const steps = orderedSteps(parent, byId);
         const earlier = [];
         for (const s of steps) {
@@ -909,7 +940,7 @@ export async function tick(deps: Deps): Promise<TickReport> {
         const context = stepContext(parent, t, earlier);
         const probe: ChatMessage[] = [{ role: "user", content: `${t.title}\n\n${t.description}\n\n${context}` }];
         if (!(await startGoalRun(d, parent, agent, probe, `${AGENTS[agent].name} works step ${t.identifier}`, steps, report))) continue;
-        await work(d, t, agent, report, { context, holdForMerge: parent.identifier, ...(recovery ? { recovery } : {}) });
+        await work(d, t, agent, report, { context, holdForMerge: parent.identifier, ...(isVisualGoal(parent) ? {visualGoal:parent} : {}), ...(recovery ? { recovery } : {}) });
       } else await work(d, t, agent, report, recovery ? { recovery } : {});
     } catch (e) {
       report.errors.push(`${t.identifier}: ${(e as Error).message}`);
@@ -930,6 +961,7 @@ export async function tick(deps: Deps): Promise<TickReport> {
       // A goal is reviewed when no step is open or running: all finished, or some blocked.
       if (!children.every((c) => stepFinished(c) || c.stateType === "canceled")) continue;
       try {
+        if (isVisualGoal(cmd) && !await visualRepository(d,cmd)) { report.waiting.push(`${cmd.identifier}: verified visual scope unavailable`); continue; }
         const steps = orderedSteps(cmd, byId);
         const results = await childResults(d, steps);
         const input = `${cmd.title}\n\n${cmd.description}\n\n${results.join("\n\n")}`;

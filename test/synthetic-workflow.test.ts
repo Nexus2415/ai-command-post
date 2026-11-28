@@ -46,7 +46,7 @@ test("disposable harness refuses inherited libpq hostaddr before starting a serv
 let dir = "", source = "";
 let pgEnv: NodeJS.ProcessEnv = {};
 function pg(sql: string, vars: Record<string, string> = {}, db = "arn94"): Promise<string> {
-  assert.ok(dir && pgEnv["PGHOST"] === dir && ["arn94", "postgres","arn169_workspace"].includes(db));
+  assert.ok(dir && pgEnv["PGHOST"] === dir && ["arn94", "postgres", "arn164_workspace", "arn169_workspace"].includes(db));
   return new Promise((done, fail) => {
     const p = spawn(join(bin, "psql"), ["-X", "-qAt", "-v", "ON_ERROR_STOP=1", "-d", db,
       ...Object.entries(vars).flatMap(([k, v]) => ["-v", `${k}=${v}`])], { env: pgEnv, stdio: ["pipe", "pipe", "pipe"] });
@@ -254,6 +254,46 @@ SELECT jsonb_build_object('tenant',:'t','tariff',:'tariff','action',:'action','a
     assert.ok(jobs.every(d => d.job));
     await Promise.all(fresh.map((m, i) => m.dispatch(jobs[i]!.job!.jobId)));
     assert.equal(w.runs(), 1);
+  });
+  test("ARN-164 durable scope in a separate disposable workspace database: replay, expiry, scope and role checks", async()=>{
+    await pg("CREATE DATABASE arn164_workspace;",{},"postgres");
+    const q=(sql:string,vars:Record<string,string>={})=>pg(sql,vars,"arn164_workspace");
+    await q("\\i "+resolve("db/workspace.sql"));
+    await q("\\i "+resolve("db/visual-build-scope.sql"));
+    const ids=JSON.parse(await q(`WITH p AS (INSERT INTO public.ws_projects(name) VALUES('Synthetic') RETURNING id),
+      t AS (INSERT INTO public.ws_threads(project_id,title,model,private) SELECT id,'Synthetic','claude',true FROM p RETURNING id,project_id),
+      f AS (INSERT INTO public.ws_files(thread_id,name,mime,bytes,data) SELECT id,'synthetic.png','image/png',8,'iVBORw0KGgo=' FROM t RETURNING id,thread_id)
+      SELECT json_build_object('p',t.project_id,'t',t.id,'f',f.id,'s',gen_random_uuid()) FROM t JOIN f ON f.thread_id=t.id;`)) as Record<string,string>;
+    const manifest={projectId:ids["p"],threadId:ids["t"],repository:"acme/app",content:"Synthetic test",files:[{id:ids["f"],name:"synthetic.png",mime:"image/png",bytes:8,sha256:hash(Buffer.from("iVBORw0KGgo=","base64"))}]};
+    const vars={id:ids["s"]!,principal:"a".repeat(64),manifest:JSON.stringify(manifest),expiry:new Date(Date.now()+600000).toISOString(),fingerprint:"b".repeat(64)};
+    const call=(v=vars,role="service_role")=>q(`SET ROLE ${role}; SELECT outcome FROM public.ws_save_visual_scope(:'id'::uuid,:'principal',:'manifest'::jsonb,:'expiry'::timestamptz,:'fingerprint');`,v);
+    const results=await Promise.all([call(),call(),call()]);
+    assert.equal(results.filter(x=>x==="saved").length,1);
+    assert.equal(results.filter(x=>x==="already_saved").length,2);
+    assert.equal(await q("SELECT count(*) FROM public.ws_visual_scopes;"),"1");
+    assert.equal(await call({...vars,fingerprint:"c".repeat(64)}),"conflict");
+    assert.equal(await call({...vars,expiry:"2000-01-01T00:00:00Z"}),"invalid");
+    assert.equal(await call({...vars,manifest:JSON.stringify({...manifest,threadId:"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"})}),"scope_denied");
+    await assert.rejects(call(vars,"anon"),/permission denied/);
+    await assert.rejects(q("SET ROLE service_role; SELECT * FROM public.ws_visual_scopes;"),/permission denied/);
+    await q("UPDATE public.ws_control SET stopped=true;");
+    assert.equal(await call(),"stopped");
+    await q("UPDATE public.ws_control SET stopped=false;");
+    await q("UPDATE public.ws_files SET data='AAAAAAAAAAA=';");
+    assert.equal(await call(),"reference_changed");
+    assert.equal(await q("SELECT count(*) FROM public.ws_visual_scopes WHERE state='invalidated' AND manifest IS NULL;"),"1");
+    await q("UPDATE public.ws_files SET data='iVBORw0KGgo=';");
+    assert.equal(await call(),"conflict","a restored image cannot revive the old ticket");
+    const fresh={...vars,id:await q("SELECT gen_random_uuid();")};
+    assert.equal(await call(fresh),"saved");
+    await q("UPDATE public.ws_threads SET private=false;");
+    assert.equal(await q("SELECT count(*) FROM public.ws_visual_scopes WHERE state='invalidated' AND manifest IS NULL;"),"2");
+    await q("UPDATE public.ws_threads SET private=true;");
+    assert.equal(await call(fresh),"conflict","re-privatizing does not revive the old ticket");
+    const next={...vars,id:await q("SELECT gen_random_uuid();")};
+    assert.equal(await call(next),"saved");
+    await q("DELETE FROM public.ws_threads;");
+    assert.equal(await q("SELECT count(*) FROM public.ws_visual_scopes;"),"0");
   });
   test("actual database restart preserves terminal evidence without repeating work", async () => {
     const w = await world("arn94-reboot"), { manager: m } = w.make(), e = w.event("reboot");
