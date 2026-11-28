@@ -23,7 +23,7 @@ export const AGENTS: Record<AgentKey, AgentProfile> = {
     name: "ChatGPT",
     role: "Coordination, planning, writing and reconciliation of other agents' findings.",
     match: /chat\s*gpt|openai|\bgpt\b/i,
-    tools: ["linear.comment", "firecrawl.search", "firecrawl.scrape", "github.read_file", "vercel.list_deployments", "vercel.deployment_status"],
+    tools: ["document.create", "linear.comment", "firecrawl.search", "firecrawl.scrape", "github.read_file", "vercel.list_deployments", "vercel.deployment_status"],
   },
   gemini: {
     key: "gemini",
