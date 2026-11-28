@@ -15,6 +15,27 @@
 - Atomic claims (`src/claims.ts`, ARN-62): with repo secrets `ACP_WORKSPACE_DB_URL` and `ACP_WORKSPACE_DB_KEY` (the workspace Supabase project and its service_role key, the same values the site uses in Vercel) the engine must win a row in table `acp_claims` before it claims or works a task, so concurrent initial claims are exclusive. A run's row can be taken over by a later run of the same AI only after 13 minutes (past the job's 12-minute limit); another AI's row is never taken. Without the settings, non-live operation can use Linear-only claims; live writes are refused by the Stop everything configuration gate. An unreachable configured store causes the engine to skip claiming that run. Lease expiry relies on the scheduled job timeout; it is not receiver-side fencing or proof of exactly-once external effects. The first log line says `claims … atomic` or `Linear-only`.
 - The first log line of a run states the mode, e.g. `ACTIVE · live writes · cap $0 · agents online: Gemini`. "Online" means a key is configured, not that the provider was reachable; reachability shows only when a call succeeds or fails in that run.
 
+## Goals: give the engine a goal, not a task
+
+Create a top-level Linear issue (ARN team) titled `[Goal] <what you want>`, in Todo or Backlog, with the outcome in the description. The engine then:
+
+1. Claims it and has the lead (Claude by default) plan the first steps as sub-issues, in order. The goal moves to In Progress.
+2. Works the steps one at a time. Each step is told what the earlier steps reported. A step that opens a draft pull request stays In Progress until you merge it (Linear usually marks it Done on merge; if not, mark it Done), and the next step waits for that.
+3. When every step is finished, the lead reads the results and either closes the goal as done (with a summary comment) or plans the next steps.
+
+What you see on the goal issue: its sub-issues (the steps and their states), each plan, and one `ACP goal run N/M` comment per engine run with a progress line (steps done, steps used, runs used).
+
+Limits, set as Actions variables:
+
+| Variable | Default | Hard ceiling in code | What it caps |
+|---|---|---|---|
+| `ACP_GOAL_MAX_TASKS` | 6 | 25 | Steps one goal may create, across all rounds of planning |
+| `ACP_GOAL_MAX_RUNS` | 10 | 50 | Engine runs one goal may use: each step attempt and each planning or review call is one run |
+
+When a cap is hit, a step is blocked, or the lead plans nothing usable, the goal stays In Progress with a `## Goal paused` comment saying why, and no more paid calls are made on it until something changes. To retry a blocked step move it to Todo; to skip it mark it Duplicate; to end the goal close it.
+
+Spend: every call still goes through the monthly cap (`ACP_MONTHLY_BUDGET_USD`) and is refused before it is made, or counted, when it doesn't fit. A coding step has cost about $1 to $2, so a 6-step goal needs roughly $6 to $15 of monthly budget. The Stop everything switch halts a goal like everything else: before each run, model call, tool call, and before any step is created. The planner can't change any limit or setting, and every pull request stays a draft for you to merge.
+
 ## Provider errors
 - HTTP retries (`src/providers.ts`): 429/500/502/503/504/529 are retried after 5 s and 15 s before failing.
 - Requeue rules (`src/orchestrator.ts`):

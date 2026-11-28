@@ -37,6 +37,9 @@ jobs:
           ACP_LEDGER_RESET: ${{ vars.ACP_LEDGER_RESET }}
           ACP_ALLOW_PULL_REQUESTS: ${{ vars.ACP_ALLOW_PULL_REQUESTS || 'false' }}
           ACP_MAX_STEPS: ${{ vars.ACP_MAX_STEPS || '6' }}
+          # Goal caps (src/goals.ts): most steps and most engine runs one [Goal] issue may use. Code caps them at 25 and 50.
+          ACP_GOAL_MAX_TASKS: ${{ vars.ACP_GOAL_MAX_TASKS || '6' }}
+          ACP_GOAL_MAX_RUNS: ${{ vars.ACP_GOAL_MAX_RUNS || '10' }}
           ACP_LINEAR_TEAM_KEY: ${{ vars.ACP_LINEAR_TEAM_KEY || 'ARN' }}
           ACP_DEFAULT_LEAD: ${{ vars.ACP_DEFAULT_LEAD || 'claude' }}
           ACP_GITHUB_REPOS: ${{ vars.ACP_GITHUB_REPOS }}
