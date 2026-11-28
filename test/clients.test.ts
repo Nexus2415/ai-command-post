@@ -231,9 +231,9 @@ test("DryRunStore logs writes and never forwards them", async () => {
 
 test("Anthropic client sends system separately and reads usage", async () => {
   const seen: Captured[] = [];
-  const c = anthropicClient("k", "m", fakeFetch({ content: [{ type: "text", text: "hi" }], usage: { input_tokens: 7, output_tokens: 3 } }, 200, seen));
+  const c = anthropicClient("k", "m", fakeFetch({ id: "synthetic-message", model: "m", content: [{ type: "text", text: "hi" }], usage: { input_tokens: 7, output_tokens: 3 } }, 200, seen));
   const r = await c.chat([{ role: "system", content: "S" }, { role: "user", content: "U" }], { maxOutputTokens: 10 });
-  assert.deepEqual(r, { text: "hi", inputTokens: 7, outputTokens: 3, truncated: false });
+  assert.deepEqual(r, { text: "hi", inputTokens: 7, outputTokens: 3, truncated: false, reportedUsage: { provider: "anthropic", requestedModel: "m", reportedModel: "m", responseId: "synthetic-message", totalInputTokens: 7, outputTokens: 3, cacheReadTokens: null, cacheWriteTokens: null, reasoningTokens: null } });
   const body = JSON.parse(String(seen[0]!.init.body));
   assert.equal(body.system, "S");
   assert.deepEqual(body.messages, [{ role: "user", content: "U" }]);
@@ -250,7 +250,7 @@ test("Gemini client maps roles and usage", async () => {
 });
 
 test("Perplexity citations are appended as sources", async () => {
-  const c = chatCompletionsClient("perplexity", "https://api.perplexity.ai", "k", "sonar", fakeFetch({ choices: [{ message: { content: "Answer" } }], citations: ["https://a.example"], usage: { prompt_tokens: 1, completion_tokens: 1 } }));
+  const c = chatCompletionsClient("perplexity", "https://api.perplexity.ai", "k", "sonar", fakeFetch({ id: "synthetic-completion", model: "sonar", choices: [{ message: { content: "Answer" } }], citations: ["https://a.example"], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }));
   const r = await c.chat([{ role: "user", content: "q" }], { maxOutputTokens: 10 });
   assert.match(r.text, /Sources:\n- https:\/\/a\.example/);
 });
