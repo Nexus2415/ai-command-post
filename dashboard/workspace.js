@@ -893,23 +893,26 @@
     speaking = null; // Ignore callbacks from canceled utterances.
     clearTimeout(session.timer);
     session.button.setAttribute("aria-pressed", "false");
-    session.button.textContent = "▶ Listen";
-    if (session.synth.speaking || session.synth.pending || session.synth.paused) session.synth.cancel();
-    if (message) say(message, isError ? "err" : "");
+    session.button.textContent = session.button.idleLabel || "▶ Listen";
+    try { if (session.synth.speaking || session.synth.pending || session.synth.paused) session.synth.cancel(); } catch { /* Playback already stopped locally. */ }
+    if (session.report) session.report(message || "Playback stopped.", isError);
+    if (message && !session.report) say(message, isError ? "err" : "");
   }
-  function speakButton(box) {
+  function speakButton(box, report = null, browserDefault = false) {
     const b = el("button", "speak", "▶ Listen"); b.type = "button";
     b.setAttribute("aria-label", "Read this answer aloud"); b.setAttribute("aria-pressed", "false");
     b.addEventListener("click", () => {
       if (speaking?.button === b) { stopSpeaking(); return; }
       stopSpeaking();
       const synth = window.speechSynthesis;
-      if (!synth || !window.SpeechSynthesisUtterance) { say("Read aloud is not available in this browser.", "err"); return; }
+      const notify = (message, error = false) => report ? report(message, error) : say(message, error ? "err" : "");
+      if (!synth || !window.SpeechSynthesisUtterance) { notify("Read aloud is not available in this browser.", true); return; }
       const parts = [...box.childNodes].filter((n) => !(n.nodeType === 1 && (n.classList.contains("who") || n.classList.contains("drew") || n.classList.contains("attached") || n.classList.contains("srcs"))))
         .map((n) => n.textContent).join(" ").replace(/\s+/g, " ").trim();
       const chunks = (parts.match(/[^.!?]{1,220}[.!?]*|[^.!?]+|[.!?]+/g) || []).map(c => c.trim()).filter(Boolean);
-      if (!chunks.length) { say("There is no answer text to read aloud.", "err"); return; }
-      const session = { button: b, synth, utterance: null, timer: null, index: 0 };
+      if (!chunks.length) { notify("There is no answer text to read aloud.", true); return; }
+      const session = { button: b, synth, utterance: null, timer: null, index: 0, report };
+      if (report) report("Requesting browser speech…", false);
       speaking = session;
       b.setAttribute("aria-pressed", "true"); b.textContent = "■ Stop";
       const unavailable = () => {
@@ -917,7 +920,7 @@
       };
       const next = () => {
         if (speaking !== session) return;
-        if (session.index >= chunks.length) { stopSpeaking(); return; }
+        if (session.index >= chunks.length) { stopSpeaking(report ? "Browser reported playback finished. Did you hear it?" : ""); return; }
         try {
           const u = new window.SpeechSynthesisUtterance(chunks[session.index++]);
           session.utterance = u; // Keep the current utterance reachable until its callbacks finish.
@@ -927,13 +930,25 @@
           const local = voices.filter(v => v.localService === true);
           const voice = local.find(v => v.lang.toLowerCase() === lang.toLowerCase()) ||
             local.find(v => v.lang.split("-")[0].toLowerCase() === lang.split("-")[0].toLowerCase());
-          if (voice) u.voice = voice;
-          u.onstart = () => { if (speaking === session && session.utterance === u) clearTimeout(session.timer); };
+          if (voice && !browserDefault) u.voice = voice;
+          u.onstart = () => {
+            if (speaking !== session || session.utterance !== u) return;
+            clearTimeout(session.timer);
+            if (report) report("Browser reports speech started; audible sound is not verified.", false);
+            session.timer = setTimeout(() => {
+              if (speaking === session && session.utterance === u)
+                stopSpeaking("Browser speech did not finish. Stop and retry.", true);
+            }, 120000);
+          };
           u.onend = () => {
             if (speaking !== session || session.utterance !== u) return;
             clearTimeout(session.timer); next();
           };
-          u.onerror = () => { if (speaking === session && session.utterance === u) unavailable(); };
+          u.onerror = (e) => {
+            if (speaking !== session || session.utterance !== u) return;
+            const code = typeof e?.error === "string" && /^[a-z-]{1,40}$/.test(e.error) ? " (" + e.error + ")" : "";
+            stopSpeaking("Browser speech failed" + code + ". Check media volume, output and try the default voice or Safari.", true);
+          };
           session.timer = setTimeout(unavailable, 6000);
           if (synth.paused) synth.resume();
           synth.speak(u);
@@ -947,7 +962,18 @@
   syncMic();
   // The same playback path, with fixed synthetic text, works even if the preview has no database.
   const sample = el("div", null, "This is a NEXIA audio test. If you can hear this, read aloud is working.");
-  $("audioTest").append(speakButton(sample));
+  const testStatus = el("p", "note", "Choose Listen to test the browser voice.");
+  testStatus.setAttribute("role", "status");
+  const reportTest = (message, error) => {
+    testStatus.textContent = message;
+    testStatus.className = error ? "msg err" : "note";
+  };
+  const localTest = speakButton(sample, reportTest);
+  const defaultTest = speakButton(sample, reportTest, true);
+  defaultTest.idleLabel = "Try default voice";
+  defaultTest.textContent = defaultTest.idleLabel;
+  defaultTest.setAttribute("aria-label", "Test the browser default voice");
+  $("audioTest").append(localTest, defaultTest, testStatus);
 
   // Arriving from Home's ask box: your words wait in the question box. Nothing is sent until you press send.
   const asked = new URLSearchParams(location.search).get("ask");
