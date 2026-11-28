@@ -1,0 +1,64 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { handle } from "../api/workspace.js";
+import { createMemoryStore } from "../api/_lib/workspace-store.js";
+import { readFileSync } from "node:fs";
+
+const env = { ACP_SITE_PASSWORD: "synthetic-password", ACP_WORKSPACE_DB_URL: "https://synthetic.supabase.co",
+  ACP_WORKSPACE_DB_KEY: "synthetic-key", ACP_GITHUB_REPOS: "Nexus2415/ai-command-post",
+  ACP_WORKSPACE_MONTHLY_BUDGET_USD: "0" };
+const headers = { "x-acp-password": env.ACP_SITE_PASSWORD, origin: "https://acp.example", host: "acp.example" };
+const data = Buffer.concat([Buffer.from([0x89]), Buffer.from("PNG\r\n\x1a\n", "latin1"), Buffer.alloc(40, 7)]).toString("base64");
+async function setup() {
+  const store = createMemoryStore();
+  let calls = 0;
+  const call = (action: string, args: object = {}, e = env, h: Record<string,string> = headers) =>
+    handle({ method: "POST", headers: h, body: { action, args } }, e, () => store,
+      { fetch: (async () => { calls++; throw Error("unexpected network"); }) as typeof fetch, now: () => new Date("2026-11-28T12:00:00Z") });
+  const p = ((await call("create_project", { name: "Synthetic" })).body as any).project;
+  const t = ((await call("create_thread", { projectId: p.id, title: "Build", model: "claude" })).body as any).thread;
+  await call("set_private", { threadId: t.id, private: true });
+  const img = ((await call("upload_file", { threadId: t.id, name: "synthetic.png", mime: "image/png", data })).body as any).file;
+  const args = { projectId: p.id, threadId: t.id, repository: "Nexus2415/ai-command-post", content: "Build a synthetic demo", files: [img.id], syntheticOnly: true };
+  return { call, store, args, calls: () => calls };
+}
+test("private synthetic build preview hashes bytes without models, messages or dispatch", async () => {
+  const { call, args, calls } = await setup();
+  const out = await call("build_preview", args);
+  assert.equal(out.status, 200);
+  const p = (out.body as any).preview;
+  assert.equal(p.references[0].sha256, createHash("sha256").update(Buffer.from(data, "base64")).digest("hex"));
+  assert.deepEqual([p.modelCalled, p.goalCreated, p.dispatchAvailable, p.costUsd], [false,false,false,0]);
+  assert.equal(p.inferred.length, 0);
+  assert.doesNotMatch(JSON.stringify(p), /data:|base64/);
+  assert.equal(((await call("get_thread", { threadId: args.threadId })).body as any).messages.length, 0);
+  assert.equal((await call("build_submit", args)).status, 400);
+  assert.equal(calls(), 0);
+});
+test("build preview refuses cross-thread refs, unknown repos, duplicates, shared threads, stop and missing auth", async () => {
+  const { call, args, calls } = await setup();
+  const other = ((await call("create_thread", { projectId: args.projectId, title: "Other", model: "claude" })).body as any).thread;
+  await call("set_private", { threadId: other.id, private: true });
+  assert.equal((await call("build_preview", { ...args, threadId: other.id })).status, 404);
+  assert.equal((await call("build_preview", { ...args, repository: "elsewhere/repo" })).status, 403);
+  assert.equal((await call("build_preview", args, { ...env, ACP_GITHUB_REPOS: "" })).status, 403);
+  assert.equal((await call("build_preview", { ...args, files: [...args.files, ...args.files] })).status, 400);
+  assert.equal((await call("build_preview", { ...args, syntheticOnly: false })).status, 400);
+  assert.equal((await call("build_preview", { ...args, approval: true })).status, 400);
+  assert.equal((await call("build_preview", args, env, { ...headers, "x-acp-password": "wrong" })).status, 401);
+  await call("set_private", { threadId: args.threadId, private: false });
+  assert.equal((await call("build_preview", args)).status, 403);
+  await call("set_private", { threadId: args.threadId, private: true });
+  await call("set_control", { stopped: true });
+  assert.equal((await call("build_preview", args)).status, 423);
+  assert.equal(calls(), 0);
+});
+test("composer Build mode intercepts Send before any chat and explicitly refuses dispatch", () => {
+  const js = readFileSync(new URL("../dashboard/workspace.js", import.meta.url), "utf8");
+  const html = readFileSync(new URL("../dashboard/workspace.html", import.meta.url), "utf8");
+  assert.match(js, /if \(buildMode\) \{ await previewBuild\(\); return; \}/);
+  assert.match(js, /post\("build_preview"/);
+  assert.match(html, /disabled>Start autonomous build \(not yet available\)/);
+  assert.doesNotMatch(js, /post\("build_submit"/);
+});

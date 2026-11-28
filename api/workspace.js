@@ -22,6 +22,7 @@ import {
 } from "./_lib/workspace-actions.js";
 
 import { CATALOG, catalogEntry } from "./_lib/workspace-catalog.js";
+import { buildRepositories, visualBuildPreview } from "./_lib/workspace-build.js";
 import {
   AgentProblem, MAX_AGENTS, RUN_NOW_GAP_MS, checkAgent, cronReady, dayStart, describeSchedule, extractCheckpoint, isDue, monthKey,
   runMessage, threadTitle,
@@ -239,6 +240,12 @@ async function checkConnector(store, args, env, deps) {
 }
 
 const ACTIONS = Object.freeze({
+  async build_options(store, args, env) {
+    return { repositories: buildRepositories(env), dispatchAvailable: false };
+  },
+  async build_preview(store, args, env) {
+    return visualBuildPreview(store, args, env);
+  },
   async list_projects(store) {
     return { projects: await store.listProjects() };
   },

@@ -8,6 +8,7 @@
   let projectId = null, threadId = null, busy = false, status = null, files = [], lastState = null, threadPrivate = null;
   // Images and PDFs uploaded to the open thread for the next message (ids from upload_file), up to 3.
   let uploads = [];
+  let buildMode = false, buildEpoch = 0;
   // While an answer is on its way: the label of the working indicator under your message (null when idle), and the
   // newest message of yours the server has saved, so a failed send knows whether your text still needs restoring.
   let working = null, lastUserSaved = "";
@@ -186,6 +187,7 @@
   }
 
   function closeThread() {
+    resetBuild();
     stopSpeaking();
     $("cH").textContent = "No thread open";
     $("cModel").hidden = true;
@@ -198,7 +200,7 @@
   }
 
   async function openThread(id) {
-    if (id !== threadId) { stopSpeaking(); uploads = []; showFiles(); }
+    if (id !== threadId) { resetBuild(); stopSpeaking(); uploads = []; showFiles(); }
     threadId = id;
     const { thread, messages } = await post("get_thread", { threadId: id });
     $("welcome").hidden = true;
@@ -352,6 +354,7 @@
   // no other thread's AI can see it. Unknown (the database update isn't applied yet): treated as private.
   function showPrivacy(p) {
     threadPrivate = p;
+    if (p !== true && buildMode) { invalidateBuild(); $("cBuildResult").textContent = "Thread must be private. Nothing can start."; }
     const b = $("cPrivacy");
     b.hidden = false;
     b.disabled = p !== true && p !== false;
@@ -495,6 +498,7 @@
 
   // Text files picked for the next message, up to 3. They are read here and sent as text, never uploaded as files.
   function showFiles() {
+    invalidateBuild();
     const row = $("cFiles"); row.replaceChildren();
     files.forEach((f, i) => {
       const chip = el("span", "chip", f.name + " (" + f.text.length.toLocaleString() + " characters)");
@@ -626,6 +630,51 @@
       }
     } finally { $("cFile").value = ""; showFiles(); }
   }));
+  // Build preview is a distinct composer mode; it never falls through to ordinary chat.
+  function invalidateBuild() { buildEpoch++; $("cBuildResult").textContent = ""; }
+  function resetBuild() {
+    buildMode = false; invalidateBuild();
+    $("cBuildPanel").hidden = true; $("cBuild").setAttribute("aria-expanded", "false");
+    $("cBuildSynthetic").checked = false; $("cSend").setAttribute("aria-label", "Send");
+    $("cText").placeholder = "Ask a question…"; $("cMode").hidden = false;
+  }
+  $("cBuild").addEventListener("click", guard(async () => {
+    if (buildMode) { resetBuild(); showMode(); syncMic(); return; }
+    if (!threadId || threadPrivate !== true) throw new Error("Make this thread private before preparing a visual build.");
+    buildMode = true; invalidateBuild();
+    $("cBuildPanel").hidden = false; $("cBuild").setAttribute("aria-expanded", "true");
+    $("cSend").setAttribute("aria-label", "Preview build (does not start)");
+    $("cText").placeholder = "Describe the build you want…"; $("cMode").hidden = true; syncMic();
+    $("cOptsBtn").hidden = true; $("cSmart").hidden = true; setOpts(false);
+    $("cBuildRepo").replaceChildren(el("option", null, "Loading repositories…"));
+    const epoch = buildEpoch, t = threadId;
+    try {
+      const out = await post("build_options");
+      if (epoch !== buildEpoch || !buildMode || t !== threadId) return;
+      const select = $("cBuildRepo"); select.replaceChildren();
+      const placeholder = el("option", null, "Choose an allowed repository"); placeholder.value = ""; select.append(placeholder);
+      for (const repo of out.repositories || []) { const option = el("option", null, repo); option.value = repo; select.append(option); }
+      if (!out.repositories?.length) $("cBuildResult").textContent = "No engine repositories are configured. Nothing can start.";
+    } catch (e) { if (epoch === buildEpoch) $("cBuildResult").textContent = e.message; }
+  }));
+  for (const id of ["cText", "cBuildRepo", "cBuildSynthetic"]) $(id).addEventListener("input", invalidateBuild);
+  async function previewBuild() {
+    if (!threadId || threadPrivate !== true || files.length) throw new Error("Build preview needs a private thread and image attachments only.");
+    const epoch = ++buildEpoch, t = threadId;
+    $("cBuildResult").textContent = "Checking scoped references…";
+    $("cSend").disabled = true;
+    try {
+      const out = await post("build_preview", { threadId: t, projectId, repository: $("cBuildRepo").value,
+        content: $("cText").value, files: uploads.map(u => u.id), syntheticOnly: $("cBuildSynthetic").checked });
+      if (epoch !== buildEpoch || !buildMode || t !== threadId) return;
+      const p = out.preview;
+      if (!p || p.goalCreated !== false || p.dispatchAvailable !== false || p.modelCalled !== false) throw new Error("Preview could not be verified.");
+      $("cBuildResult").textContent = ["Preview only — no goal created, $0 model cost", p.repository, p.content,
+        ...p.references.map(f => f.name + " · SHA-256 " + f.sha256), "Observed: " + p.observed.join(" "),
+        "Unknown: " + p.unknown.join(" "), "Acceptance: " + p.acceptance.join(" ")].join("\\n");
+    } catch (e) { if (epoch === buildEpoch) $("cBuildResult").textContent = e.message; }
+    finally { $("cSend").disabled = halted; }
+  }
   // Like a chat app: the moment you press Send the box empties, your message appears in the conversation with a
   // "thinking" line under it, and the answer replaces that line when it arrives. If the message never reached the
   // server, your text and files go back into the box with the reason, so nothing is lost.
@@ -648,6 +697,7 @@
   }
   function clearPending() { for (const n of $("mList").querySelectorAll(".pending,.thinking")) n.remove(); }
   $("cForm").addEventListener("submit", guard(async () => {
+    if (buildMode) { await previewBuild(); return; }
     const text = $("cText").value;
     if (!text.trim() && !files.length && !uploads.length) return;
     const sentFiles = files.slice(), sentUploads = uploads.slice();
@@ -749,6 +799,7 @@
   const savedMode = () => modes.get(projectId) || (fromTasksDiscussion ? "discuss" : "check");
   function mode() { const r = document.querySelector('#cMode input:checked'); return r ? r.value : "single"; }
   function showMode() {
+    if (buildMode) { $("cOptsBtn").hidden = true; $("cSmart").hidden = true; return; }
     const how = mode();
     $("cOptsBtn").hidden = how !== "discuss";
     // Discussion always uses each AI's full model.
@@ -809,6 +860,7 @@
   // and disables sending; the server refuses all AI work until it is turned back on.
   function setHalted(s) {
     halted = Boolean(s.stopped);
+    if (halted) invalidateBuild();
     // Runs before the stop request is sent, so only the page's earlier requests are cancelled.
     if (halted && s.local) for (const c of [...inflight]) c.abort();
     $("cSend").disabled = halted;
@@ -860,7 +912,7 @@
   // The microphone takes the send button's place while the box is empty, as in other chat apps.
   function syncMic() {
     const mic = $("cMic");
-    if (!Recognition) { mic.hidden = true; $("cSend").hidden = false; return; }
+    if (buildMode || !Recognition) { mic.hidden = true; $("cSend").hidden = false; return; }
     const empty = !$("cText").value.trim() && !files.length && !uploads.length;
     mic.hidden = !(empty || rec);
     $("cSend").hidden = !mic.hidden;

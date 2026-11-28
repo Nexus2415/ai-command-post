@@ -217,6 +217,14 @@ details.file pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:300px;ov
           <label class="sr-only" for="cText">Message</label>
           <textarea id="cText" maxlength="32000" rows="1" placeholder="Ask a question…"></textarea>
           <span class="row" id="cFiles"></span>
+          <div class="row"><button class="btn ghost" type="button" id="cBuild" aria-expanded="false" aria-controls="cBuildPanel">Build preview</button></div>
+          <section id="cBuildPanel" hidden aria-label="Visual build preview">
+            <p class="note">Private synthetic images only. Preview does not send to an AI or start a build.</p>
+            <label class="note" for="cBuildRepo">Allowed repository</label><select id="cBuildRepo" class="sel"></select>
+            <label class="row"><input type="checkbox" id="cBuildSynthetic" style="width:auto">Synthetic references only</label>
+            <p class="note" id="cBuildResult" role="status" style="white-space:pre-wrap;overflow-wrap:anywhere"></p>
+            <button class="btn ghost" type="button" disabled>Start autonomous build (not yet available)</button>
+          </section>
           <div class="boxrow">
             <button class="iconbtn" type="button" id="cAttach" aria-label="Attach a file, image, PDF, video or audio" title="Attach a file, image, PDF, video or audio"><svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
             <input type="file" id="cFile" multiple hidden accept=".txt,.md,.csv,.tsv,.json,.log,.xml,.yaml,.yml,.html,.css,.js,.ts,.py,.sql,.sh,text/plain,text/markdown,text/csv,image/png,image/jpeg,image/gif,image/webp,image/heic,.pdf,application/pdf,video/*,audio/*,.mp4,.m4v,.mov,.webm,.mp3,.wav,.m4a,.ogg,.opus,.flac">
