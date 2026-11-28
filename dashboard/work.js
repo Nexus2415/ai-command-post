@@ -66,11 +66,11 @@
     shared: "M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM12 3v6M12 15v6M3 12h6M15 12h6",
   };
   const CHEV = "M9 6l6 6-6 6";
-  // One task as a row: owner icon, title, "ARN-12 · Claude" and a status pill; opens the task in Linear.
+  // Open the task locally. External navigation is an explicit, separate action.
   function row(it) {
-    const url = safeUrl(it.url);
-    const a = el(url ? "a" : "div", "ax-row");
-    if (url) { a.href = url; a.target = "_blank"; a.rel = "noopener noreferrer"; }
+    const a = el("button", "ax-row");
+    a.type = "button";
+    a.setAttribute("aria-expanded", "false");
     const ico = el("span", "ax-ico"); ico.append(icon(GLYPH[it.owner] || GLYPH.none));
     const main = el("span", "ax-main");
     main.append(el("strong", null, it.title || "Untitled task"));
@@ -79,8 +79,68 @@
     sub.append(el("span", null, (it.id ? it.id + " · " : "") + ownerName(it.owner) + (by ? " · " + by : "")), el("span", "ax-pill " + (it.lane || ""), label(it.lane)));
     main.append(sub);
     a.append(ico, main);
-    if (url) a.append(icon(CHEV, "ax-chev"));
-    const li = el("li"); li.append(a); return li;
+    a.append(icon(CHEV, "ax-chev"));
+    const li = el("li");
+    const detail = el("div", "ax-task-detail");
+    detail.hidden = true;
+    a.addEventListener("click", () => {
+      const open = detail.hidden;
+      detail.hidden = !open;
+      a.setAttribute("aria-expanded", String(open));
+      if (open) showTask(detail, it);
+    });
+    li.append(a, detail); return li;
+  }
+  // Only a real outstanding read animates. A Linear status is not a worker heartbeat.
+  async function showTask(host, it) {
+    const token = {};
+    host._taskRead = token;
+    host.replaceChildren();
+    const url = safeUrl(it.url);
+    if (url) {
+      const link = el("a", "ax-linear-link", "Open in Linear ↗");
+      link.href = url; link.target = "_blank"; link.rel = "noopener noreferrer";
+      host.append(link);
+    }
+    const body = el("div", "ax-task-body");
+    host.append(body);
+    const loading = el("p", "ax-reading", "Reading task details…");
+    loading.setAttribute("role", "status");
+    body.append(loading);
+    if (!/^ARN-[1-9]\\d{0,8}$/.test(String(it.id))) {
+      body.replaceChildren(el("p", "ax-muted", "Task details unavailable: invalid issue identifier."));
+      return;
+    }
+    try {
+      const r = await fetch("/api/console", { method: "POST", credentials: "same-origin",
+        headers: { "content-type": "application/json" }, body: JSON.stringify({action:"thread", identifier:it.id}),
+        signal: AbortSignal.timeout(20000) });
+      if (host._taskRead !== token || !host.isConnected) return;
+      if (r.status === 401 && root.ACPSession) { root.ACPSession.expired(); return; }
+      if (!r.ok) throw new Error("Couldn't load task details.");
+      const j = await r.json();
+      if (host._taskRead !== token || !host.isConnected) return;
+      if (j.issue?.id !== it.id || !Array.isArray(j.comments)) throw new Error("Task details could not be verified.");
+      body.replaceChildren();
+      body.append(el("p", "ax-muted", label(j.issue.lane) + " · Execution activity not verified"));
+      body.append(el("p", "ax-task-copy", j.issue.description || "No description."));
+      const when = Date.parse(j.fetchedAt);
+      if (Number.isFinite(when)) body.append(el("p", "ax-muted", "Read from Linear: " + new Date(when).toLocaleString()));
+      body.append(el("h3", null, "Latest updates"));
+      if (j.hasPreviousPage) body.append(el("p", "ax-muted", "Earlier updates are not included."));
+      if (!j.comments.length) body.append(el("p", "ax-muted", "No updates returned."));
+      for (const c of j.comments.slice(-5).reverse()) {
+        const item = el("div", "ax-task-update");
+        item.append(el("strong", null, String(c.author || "Unknown") + " · " + String(c.createdAt || "")),
+          el("p", "ax-task-copy", String(c.body || "").slice(0, 6000)));
+        body.append(item);
+      }
+    } catch {
+      if (host._taskRead !== token || !host.isConnected) return;
+      body.replaceChildren(el("p", "ax-muted", "Couldn't load task details. Status is unverified."));
+      const retry = el("button", "ax-btn ghost", "Retry");
+      retry.type = "button"; retry.addEventListener("click", () => showTask(host, it)); body.append(retry);
+    }
   }
   async function load() {
     let r;
@@ -92,5 +152,5 @@
     if (!r.ok) throw new Error(typeof j.error === "string" ? j.error : "Couldn't load tasks (" + r.status + ").");
     return j;
   }
-  Object.assign(api, { el, icon, row, load });
+  Object.assign(api, { el, icon, row, load, showTask });
 })(typeof window !== "undefined" ? window : globalThis);
