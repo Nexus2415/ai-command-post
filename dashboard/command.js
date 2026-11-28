@@ -1,7 +1,8 @@
 // AI Command Post — command tree view: an orchestrator node with a branch to each AI and its tasks.
 // Read-only: it calls POST /api/console (overview) and nothing else. No intake, no thread writes, no model calls.
 // All Linear text is rendered with textContent; no HTML is ever built from data.
-// Agent status is derived from Linear workload only. It never claims an agent is connected or that a worker is live.
+// The status pill is Linear workload only. The live line on each AI's avatar (ARN-163) comes from engine runs'
+// own activity rows, projected on the server (api/_lib/worker-activity.js); without a fresh proof it reads unknown.
 (function (root) {
   "use strict";
   const AGENTS = [
@@ -91,7 +92,11 @@
     const msg = body && typeof body.error === "string" ? body.error : "";
     return msg || "Request failed (HTTP " + status + ").";
   }
-  const api = { AGENTS, PILL, agentStats, resultCredits, aisWithOpenTasks, totals, queue, activity, laneStatus, safeUrl, agentName, errorMessage, isIssueId: s => ID_RE.test(String(s)) };
+  // ---- live worker activity (ARN-163): the view lives in live-activity.js, shared with the task rows ----
+  // Without it no live line is drawn at all, which can't overstate anything.
+  const liveView = (activity, key, nowMs) => (root.ACPLive ? root.ACPLive.liveView(activity, key, nowMs) : null);
+
+  const api = { AGENTS, PILL, liveView, agentStats, resultCredits, aisWithOpenTasks, totals, queue, activity, laneStatus, safeUrl, agentName, errorMessage, isIssueId: s => ID_RE.test(String(s)) };
   root.ACPCommandCore = api;
   if (typeof document === "undefined") return;
 
@@ -176,6 +181,16 @@
     const badge = el("span", "badge"); badge.appendChild(icon(a.glyph));
     const title = el("div");
     title.append(el("h3", null, a.name), pill(s.status));
+    const live = overview ? liveView(overview.activity, a.key, Date.now()) : null;
+    if (live) {
+      // The avatar itself carries the live state; only "working" animates, and only from a fresh heartbeat.
+      badge.classList.add("live", "live-" + live.state);
+      badge.dataset.live = live.state;
+      const line = el("p", "live-line live-" + live.state);
+      line.setAttribute("role", "status");
+      line.append(el("span", "live-dot"), el("b", null, live.label), el("span", "live-detail muted", live.detail));
+      title.append(line);
+    }
     head.append(badge, title);
     const prog = el("div", "prog");
     const bar = el("div", "bar"); const fill = el("i"); fill.style.width = s.percent + "%"; bar.appendChild(fill);
@@ -312,6 +327,12 @@
     const f = $("aFilter");
     AGENTS.forEach(a => { const o = el("option", null, a.name); o.value = a.key; f.appendChild(o); });
     f.onchange = renderActivity;
+    // Hidden tabs don't refresh (the minute timer skips them) and pause the avatar animation; coming back checks
+    // again at once, so a stale "Working now" is never left on screen.
+    document.addEventListener("visibilitychange", () => {
+      document.documentElement.toggleAttribute("data-hidden", document.hidden);
+      if (!document.hidden && !$("refresh").disabled) load();
+    });
     $("refresh").onclick = load;
     window.addEventListener("resize", () => requestAnimationFrame(drawLinks));
     tick(); setInterval(tick, 15000);

@@ -15,6 +15,16 @@ import { liveRefusal } from "./provenance.ts";
 import { buildClients } from "./providers.ts";
 import { stopSwitchFrom } from "./stop-switch.ts";
 import { claimStoreFrom } from "./claims.ts";
+import { activitySinkFrom } from "./activity.ts";
+
+// The claim store and the live activity sink share one run id, so the Team map only trusts rows from the run that
+// holds a task's claim (ARN-163). Either may be missing; activity without claims is never written.
+function claimsAndActivity(): Pick<Deps, "claims" | "activity"> {
+  const claims = claimStoreFrom(process.env);
+  if (!claims) return {};
+  const activity = activitySinkFrom(process.env, claims.runId, fetch, (l) => console.log(l));
+  return activity ? { claims, activity } : { claims };
+}
 
 async function main() {
   const cmd = process.argv[2] ?? "status";
@@ -52,7 +62,7 @@ async function main() {
     budget,
     ...(halt ? { halt } : {}),
     // In a dry run nothing is really claimed, so the shared claim store isn't touched either.
-    ...(cfg.dryRun ? {} : { claims: claimStoreFrom(process.env) }),
+    ...(cfg.dryRun ? {} : claimsAndActivity()),
     log: (l) => console.log(l),
     toolEnv: (issue) => ({
       githubToken: cfg.keys.github,

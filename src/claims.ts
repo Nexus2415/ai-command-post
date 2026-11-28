@@ -24,6 +24,8 @@ export const LEASE_MS = 13 * 60_000;
 export interface ClaimStore {
   /** Takes the claim for `executor` if nobody holds it. Returns who holds it afterwards (us, or the earlier winner). */
   acquire(issueId: string, executor: string): Promise<{ won: boolean; holder: string }>;
+  /** This store's run id: the fence that activity rows (src/activity.ts) carry, so reads trust only the holder. */
+  readonly runId?: string;
 }
 
 /** Supabase/PostgREST store. Atomic because issue_id is the primary key and duplicates are ignored, not overwritten. */
@@ -37,6 +39,7 @@ export function supabaseClaims(url: string, key: string, f: Fetch = fetch, runId
     return j;
   };
   return {
+    runId,
     async acquire(issueId, executor) {
       const inserted = await call(`${base}?on_conflict=issue_id`, {
         method: "POST",
@@ -74,6 +77,7 @@ export function memoryClaims(rows = new Map<string, { executor: string; run: str
   const runId = randomUUID();
   return {
     rows,
+    runId,
     async acquire(issueId, executor) {
       const held = rows.get(issueId);
       if (!held || (held.executor === executor && held.run !== runId && held.at < now() - LEASE_MS)) {

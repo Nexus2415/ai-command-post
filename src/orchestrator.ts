@@ -8,9 +8,10 @@ import { extractJson } from "./json.ts";
 import { MAX_SCORED_TASKS, scorecard, type Outcome, type Scorecard } from "./scorecard.ts";
 import type { Issue, TaskStore } from "./linear.ts";
 import type { ClaimStore } from "./claims.ts";
+import type { ActivityKind, ActivitySink } from "./activity.ts";
 import { ProviderError, type ChatMessage, type ModelClient } from "./providers.ts";
 import { runTool, TOOL_DOCS, urlsIn, type ToolCall, type ToolEnv } from "./tools.ts";
-import { haltReason, type StopCheck } from "./stop-switch.ts";
+import { haltReason, STOPPED, UNREADABLE, type StopCheck } from "./stop-switch.ts";
 import { isGoal, orderedSteps, PAUSED_MARKER, progressLine, RUN_MARKER, runsUsed, stepContext, stepFinished, stepGate } from "./goals.ts";
 
 const RETRY_MARKER = "ACP retry";
@@ -59,6 +60,8 @@ export interface Deps {
   halt?: StopCheck;
   /** Atomic claim store (src/claims.ts). Unset = Linear-comment claims only. */
   claims?: ClaimStore;
+  /** Live worker telemetry for the Team map (src/activity.ts, ARN-163). Unset = none; never changes what runs. */
+  activity?: ActivitySink;
 }
 
 export interface TickReport {
@@ -254,6 +257,7 @@ async function callModel(
   messages: ChatMessage[],
   maxOut: number,
   meta?: { truncated?: boolean },
+  onAdmitted?: () => Promise<void>,
 ): Promise<string | { blocked: string }> {
   // Stop everything is checked in code before every paid call, never left to the model.
   const stop = await haltReason(d.halt);
@@ -266,6 +270,8 @@ async function callModel(
   // Reserve the worst-case charge before the request. A paid call can be billed even when the response is lost
   // (timeout, dropped connection, malformed body), so recording only after success would let retries exceed the cap.
   d.budget.record({ agent, issue: issue.identifier, inputTokens: est, outputTokens: maxOut });
+  // Every check passed and the call is about to go out: only now is the worker really working (ARN-163).
+  if (onAdmitted) await onAdmitted();
   const r = await client.chat(messages, { maxOutputTokens: maxOut });
   if (meta) meta.truncated = r.truncated === true;
   return r.text;
@@ -469,6 +475,9 @@ async function closeBlocked(d: Deps, task: Issue, env: ToolEnv, result: string):
   if (!prs.length) await d.store.setState(task.id, d.cfg.linearTeamKey, "canceled");
 }
 
+/** A refusal that came from the Stop everything switch (stopped, or unreadable and so treated as stopped). */
+const isStop = (reason: string) => reason === STOPPED || reason === UNREADABLE;
+
 /** One agent works one task with tools until it reports a result. */
 export async function work(d: Deps, task: Issue, agent: AgentKey, report: TickReport, opts: { context?: string; holdForMerge?: string } = {}): Promise<void> {
   const profile = AGENTS[agent];
@@ -518,6 +527,9 @@ export async function work(d: Deps, task: Issue, agent: AgentKey, report: TickRe
     }
   }
   await d.store.setState(task.id, d.cfg.linearTeamKey, "started");
+  // Telemetry only from here: the claim is held. Every exit below writes exactly one terminal row.
+  const mark = async (kind: ActivityKind, step?: number) => { if (d.activity) await d.activity.record(task, `acp:${agent}`, kind, step); };
+  await mark("started");
 
   let toolCallAttempted = false;
   for (let step = 1; step <= d.cfg.maxStepsPerTask; step++) {
@@ -525,7 +537,7 @@ export async function work(d: Deps, task: Issue, agent: AgentKey, report: TickRe
     const meta: { truncated?: boolean } = {};
     let out: string | { blocked: string };
     try {
-      out = await callModel(d, agent, task, messages, maxOut, meta);
+      out = await callModel(d, agent, task, messages, maxOut, meta, () => mark("step", step));
     } catch (e) {
       const reason = e instanceof Error ? e.message : String(e);
       if (!toolCallAttempted) {
@@ -537,27 +549,33 @@ export async function work(d: Deps, task: Issue, agent: AgentKey, report: TickRe
           const why = permanent ? "Permanent provider error" : `Provider still failing after ${MAX_PROVIDER_RETRIES} retries`;
           await d.store.comment(task.id, signed(d, "result", task.id, `${RESULT_MARKER} (${profile.name}, blocked)\n\n${why}; not retrying automatically. Error: ${reason}`));
           await d.store.setState(task.id, d.cfg.linearTeamKey, "canceled");
+          await mark("blocked");
           report.worked.push(`${task.identifier} blocked: ${why.toLowerCase()}`);
           return;
         }
         // No tool ran, so replay is safe. Return the task to Todo instead of orphaning it In Progress.
         await d.store.comment(task.id, `${RETRY_MARKER} ${priorRetries + 1}/${MAX_PROVIDER_RETRIES}: transient provider failure (${reason}).`);
         await d.store.setState(task.id, d.cfg.linearTeamKey, "unstarted");
+        await mark("released");
         report.waiting.push(`${task.identifier}: provider/model call failed before any tool ran (${reason})`);
         return;
       }
       // A tool may already have created durable state. Fail closed rather than replaying it automatically.
       await closeBlocked(d, task, env, `${RESULT_MARKER} (${profile.name}, blocked)\n\nModel/provider failure after a tool call; automatic replay was stopped to avoid duplicating side effects. Error: ${reason}`);
+      await mark("blocked");
       report.worked.push(`${task.identifier} blocked after tool call`);
       return;
     }
     if (typeof out !== "string") {
+      // A model call refused before it ran (budget cap, Stop everything): nothing happened, the task goes back.
       if (!toolCallAttempted) {
         await d.store.setState(task.id, d.cfg.linearTeamKey, "unstarted");
+        await mark(isStop(out.blocked) ? "stopped" : "released");
         report.waiting.push(`${task.identifier}: ${out.blocked}`);
         return;
       }
       await closeBlocked(d, task, env, `${RESULT_MARKER} (${profile.name}, blocked)\n\nExecution became blocked after a tool call; automatic replay was stopped to avoid duplicating side effects. Reason: ${out.blocked}`);
+      await mark(isStop(out.blocked) ? "stopped" : "blocked");
       report.worked.push(`${task.identifier} blocked after tool call`);
       return;
     }
@@ -574,6 +592,7 @@ export async function work(d: Deps, task: Issue, agent: AgentKey, report: TickRe
         await d.store.comment(task.id, signed(d, "result", task.id, result));
         await d.store.setState(task.id, d.cfg.linearTeamKey, "completed");
       } else await closeBlocked(d, task, env, result);
+      await mark(status);
       report.worked.push(`${task.identifier} ${status} by ${profile.name}`);
       return;
     }
@@ -584,10 +603,12 @@ export async function work(d: Deps, task: Issue, agent: AgentKey, report: TickRe
       if (stop) {
         if (!toolCallAttempted) {
           await d.store.setState(task.id, d.cfg.linearTeamKey, "unstarted");
+          await mark("stopped");
           report.waiting.push(`${task.identifier}: ${stop}`);
           return;
         }
         await closeBlocked(d, task, env, `${RESULT_MARKER} (${profile.name}, blocked)\n\n${stop} Stopped before the next tool call; automatic replay is off to avoid duplicating side effects.`);
+        await mark("stopped");
         report.worked.push(`${task.identifier} stopped by Stop everything`);
         return;
       }
@@ -604,6 +625,7 @@ export async function work(d: Deps, task: Issue, agent: AgentKey, report: TickRe
     messages.push({ role: "user", content: `${why}${repliesLeftNote(left)}` });
   }
   await closeBlocked(d, task, env, `${RESULT_MARKER} (${profile.name}, blocked)\n\nStopped after ${d.cfg.maxStepsPerTask} steps without a final report. Raise ACP_MAX_STEPS or narrow the task.`);
+  await mark("blocked");
   report.worked.push(`${task.identifier} hit step limit`);
 }
 
