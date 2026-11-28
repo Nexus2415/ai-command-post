@@ -103,3 +103,29 @@ test("ARN-176 never reports stale review receipts as working or dispatches while
  assert.equal(chooseReviewer("claude",["gemini","grok"]),undefined);
  assert.equal(st({headSha:"not-a-sha"}),"blocked_unknown");
 });
+
+test("ARN-176 authenticated Codex summary binds bot identity, PR, full head and freshness; no text-based approval",()=>{
+ const now=input().nowMs, allowed=[...eligible,"codex"];
+ const raw=(status:string,findings:boolean|null,unresolved:boolean|null,head=HEAD)=>({
+   user:{login:"chatgpt-codex-connector[bot]",type:"Bot",id:199175422},
+   performed_via_github_app:{slug:"chatgpt-codex-connector"},
+   issue_url:"https://api.github.com/repos/o/r/issues/1",updated_at:new Date(now-1000).toISOString(),
+   body:"<!-- codex-pull-request-review-summary -->\n<!-- codex-review-state:v1 "+JSON.stringify({code_review:{commit_sha:head,status,has_any_findings:findings,has_unresolved_findings:unresolved},security_review:{commit_sha:null}})+" -->"
+ });
+ const result=(comments:unknown[],o:Partial<CardInput>={})=>projectCard(input({assigned:"codex",codexComments:comments,...o}),logins,allowed);
+ const active=raw("running",null,null), clean=raw("completed",false,false), found=raw("completed",true,true);
+ assert.equal(result([active]).state,"verified_reviewing");
+ assert.equal(result([clean]).state,"ready_for_owner_merge");
+ assert.equal(result([found]).state,"changes_requested");
+ assert.equal(result([raw("completed",true,false)]).state,"changes_requested");
+ assert.equal(result([{...active,updated_at:new Date(now-240001).toISOString()}]).state,"blocked_unknown");
+ assert.equal(result([active,clean]).state,"blocked_unknown");
+ assert.equal(result([raw("completed",false,false,OLD)]).state,"queued");
+ assert.equal(result([{...clean,user:{...clean.user,id:123}}]).state,"queued");
+ assert.equal(result([{...clean,performed_via_github_app:{slug:"other"}}]).state,"queued");
+ assert.equal(result([{...clean,issue_url:"https://api.github.com/repos/o/r/issues/2"}]).state,"queued");
+ assert.equal(result([clean],{ci:{headSha:HEAD,status:"pending"}}).state,"queued");
+ assert.equal(result([clean],{implementer:"codex"}).state,"blocked_unknown");
+ assert.equal(result([clean],{complete:false}).state,"blocked_unknown");
+ assert.equal(result([clean],{reviews:[rv("arnexyia-perplexity[bot]","CHANGES_REQUESTED")]}).state,"changes_requested");
+});

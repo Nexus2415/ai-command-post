@@ -22,6 +22,8 @@ export interface CardInput {
   reviews: PullFacts["reviews"];
   ci: { headSha: string; status: CiStatus };
   receipts: ReviewReceipt[];
+  /** Optional complete, server-read PR comment page set; never accept these from a browser or model. */
+  codexComments?: readonly unknown[];
   ownerHeld: boolean; closed: boolean;
   complete: boolean; // false when any read was partial or failed
   nowMs: number; // trusted snapshot clock, never a provider or comment timestamp
@@ -37,6 +39,38 @@ export interface Card {
 const ACTIVE = new Set(["claude","chatgpt","perplexity","codex"]);
 const SHA = /^[a-f0-9]{40}$/;
 const safeBinding = (c: {taskId:string;repo:string;pr:number;headSha:string}) => /^ARN-[1-9]\d{0,8}$/.test(c.taskId) && /^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(c.repo) && Number.isSafeInteger(c.pr) && c.pr>0 && SHA.test(c.headSha);
+type CodexState = "running" | "approved" | "changes_requested" | "unknown";
+/** Parse ONLY comments read by a trusted GitHub adapter for this PR. A matching signature in owner text is not evidence.
+ * GitHub's observed App slug, numeric bot user ID, full head, PR URL and structured summary must all match.
+ * Unknown/ambiguous schemas fail closed; completed findings are not silently treated as approval. */
+export function codexState(c: CardInput): CodexState | null {
+  if (!c.complete || !safeBinding(c) || !Array.isArray(c.codexComments) || c.codexComments.length>1000) return null;
+  const scope = "https://api.github.com/repos/"+c.repo+"/issues/"+c.pr;
+  const summaries = c.codexComments.filter((raw): raw is {user:{login:string;type:string;id:number};performed_via_github_app:{slug:string};issue_url:string;body:string;updated_at:string} => {
+    if (!raw || typeof raw!=="object") return false;
+    const x=raw as any;
+    return x.user?.login==="chatgpt-codex-connector[bot]" && x.user?.type==="Bot" && x.user?.id===199175422 &&
+      x.performed_via_github_app?.slug==="chatgpt-codex-connector" && x.issue_url===scope &&
+      typeof x.body==="string" && x.body.length<=64000 && x.body.includes("<!-- codex-pull-request-review-summary -->");
+  });
+  if (!summaries.length) return null;
+  if (summaries.length!==1) return "unknown";
+  const x=summaries[0]!, at=Date.parse(x.updated_at);
+  if (!Number.isFinite(at) || at>c.nowMs) return "unknown";
+  const matches=[...x.body.matchAll(/<!-- codex-review-state:v1 ([^\r\n]{1,8192}) -->/g)];
+  if (matches.length!==1) return "unknown";
+  try {
+    const j=JSON.parse(matches[0]![1]!);
+    const code=j.code_review, security=j.security_review;
+    if (!code || code.commit_sha!==c.headSha) return null;
+    if (security?.commit_sha===c.headSha && (security.has_any_findings===true || security.has_unresolved_findings===true)) return "changes_requested";
+    if (code.status==="completed" && (code.has_any_findings===true || code.has_unresolved_findings===true)) return "changes_requested";
+    if (code.status==="running" && code.has_any_findings===null && code.has_unresolved_findings===null && c.nowMs-at<240000) return "running";
+    if (code.status==="completed" && code.has_any_findings===false && code.has_unresolved_findings===false &&
+       (security?.commit_sha!==c.headSha || (security.status==="completed" && security.has_any_findings===false && security.has_unresolved_findings===false))) return "approved";
+    return "unknown";
+  } catch { return "unknown"; }
+}
 export const requestKey = (repo: string, pr: number, headSha: string, reviewer: string) => `acp-review:${repo}#${pr}@${headSha}:${reviewer}`;
 
 /** Deterministic: never the implementer, least load first, then the order of `eligible`. */
@@ -62,11 +96,14 @@ export function projectCard(c: CardInput, logins: Map<string, AgentKey>, eligibl
   const distinctLogins = new Map([...logins].filter(([,a]) => ACTIVE.has(a) && a!==c.implementer && eligible.includes(a)));
   const v = independentReview({ author:"unbound-implementer", headSha: c.headSha, reviews: c.reviews.filter(r=>Number.isFinite(Date.parse(r.submittedAt)) && Date.parse(r.submittedAt)<=c.nowMs) }, distinctLogins);
   const ciOk = c.ci.headSha === c.headSha;
+  const codex = c.implementer!=="codex" && eligible.includes("codex") ? codexState(c) : null;
+  if (codex==="changes_requested") return out("changes_requested","Codex reported findings on this exact head; route to "+c.implementer,"github_review","codex");
   if (v.status === "changes_requested") return out("changes_requested", `${v.by} requested changes on this head; route to ${c.implementer}`, "github_review", v.by ?? null);
-  if (v.status === "approved") {
-    const ev = (s: ReviewState, why: string) => out(s, why, "github_review", v.by ?? null);
+  if (v.status === "approved" || codex==="approved") {
+    const reviewer = v.status==="approved" ? v.by ?? null : "codex";
+    const ev = (s: ReviewState, why: string) => out(s, why, "github_review", reviewer);
     if (!ciOk || c.ci.status === "unknown") return ev("blocked_unknown", "Approved, but CI for this exact head is unknown or for another commit");
-    if (c.ci.status === "success") return ev("ready_for_owner_merge", `Independent approval by ${v.by} and CI passed on this exact head`);
+    if (c.ci.status === "success") return ev("ready_for_owner_merge", `Independent approval by ${reviewer} and CI passed on this exact head`);
     if (c.ci.status === "failure") return ev("rework", "Approved, but CI failed on this head");
     return ev("queued", "Approved; waiting for CI on this exact head");
   }
@@ -75,6 +112,8 @@ export function projectCard(c: CardInput, logins: Map<string, AgentKey>, eligibl
   if (!ciOk || c.ci.status==="unknown") return out("blocked_unknown","Exact-head validation unavailable","unknown");
   if (c.ci.status==="failure") return out("rework","Validation failed on this head");
   if (c.ci.status==="pending") return out("queued","Waiting for exact-head validation");
+  if (codex==="running") return out("verified_reviewing","Authenticated Codex summary reports review running on exact head","verified_receipt","codex");
+  if (codex==="unknown" && c.assigned==="codex") return out("blocked_unknown","Codex review evidence incomplete, stale or ambiguous","unknown");
   if (!c.assigned) return out("unassigned", "No independent reviewer recorded for this head");
   const hit = c.receipts.find((r) => r.authenticated === true && r.state==="running" && Number.isSafeInteger(r.observedAt) && Number.isSafeInteger(r.expiresAt) && r.observedAt<=c.nowMs && c.nowMs<r.expiresAt && r.expiresAt-r.observedAt<=240000 && r.reviewer === c.assigned && r.taskId === c.taskId && r.repo === c.repo && r.pr === c.pr && r.headSha === c.headSha && ((r.reviewer==="codex" && r.kind==="codex_summary") || (r.reviewer==="claude" && r.kind==="claude_action_run") || (r.reviewer==="perplexity" && r.kind==="perplexity_receipt")));
   if (hit) return out("verified_reviewing", `${hit.kind} receipt bound to this exact head`, "verified_receipt", hit.reviewer);
