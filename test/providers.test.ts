@@ -36,9 +36,9 @@ const metered = [
 ];
 const messages = [{ role: "user" as const, content: "synthetic task" }];
 for (const provider of metered) {
-  test(provider.name + " issues at most one request per admitted model call", async () => {
+  test(provider.name + " never repeats a request the provider may have processed; waits out busy answers", async () => {
     setRetryDelays([0, 0]);
-    for (const status of [429, 500, 502, 503, 504, 529, 400, 307]) {
+    for (const status of [500, 502, 503, 504, 400, 307]) {
       let count = 0;
       const f: typeof fetch = async (_input, init) => {
         count++;
@@ -47,6 +47,22 @@ for (const provider of metered) {
       };
       await assert.rejects(provider.make(f).chat(messages, { maxOutputTokens: 10 }), ProviderError);
       assert.equal(count, 1, "no hidden retry for status " + status);
+    }
+    // Busy answers (429 rate limited, 529 overloaded) are refused unbilled: wait and ask again.
+    for (const status of [429, 529]) {
+      let count = 0;
+      const busyOnce: typeof fetch = async (_input, init) => {
+        count++;
+        assert.equal(init?.redirect, "error");
+        return new Response(JSON.stringify(count === 1 ? { error: "busy" } : provider.ok), { status: count === 1 ? status : 200 });
+      };
+      const out = await provider.make(busyOnce).chat(messages, { maxOutputTokens: 10 });
+      assert.equal(out.text, "done");
+      assert.equal(count, 2, "one retry after busy status " + status);
+      let tries = 0;
+      const alwaysBusy: typeof fetch = async () => { tries++; return new Response("{}", { status }); };
+      await assert.rejects(provider.make(alwaysBusy).chat(messages, { maxOutputTokens: 10 }), ProviderError);
+      assert.equal(tries, 3, "busy retries stop after the set delays");
     }
     let count = 0;
     const lost: typeof fetch = async () => { count++; throw new Error("synthetic response lost"); };
