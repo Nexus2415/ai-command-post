@@ -155,3 +155,17 @@ test("side-by-side answers and roundtables pass the same gate", async () => {
   assert.ok(texts.some((x: string) => x.startsWith(REFUSAL_MARK)));
   assert.doesNotMatch(JSON.stringify(texts), /cook meth/);
 });
+
+// 2026-11-28, owner's choice: a PR description saying "not deployed" no longer blocks a draft PR. The title and the
+// commit message are still checked for red words, and harm rules still read the description.
+test("a draft PR's description is not scanned for red words, but its title, commit message and harm rules are", async () => {
+  const { decide } = await import("../src/policy.ts");
+  const ctx = { allowPullRequests: true, allowedRepos: ["acme/app"] };
+  const base = { repo: "acme/app", branch: "acp/x", files: [{ path: "a.ts", content: "x" }] };
+  assert.equal(decide("github.open_pull_request", { ...base, title: "Version notice", body: "Not deployed. Do not deploy until approved." }, ctx).allow, true);
+  assert.equal(decide("github.open_pull_request", { ...base, title: "Deploy to production now", body: "x" }, ctx).allow, false);
+  assert.equal(decide("github.update_pull_request", { ...base, message: "deploy to production", body: "x" }, ctx).allow, false);
+  assert.equal(decide("github.update_pull_request", { ...base, message: "Fix test", body: "Not deployed." }, ctx).allow, true);
+  // Other tools still treat "body" as intent.
+  assert.equal(decide("linear.comment", { body: "I will now deploy to production" }, ctx).allow, false);
+});

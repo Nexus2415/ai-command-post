@@ -93,8 +93,12 @@ export function decide(tool: string, input: Record<string, unknown>, ctx: Policy
   if (!tier) return { allow: false, tier: "red", reason: `Unknown tool "${tool}" is blocked` };
 
   const text = JSON.stringify(input);
-  // Only free-text intent fields are scanned; a file path containing "delete" is fine.
-  const intent = [input["title"], input["body"], input["message"], input["intent"]].filter((v) => typeof v === "string").join(" ");
+  // Only free-text intent fields are scanned; a file path containing "delete" is fine. A pull request's description
+  // is not an intent: a draft PR deploys and merges nothing, and descriptions naturally say "not deployed" (ARN-146's
+  // first live run was refused for exactly that). Its title and commit message are still scanned; harm rules below
+  // still read every string, the description included. The owner chose this on 2026-11-28.
+  const prTool = tool === "github.open_pull_request" || tool === "github.update_pull_request";
+  const intent = [input["title"], prTool ? undefined : input["body"], input["message"], input["intent"]].filter((v) => typeof v === "string").join(" ");
   // Harm rules apply to every string in the input, not only the intent fields.
   const harm = harmCheck(textOf(input).join("\n"));
   if (harm) return { allow: false, tier: "red", reason: `Refused by the rules gate: ${harm.reason}` };
