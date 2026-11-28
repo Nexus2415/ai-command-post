@@ -10,7 +10,7 @@ import type { Issue, TaskStore } from "./linear.ts";
 import type { ClaimStore } from "./claims.ts";
 import type { ActivityKind, ActivitySink } from "./activity.ts";
 import { ProviderError, type ChatMessage, type ModelClient } from "./providers.ts";
-import { runTool, TOOL_DOCS, urlsIn, type ToolCall, type ToolEnv } from "./tools.ts";
+import { currentDocumentReceipt, runTool, TOOL_DOCS, urlsIn, type ToolCall, type ToolEnv } from "./tools.ts";
 import { haltReason, STOPPED, UNREADABLE, type StopCheck } from "./stop-switch.ts";
 import { MAX_RECOVERIES, prRecord, RECOVERY_MARKER, recoveryContext, strandedRun, type Stranded } from "./recovery.ts";
 import { isGoal, orderedSteps, PAUSED_MARKER, progressLine, RUN_MARKER, runsUsed, stepContext, stepFinished, stepGate } from "./goals.ts";
@@ -486,9 +486,11 @@ export async function work(d: Deps, task: Issue, agent: AgentKey, report: TickRe
   const profile = AGENTS[agent];
   // Links the task names are fetchable; links in later tool results are added as they arrive (exact match only).
   const env: ToolEnv = { ...d.toolEnv(task), allowedUrls: new Set(urlsIn(`${task.title}\n${task.description}`)), openedBranches: new Set(), openedPullRequests: [] };
+  if (env.document?.taskId !== task.id) env.document = undefined;
+  env.documentReceipt = undefined; // Never borrow a receipt from an earlier attempt.
   // Only offer tools whose credentials are configured, so a worker never plans around a tool that can't run.
   const tools = profile.tools.filter(
-    (t) => TOOL_DOCS[t] && !(t.startsWith("firecrawl.") && !env.firecrawlKey) && !(t.startsWith("github.") && !env.githubToken && !env.githubAuth) && !(t.startsWith("vercel.") && !env.vercelToken),
+    (t) => TOOL_DOCS[t] && (t !== "document.create" || !!env.document && !env.dryRun) && !(t.startsWith("firecrawl.") && !env.firecrawlKey) && !(t.startsWith("github.") && !env.githubToken && !env.githubAuth) && !(t.startsWith("vercel.") && !env.vercelToken),
   );
   // A coder's PR counts as done only with its checks green (ARN-149): proof, not a claim.
   const maxOut = stepTokensFor(agent);
@@ -600,8 +602,12 @@ export async function work(d: Deps, task: Issue, agent: AgentKey, report: TickRe
     messages.push({ role: "assistant", content: out });
     const j = extractJson(out);
     if (j && typeof j["final"] === "string") {
-      const status = j["status"] === "blocked" ? "blocked" : "done";
-      const result = `${RESULT_MARKER} (${profile.name}, ${status})\n\n${j["final"]}`;
+      const claimedDone = j["status"] !== "blocked";
+      const receipt = currentDocumentReceipt(env);
+      const verifiedDoc = env.document && receipt && await env.document.verify(receipt).catch(() => false) && !await haltReason(d.halt) ? receipt : null;
+      const missingDoc = claimedDone && !!env.document && !verifiedDoc;
+      const status = !claimedDone || missingDoc ? "blocked" : "done";
+      const result = `${RESULT_MARKER} (${profile.name}, ${status})\n\n${missingDoc ? "Required private document has no confirmed current receipt; no completion recorded." : j["final"]}${verifiedDoc ? `\n\nVerified artifact: ${verifiedDoc.filename}; ${verifiedDoc.bytes} bytes; SHA-256 ${verifiedDoc.sha256}; artifact ${verifiedDoc.artifactId}` : ""}`;
       const prs = env.openedPullRequests ?? [];
       if (status === "done" && opts.holdForMerge && prs.length) {
         // A goal step with a pull request stays In Progress until the owner merges it, so the next step builds on it.
