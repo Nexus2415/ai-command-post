@@ -105,3 +105,12 @@ test("only named owner session can save the exact reviewed scope; no dispatch or
   assert.equal((await call("build_save_scope",{...args,ticket},ownerEnv,h)).status,423);
   assert.equal(calls(),0);
 });
+
+test("private Build composer clears draft on exit and binds async uploads to original context",()=>{
+  const js=readFileSync(new URL("../dashboard/workspace.js",import.meta.url),"utf8");
+  assert.match(js,/const wasBuild=buildMode;[\s\S]{0,160}if \(wasBuild\) \{ \$\("cText"\)\.value = ""; files = \[\]; uploads = \[\];/);
+  assert.match(js,/if \(p !== true && buildMode\) \{ resetBuild\(\)/);
+  assert.match(js,/const data = await base64\(blob\);\s*assertAttachmentScope\(scope\);\s*const \{ file: saved \} = await post\("upload_file", \{ threadId:scope\.threadId/);
+  assert.match(js,/mime, data \}\);\s*assertAttachmentScope\(scope\);\s*uploads\.push\(saved\)/);
+  assert.match(js,/if\(scope\.buildMode && !\/\^image/);
+});

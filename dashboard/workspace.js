@@ -200,9 +200,11 @@
   }
 
   async function openThread(id) {
-    if (id !== threadId) { resetBuild(true); stopSpeaking(); uploads = []; showFiles(); }
+    if (id !== threadId) { resetBuild(true); threadPrivate = null; stopSpeaking(); uploads = []; showFiles(); }
     threadId = id;
+    const p = projectId;
     const { thread, messages } = await post("get_thread", { threadId: id });
+    if (threadId !== id || projectId !== p) return;
     $("welcome").hidden = true;
     setDrawer(false);
     $("cH").textContent = thread.title;
@@ -354,7 +356,7 @@
   // no other thread's AI can see it. Unknown (the database update isn't applied yet): treated as private.
   function showPrivacy(p) {
     threadPrivate = p;
-    if (p !== true && buildMode) { invalidateBuild(); $("cBuildResult").textContent = "Thread must be private. Nothing can start."; }
+    if (p !== true && buildMode) { resetBuild(); showMode(); syncMic(); say("Private build draft cleared because the thread is no longer verified private.", "warn"); }
     const b = $("cPrivacy");
     b.hidden = false;
     b.disabled = p !== true && p !== false;
@@ -539,7 +541,12 @@
     for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
     return btoa(bin);
   }
-  async function upload(file) {
+  const attachmentScope = () => ({threadId, projectId, buildMode, epoch:buildModeEpoch});
+  function assertAttachmentScope(s) {
+    if (!s.threadId || s.threadId!==threadId || s.projectId!==projectId || s.buildMode!==buildMode || s.epoch!==buildModeEpoch || (s.buildMode && threadPrivate!==true)) throw new Error("Attachment context changed; choose the file again.");
+  }
+  async function upload(file, scope=attachmentScope()) {
+    assertAttachmentScope(scope);
     if (!threadId) throw new Error("Open a thread first.");
     if (uploads.length >= 3) throw new Error("Attach at most 3 images or PDFs.");
     const pdf = file.type === "application/pdf" || /\.pdf$/i.test(file.name);
@@ -550,7 +557,10 @@
     const name = file.name.replace(/[\u0000-\u001f<>#]/g, "_").slice(0, 120) || "file";
     const mime = pdf ? "application/pdf" : blob.type || file.type;
     say("Uploading " + name + "…", "warn");
-    const { file: saved } = await post("upload_file", { threadId, name: pdf || mime === "image/gif" ? name : name.replace(/\.[a-z0-9]+$/i, "") + ".jpg", mime, data: await base64(blob) });
+    const data = await base64(blob);
+    assertAttachmentScope(scope);
+    const { file: saved } = await post("upload_file", { threadId:scope.threadId, name: pdf || mime === "image/gif" ? name : name.replace(/\.[a-z0-9]+$/i, "") + ".jpg", mime, data });
+    assertAttachmentScope(scope);
     uploads.push(saved);
     say("");
   }
@@ -559,18 +569,22 @@
   // contact sheets of time-stamped frames, stored in the thread as ordinary images, and every file gets an evidence note (sizes,
   // SHA-256, frame times, a loud/quiet sound timeline, what was NOT done) attached as a text file. The original file
   // never leaves the browser. Speech is not transcribed.
-  async function attachMedia(file) {
+  async function attachMedia(file, scope=attachmentScope()) {
+    assertAttachmentScope(scope);
+    if (scope.buildMode) throw new Error("Build mode accepts reference images only.");
     if (!threadId) throw new Error("Open a thread first.");
     if (files.length >= 3) throw new Error("Attach at most 3 files.");
     const why = window.ACPMedia.refusal(file);
     if (why) throw new Error(why);
     say("Reading " + file.name + " here in your browser…", "warn");
     const got = await window.ACPMedia.read(file, (n, of) => say("Reading " + file.name + ": frame " + n + " of " + of + "…", "warn"));
+    assertAttachmentScope(scope);
     if (uploads.length + got.sheets.length > 3) throw new Error(file.name + " makes " + got.sheets.length + " frame sheets; remove an image or PDF first (3 at most per message).");
     const base = file.name.replace(/[\u0000-\u001f<>#]/g, "_").replace(/\.[a-z0-9]+$/i, "").slice(0, 80) || "video";
     for (let i = 0; i < got.sheets.length; i++) {
-      await upload(new File([got.sheets[i]], base + " frames " + (i + 1) + " of " + got.sheets.length + ".jpg", { type: "image/jpeg" }));
+      await upload(new File([got.sheets[i]], base + " frames " + (i + 1) + " of " + got.sheets.length + ".jpg", { type: "image/jpeg" }), scope);
     }
+    assertAttachmentScope(scope);
     files.push({ name: (base + " evidence.txt").slice(0, 120), text: got.note.slice(0, 30000) });
     // Reading was free and local. Sending is not: the sheets are now stored in this thread like any image, and they
     // reach an AI only when you press Send, through the usual spend caps, stop switch and rules.
@@ -618,12 +632,16 @@
   $("cAttach").addEventListener("click", () => $("cFile").click());
   $("cFile").addEventListener("change", guard(async () => {
     try {
-      for (const file of $("cFile").files) {
-        if (/^image\//.test(file.type) || file.type === "application/pdf" || /\.pdf$/i.test(file.name)) { await upload(file); continue; }
-        if (window.ACPMedia && window.ACPMedia.kindOf(file)) { await attachMedia(file); continue; }
+      const scope=attachmentScope();
+      for (const file of Array.from($("cFile").files)) {
+        assertAttachmentScope(scope);
+        if(scope.buildMode && !/^image\//.test(file.type)) throw new Error("Build mode accepts reference images only.");
+        if (/^image\//.test(file.type) || file.type === "application/pdf" || /\.pdf$/i.test(file.name)) { await upload(file,scope); continue; }
+        if (window.ACPMedia && window.ACPMedia.kindOf(file)) { await attachMedia(file,scope); continue; }
         if (files.length >= 3) throw new Error("Attach at most 3 files.");
         if (file.size > 200000) throw new Error(file.name + " is too big. Text files up to 30,000 characters work.");
         const text = await file.text();
+        assertAttachmentScope(scope);
         if (!text.trim() || text.includes("\u0000")) throw new Error(file.name + " isn't a text file, or it's empty.");
         if (text.length > 30000) throw new Error(file.name + " is over 30,000 characters. Attach a shorter file.");
         files.push({ name: file.name.replace(/[\u0000-\u001f<>]/g, "_").slice(0, 120), text });
@@ -633,8 +651,9 @@
   // Build preview is a distinct composer mode; it never falls through to ordinary chat.
   function invalidateBuild() { buildEpoch++; buildTicket = null; $("cBuildSave").disabled = true; $("cBuildResult").textContent = ""; }
   function resetBuild(leavingThread = false) {
-    if (leavingThread && buildMode) { $("cText").value = ""; files = []; uploads = []; showFiles(); }
+    const wasBuild=buildMode;
     buildMode = false; buildModeEpoch++; invalidateBuild();
+    if (wasBuild) { $("cText").value = ""; files = []; uploads = []; showFiles(); }
     $("cBuildPanel").hidden = true; $("cBuild").setAttribute("aria-expanded", "false");
     $("cBuildSynthetic").checked = false; $("cSend").setAttribute("aria-label", "Send");
     $("cText").placeholder = "Ask a question…"; $("cMode").hidden = false;
@@ -866,7 +885,10 @@
   // Make this thread private, or shared with the project again. Reversible at any time.
   $("cPrivacy").addEventListener("click", guard(async () => {
     if (!threadId || (threadPrivate !== true && threadPrivate !== false)) return;
-    const { thread } = await post("set_private", { threadId, private: !threadPrivate });
+    const t=threadId, p=projectId;
+    if (threadPrivate===true && buildMode) { resetBuild(); showMode(); syncMic(); }
+    const { thread } = await post("set_private", { threadId:t, private: !threadPrivate });
+    if(t!==threadId || p!==projectId) return;
     showPrivacy(thread.private);
     await loadThreads();
   }));
