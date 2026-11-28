@@ -148,12 +148,12 @@ test("read_files refuses a path that climbs out of the repo, like read_file", as
 test("each provider reports a reply cut off at the output limit", async () => {
   const fake = (body: unknown) => (async () => Response.json(body)) as unknown as typeof fetch;
   const msgs: ChatMessage[] = [{ role: "user", content: "q" }];
-  const a = await anthropicClient("k", "m", fake({ content: [{ type: "text", text: "{" }], stop_reason: "max_tokens", usage: {} })).chat(msgs, { maxOutputTokens: 5 });
+  const a = await anthropicClient("k", "m", fake({ id: "synthetic-1", model: "m", content: [{ type: "text", text: "{" }], stop_reason: "max_tokens", usage: { input_tokens: 1, output_tokens: 5 } })).chat(msgs, { maxOutputTokens: 5 });
   assert.equal(a.truncated, true);
-  const o = await chatCompletionsClient("openai", "https://x", "k", "m", fake({ choices: [{ message: { content: "{" }, finish_reason: "length" }] })).chat(msgs, { maxOutputTokens: 5 });
+  const o = await chatCompletionsClient("openai", "https://x", "k", "m", fake({ id: "synthetic-2", model: "m", choices: [{ message: { content: "{" }, finish_reason: "length" }], usage: { prompt_tokens: 1, completion_tokens: 5, total_tokens: 6 } })).chat(msgs, { maxOutputTokens: 5 });
   assert.equal(o.truncated, true);
   const g = await geminiClient("k", "m", fake({ candidates: [{ content: { parts: [{ text: "{" }] }, finishReason: "MAX_TOKENS" }] })).chat(msgs, { maxOutputTokens: 5 });
   assert.equal(g.truncated, true);
-  const done = await anthropicClient("k", "m", fake({ content: [{ type: "text", text: "{}" }], stop_reason: "end_turn", usage: {} })).chat(msgs, { maxOutputTokens: 5 });
+  const done = await anthropicClient("k", "m", fake({ id: "synthetic-3", model: "m", content: [{ type: "text", text: "{}" }], stop_reason: "end_turn", usage: { input_tokens: 1, output_tokens: 2 } })).chat(msgs, { maxOutputTokens: 5 });
   assert.equal(done.truncated, false);
 });

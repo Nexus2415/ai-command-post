@@ -5,7 +5,21 @@ export interface ChatMessage {
   content: string;
 }
 
+/** Provider-reported observations only, not an authenticated gateway usage receipt or settlement authority. */
+export interface ReportedUsage {
+  provider: string;
+  requestedModel: string;
+  reportedModel: string;
+  responseId: string;
+  totalInputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number | null;
+  cacheWriteTokens: number | null;
+  reasoningTokens: number | null;
+}
+
 export interface ChatResult {
+  reportedUsage?: ReportedUsage;
   text: string;
   inputTokens: number;
   outputTokens: number;
@@ -29,19 +43,16 @@ export class ProviderError extends Error {
   }
 }
 
-// Metered engine calls have exactly one admission/ledger reservation each, so a request the
-// provider may have processed (5xx, lost response) is never repeated here. "Busy" answers are the
-// exception: 429 (rate limited) and 529 (overloaded) are refused before any work and are not
-// billed, so waiting and asking again costs nothing and keeps one blip from blocking a task.
-// The legacy suspended Gemini client retains its wider free-tier retry behavior.
-const BUSY = new Set([429, 529]);
+// Metered engine calls have exactly one admission/ledger reservation each. Retrying within
+// this transport would create another potentially billable request without a fresh admission.
+// The legacy suspended Gemini client retains its free-tier fixture retry behavior.
 const RETRYABLE = new Set([429, 500, 502, 503, 504, 529]);
 let retryDelaysMs = [5_000, 15_000];
 export function setRetryDelays(ms: number[]): void {
   retryDelaysMs = ms;
 }
 
-async function postJson(f: Fetch, provider: string, url: string, headers: Record<string, string>, body: unknown, retryOn: ReadonlySet<number> = BUSY): Promise<any> {
+async function postJson(f: Fetch, provider: string, url: string, headers: Record<string, string>, body: unknown, retryBusy = false): Promise<any> {
   let res: Response;
   let text: string;
   for (let attempt = 0; ; attempt++) {
@@ -54,7 +65,7 @@ async function postJson(f: Fetch, provider: string, url: string, headers: Record
     });
     text = await res.text();
     const wait = retryDelaysMs[attempt];
-    if (res.ok || !retryOn.has(res.status) || wait === undefined) break;
+    if (res.ok || !retryBusy || !RETRYABLE.has(res.status) || wait === undefined) break;
     await new Promise((r) => setTimeout(r, wait));
   }
   if (!res.ok) throw new ProviderError(provider, res.status, text.slice(0, 500));
@@ -63,6 +74,35 @@ async function postJson(f: Fetch, provider: string, url: string, headers: Record
   } catch {
     throw new ProviderError(provider, res.status, "Response was not JSON");
   }
+}
+
+// Never convert a malformed/missing metered response into zero usage. Reported counts are not proof of tariff, cost or authority.
+function usageCount(provider: string, value: unknown, field: string): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) throw new ProviderError(provider, 200, "Invalid reported usage: " + field);
+  return value;
+}
+function optionalCount(provider: string, value: unknown, field: string): number | null {
+  return value == null ? null : usageCount(provider, value, field);
+}
+function identity(provider: string, value: unknown, field: string): string {
+  if (typeof value !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/.test(value)) throw new ProviderError(provider, 200, "Invalid provider response " + field);
+  return value;
+}
+function observedUsage(provider: string, requestedModel: string, j: any, maxOutputTokens: number): ReportedUsage {
+  const u = j?.usage;
+  if (!u || typeof u !== "object" || Array.isArray(u)) throw new ProviderError(provider, 200, "Missing reported usage");
+  const responseId = identity(provider, j.id, "ID"), reportedModel = identity(provider, j.model, "model");
+  // Preserve both identities. Aliases are legitimate for legacy chat but cannot establish a paid pinned-tariff match.
+  const anthropic = provider === "anthropic";
+  const input = usageCount(provider, anthropic ? u.input_tokens : u.prompt_tokens, "input");
+  const outputTokens = usageCount(provider, anthropic ? u.output_tokens : u.completion_tokens, "output");
+  const cacheReadTokens = optionalCount(provider, anthropic ? u.cache_read_input_tokens : u.prompt_tokens_details?.cached_tokens, "cache read");
+  const cacheWriteTokens = optionalCount(provider, anthropic ? u.cache_creation_input_tokens : u.prompt_tokens_details?.cache_write_tokens, "cache write");
+  const reasoningTokens = optionalCount(provider, anthropic ? null : u.completion_tokens_details?.reasoning_tokens, "reasoning");
+  const totalInputTokens = anthropic ? input + (cacheReadTokens ?? 0) + (cacheWriteTokens ?? 0) : input;
+  if (!Number.isSafeInteger(totalInputTokens + outputTokens) || outputTokens > maxOutputTokens || (cacheReadTokens ?? 0) + (cacheWriteTokens ?? 0) > totalInputTokens || (reasoningTokens ?? 0) > outputTokens) throw new ProviderError(provider, 200, "Reported usage exceeds bounds");
+  if (!anthropic && usageCount(provider, u.total_tokens, "total") !== totalInputTokens + outputTokens) throw new ProviderError(provider, 200, "Inconsistent reported token total");
+  return { provider, requestedModel, reportedModel, responseId, totalInputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, reasoningTokens };
 }
 
 function splitSystem(messages: ChatMessage[]): { system: string; rest: ChatMessage[] } {
@@ -82,7 +122,8 @@ export function anthropicClient(apiKey: string, model: string, f: Fetch = fetch)
         { model, max_tokens: maxOutputTokens, system, messages: rest },
       );
       const text = (j.content ?? []).filter((b: any) => b.type === "text").map((b: any) => b.text).join("");
-      return { text, inputTokens: j.usage?.input_tokens ?? 0, outputTokens: j.usage?.output_tokens ?? 0, truncated: j.stop_reason === "max_tokens" };
+      const reportedUsage = observedUsage("anthropic", model, j, maxOutputTokens);
+      return { text, inputTokens: reportedUsage.totalInputTokens, outputTokens: reportedUsage.outputTokens, reportedUsage, truncated: j.stop_reason === "max_tokens" };
     },
   };
 }
@@ -95,12 +136,15 @@ export function chatCompletionsClient(provider: string, baseUrl: string, apiKey:
       body[provider === "openai" ? "max_completion_tokens" : "max_tokens"] = maxOutputTokens;
       const j = await postJson(f, provider, `${baseUrl}/chat/completions`, { authorization: `Bearer ${apiKey}` }, body);
       const text = j.choices?.[0]?.message?.content ?? "";
+      if (typeof text !== "string") throw new ProviderError(provider, 200, "Invalid response text");
+      const reportedUsage = observedUsage(provider, model, j, maxOutputTokens);
       const citations: string[] = Array.isArray(j.citations) ? j.citations : [];
       const withCites = citations.length ? `${text}\n\nSources:\n${citations.map((c) => `- ${c}`).join("\n")}` : text;
       return {
         text: withCites,
-        inputTokens: j.usage?.prompt_tokens ?? 0,
-        outputTokens: j.usage?.completion_tokens ?? 0,
+        inputTokens: reportedUsage.totalInputTokens,
+        outputTokens: reportedUsage.outputTokens,
+        reportedUsage,
         truncated: j.choices?.[0]?.finish_reason === "length",
       };
     },
@@ -121,7 +165,7 @@ export function geminiClient(apiKey: string, model: string, f: Fetch = fetch): M
           contents: rest.map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] })),
           generationConfig: { maxOutputTokens },
         },
-        RETRYABLE, // Legacy free-tier client only; buildClients refuses suspended Gemini.
+        true, // Legacy free-tier client only; buildClients refuses suspended Gemini.
       );
       const text = (j.candidates?.[0]?.content?.parts ?? []).map((p: any) => p.text ?? "").join("");
       return {

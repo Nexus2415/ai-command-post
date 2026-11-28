@@ -30,15 +30,15 @@ test("busy free-tier answers are retried before failing", async () => {
 
 
 const metered = [
-  { name: "openai", make: (f: typeof fetch) => chatCompletionsClient("openai", "https://api.openai.com/v1", "synthetic-key", "synthetic-model", f), ok: { choices: [{ message: { content: "done" }, finish_reason: "stop" }], usage: { prompt_tokens: 8, completion_tokens: 3 } } },
-  { name: "anthropic", make: (f: typeof fetch) => anthropicClient("synthetic-key", "synthetic-model", f), ok: { content: [{ type: "text", text: "done" }], stop_reason: "end_turn", usage: { input_tokens: 8, output_tokens: 3 } } },
-  { name: "perplexity", make: (f: typeof fetch) => chatCompletionsClient("perplexity", "https://api.perplexity.ai", "synthetic-key", "synthetic-model", f), ok: { choices: [{ message: { content: "done" }, finish_reason: "stop" }], usage: { prompt_tokens: 8, completion_tokens: 3 } } },
+  { name: "openai", make: (f: typeof fetch) => chatCompletionsClient("openai", "https://api.openai.com/v1", "synthetic-key", "synthetic-model", f), ok: { id: "synthetic-response", model: "synthetic-model", choices: [{ message: { content: "done" }, finish_reason: "stop" }], usage: { prompt_tokens: 8, completion_tokens: 3, total_tokens: 11 } } },
+  { name: "anthropic", make: (f: typeof fetch) => anthropicClient("synthetic-key", "synthetic-model", f), ok: { id: "synthetic-response", model: "synthetic-model", content: [{ type: "text", text: "done" }], stop_reason: "end_turn", usage: { input_tokens: 8, output_tokens: 3 } } },
+  { name: "perplexity", make: (f: typeof fetch) => chatCompletionsClient("perplexity", "https://api.perplexity.ai", "synthetic-key", "synthetic-model", f), ok: { id: "synthetic-response", model: "synthetic-model", choices: [{ message: { content: "done" }, finish_reason: "stop" }], usage: { prompt_tokens: 8, completion_tokens: 3, total_tokens: 11 } } },
 ];
 const messages = [{ role: "user" as const, content: "synthetic task" }];
 for (const provider of metered) {
-  test(provider.name + " never repeats a request the provider may have processed; waits out busy answers", async () => {
+  test(provider.name + " issues at most one request per admitted model call", async () => {
     setRetryDelays([0, 0]);
-    for (const status of [500, 502, 503, 504, 400, 307]) {
+    for (const status of [429, 500, 502, 503, 504, 529, 400, 307]) {
       let count = 0;
       const f: typeof fetch = async (_input, init) => {
         count++;
@@ -47,22 +47,6 @@ for (const provider of metered) {
       };
       await assert.rejects(provider.make(f).chat(messages, { maxOutputTokens: 10 }), ProviderError);
       assert.equal(count, 1, "no hidden retry for status " + status);
-    }
-    // Busy answers (429 rate limited, 529 overloaded) are refused unbilled: wait and ask again.
-    for (const status of [429, 529]) {
-      let count = 0;
-      const busyOnce: typeof fetch = async (_input, init) => {
-        count++;
-        assert.equal(init?.redirect, "error");
-        return new Response(JSON.stringify(count === 1 ? { error: "busy" } : provider.ok), { status: count === 1 ? status : 200 });
-      };
-      const out = await provider.make(busyOnce).chat(messages, { maxOutputTokens: 10 });
-      assert.equal(out.text, "done");
-      assert.equal(count, 2, "one retry after busy status " + status);
-      let tries = 0;
-      const alwaysBusy: typeof fetch = async () => { tries++; return new Response("{}", { status }); };
-      await assert.rejects(provider.make(alwaysBusy).chat(messages, { maxOutputTokens: 10 }), ProviderError);
-      assert.equal(tries, 3, "busy retries stop after the set delays");
     }
     let count = 0;
     const lost: typeof fetch = async () => { count++; throw new Error("synthetic response lost"); };
@@ -83,3 +67,29 @@ for (const provider of metered) {
     assert.equal(count, 3);
   });
 }
+
+
+test("metered responses require identity and real, bounded, consistent usage; malformed success never retried", async()=>{
+  for(const p of metered){
+    const original=structuredClone(p.ok);
+    for(const change of [(x:any)=>delete x.usage,(x:any)=>delete x.id,(x:any)=>delete x.model,(x:any)=>{x.model="";},(x:any)=>{x.usage=p.name==="anthropic"?{input_tokens:-1,output_tokens:1}:{prompt_tokens:1,completion_tokens:-1,total_tokens:0};},(x:any)=>{x.usage=p.name==="anthropic"?{input_tokens:1,output_tokens:11}:{prompt_tokens:1,completion_tokens:11,total_tokens:12};},(x:any)=>{x.usage=p.name==="anthropic"?{input_tokens:"8",output_tokens:3}:{prompt_tokens:"8",completion_tokens:3,total_tokens:11};}]){
+      const malformed=structuredClone(original);change(malformed);let count=0;
+      await assert.rejects(p.make(async()=>{count++;return Response.json(malformed);}).chat(messages,{maxOutputTokens:10}),ProviderError);
+      assert.equal(count,1);
+    }
+    const out=await p.make(async()=>Response.json({...original,model:"reported-model"})).chat(messages,{maxOutputTokens:10});
+    assert.equal(out.reportedUsage?.reportedModel,"reported-model");
+    assert.equal(out.reportedUsage?.requestedModel,"synthetic-model");
+    assert.equal(out.reportedUsage?.responseId,"synthetic-response");
+    if(p.name!=="anthropic"){
+      await assert.rejects(p.make(async()=>Response.json({...original,usage:{prompt_tokens:8,completion_tokens:3,total_tokens:2}})).chat(messages,{maxOutputTokens:10}),ProviderError);
+      await assert.rejects(p.make(async()=>Response.json({...original,usage:{prompt_tokens:8,completion_tokens:3,total_tokens:11,prompt_tokens_details:{cached_tokens:9}}})).chat(messages,{maxOutputTokens:10}),ProviderError);
+    }
+  }
+});
+test("Anthropic cache categories count toward total input, and OpenAI reasoning is already included in output",async()=>{
+  const a=await metered[1]!.make(async()=>Response.json({...metered[1]!.ok,usage:{input_tokens:8,output_tokens:3,cache_creation_input_tokens:4,cache_read_input_tokens:5}})).chat(messages,{maxOutputTokens:10});
+  assert.equal(a.inputTokens,17);assert.equal(a.reportedUsage?.cacheWriteTokens,4);assert.equal(a.reportedUsage?.cacheReadTokens,5);
+  const o=await metered[0]!.make(async()=>Response.json({...metered[0]!.ok,usage:{prompt_tokens:8,completion_tokens:3,total_tokens:11,prompt_tokens_details:{cached_tokens:4},completion_tokens_details:{reasoning_tokens:2}}})).chat(messages,{maxOutputTokens:10});
+  assert.equal(o.inputTokens,8);assert.equal(o.outputTokens,3);assert.equal(o.reportedUsage?.reasoningTokens,2);
+});
