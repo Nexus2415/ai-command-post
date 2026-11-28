@@ -240,7 +240,13 @@
         const sb = boxOf(synth, "synthesis");
         list.append(sb);
         // Behind the answer, in its drop-down: each AI's own answer and how they settled their disagreements.
-        if (answers.length) addExtra(sb, fold("Each AI's own answer (" + answers.map(nameOf).join(", ") + ")", rowOf(answers, "answer")), 0);
+        if (answers.length) {
+          const individual = el("div", "rt-individual");
+          individual.setAttribute("role", "group");
+          individual.setAttribute("aria-label", "Individual AI responses");
+          for (const m of answers) individual.append(fold(nameOf(m) + " answer", rowOf([m], "answer")));
+          list.append(individual);
+        }
         if (reviews.length) { const r = el("div", "cmp"); r.dataset.kind = "critique"; for (const m of reviews) r.append(boxOf(m, kindOf(m))); addExtra(sb, fold("How they settled their disagreements", r), 0); }
         for (const m of ai) if (!["synthesis", "answer", "critique", "check"].includes(kindOf(m))) list.append(boxOf(m, kindOf(m)));
         continue;
@@ -295,7 +301,8 @@
     }
     box.hidden = !others.length;
     for (const r of document.querySelectorAll('#cMode input')) r.disabled = r.value !== "single" && !others.length;
-    setMode(others.length ? savedMode() : "single", false);
+    setMode(others.length ? savedMode() : (savedMode() === "discuss" ? "discuss" : "single"), false);
+    if (!others.length && savedMode() === "discuss") $("cNote").textContent = "Discussion needs at least two ready AIs. Switch to 1 AI if you want a single answer.";
     // A side-by-side answer (or a roundtable that stopped part way) can be taken through the remaining rounds.
     $("cDiscuss").hidden = !(lastState && lastState.answers >= 2 && !lastState.done);
     $("cDiscuss").textContent = lastState && lastState.critiques ? "Finish: write the agreed answer" : "Agree on one answer from these";
@@ -667,6 +674,7 @@
       // With no AI ready the message is only saved; otherwise the server saves it and asks the thread's AI.
       const also = [...$("cCompare").querySelectorAll("input:checked")].map((i) => i.value);
       const how = mode();
+      if (how === "discuss" && (!ms?.ready || !also.length)) throw new Error("Discussion needs at least two ready AIs. Choose available participants or explicitly switch answer mode.");
       if (ms && ms.ready && how === "discuss" && also.length) {
         working = "The AIs are working on one answer…";
         const ran = await roundtable(text, attachments, [currentModel(), ...also], picked);
@@ -737,7 +745,8 @@
   };
   // Remembered per project while the page is open. Kept in memory only: this page never writes browser storage.
   const modes = new Map();
-  const savedMode = () => modes.get(projectId) || "check";
+  const fromTasksDiscussion = new URLSearchParams(location.search).get("mode") === "discuss";
+  const savedMode = () => modes.get(projectId) || (fromTasksDiscussion ? "discuss" : "check");
   function mode() { const r = document.querySelector('#cMode input:checked'); return r ? r.value : "single"; }
   function showMode() {
     const how = mode();
