@@ -1,6 +1,7 @@
 import { TEAM_ID, PROJECT_ID, overviewOf, projectIssue, safeLinearUrl } from "./_lib/console-state.js";
 import { lifecycleOf } from "./_lib/command-lifecycle.js";
 import { engineStatusRead } from "./_lib/engine-status.js";
+import { readActivity } from "./_lib/worker-activity.js";
 import { hasSitePassword, isCrossSite } from "./_lib/site-auth.js";
 
 const LINEAR = "https://api.linear.app/graphql";
@@ -103,9 +104,11 @@ export async function handle(req, env, f = fetch, now = () => new Date()) {
   }
   try {
     if (body.action === "overview") {
-      const [data, engine] = await Promise.all([
+      // Live worker activity (ARN-163) is read beside the board; its own failure only makes every AI "unknown".
+      const [data, engine, activity] = await Promise.all([
         gql(env, f, OVERVIEW, { team: TEAM_ID, project: PROJECT_ID }),
         readEngineStatus(env, f).catch(() => ({ engineStatus: "unavailable", engine: null })),
+        readActivity(env, f, now().getTime()),
       ]);
       // Completeness must be stated: a missing or non-boolean hasNextPage is a failed read, never "all issues".
       if (!Array.isArray(data.issues?.nodes) || typeof data.issues?.pageInfo?.hasNextPage !== "boolean") throw new Error("Invalid response");
@@ -114,7 +117,7 @@ export async function handle(req, env, f = fetch, now = () => new Date()) {
       if (!data.issues.nodes.every(inScope)) throw new Error("Out-of-scope issue in response");
       const results = await readResults(env, f, data.issues.nodes).catch(() => new Map());
       const nodes = data.issues.nodes.map(n => (results.has(n.id) ? { ...n, comments: { nodes: results.get(n.id) } } : n));
-      return { status: 200, body: { ...overviewOf(nodes, now().toISOString(), data.issues.pageInfo.hasNextPage), ...engine } };
+      return { status: 200, body: { ...overviewOf(nodes, now().toISOString(), data.issues.pageInfo.hasNextPage), ...engine, activity } };
     }
     const data = await gql(env, f, THREAD, { identifier: body.identifier });
     if (!data.issue || !inScope(data.issue)) return error(404, "Issue not found in this operation.");

@@ -1,7 +1,8 @@
 // AI Command Post — command tree view: an orchestrator node with a branch to each AI and its tasks.
 // Read-only: it calls POST /api/console (overview) and nothing else. No intake, no thread writes, no model calls.
 // All Linear text is rendered with textContent; no HTML is ever built from data.
-// Agent status is derived from Linear workload only. It never claims an agent is connected or that a worker is live.
+// The status pill is Linear workload only. The live line on each AI's avatar (ARN-163) comes from engine runs'
+// own activity rows, projected on the server (api/_lib/worker-activity.js); without a fresh proof it reads unknown.
 (function (root) {
   "use strict";
   const AGENTS = [
@@ -91,7 +92,48 @@
     const msg = body && typeof body.error === "string" ? body.error : "";
     return msg || "Request failed (HTTP " + status + ").";
   }
-  const api = { AGENTS, PILL, agentStats, resultCredits, aisWithOpenTasks, totals, queue, activity, laneStatus, safeUrl, agentName, errorMessage, isIssueId: s => ID_RE.test(String(s)) };
+  // ---- live worker activity (ARN-163) ----
+  const ENGINE = ["claude", "chatgpt", "perplexity", "gemini"];
+  const LIVE_STATES = ["working", "idle", "blocked", "completed", "unknown"];
+  const LIVE_LABEL = { working: "Working now", idle: "Idle", blocked: "Blocked", completed: "Finished", unknown: "Status unknown" };
+  function ago(ms) {
+    const s = Math.max(0, Math.round(ms / 1000));
+    if (s < 60) return s + "s ago";
+    const m = Math.round(s / 60);
+    return m < 60 ? m + " min ago" : Math.round(m / 60) + " h ago";
+  }
+  /**
+   * What one AI's avatar may show, from the overview's `activity`. Fails closed: no report, a failed read, a check
+   * older than the heartbeat window, a heartbeat that has aged out or any shape it doesn't know all read "unknown".
+   * Returns null for cards with no worker behind them (groups, suspended AIs).
+   */
+  function liveView(activity, key, nowMs) {
+    const agent = AGENTS.find(a => a.key === key);
+    if (!agent || agent.group || agent.suspended) return null;
+    const unknown = detail => ({ state: "unknown", label: LIVE_LABEL.unknown, detail });
+    if (!ENGINE.includes(key)) return unknown("Not run by the engine; not checked here");
+    if (!activity || typeof activity !== "object") return unknown("No activity report");
+    if (activity.status !== "reported") return unknown(activity.status === "unconfigured" ? "No activity source is connected" : "Activity couldn't be read");
+    const readAt = Date.parse(activity.readAt), ttl = Number(activity.ttlMs);
+    if (!isFinite(readAt) || !(ttl > 0)) return unknown("Activity report is malformed");
+    if (nowMs - readAt > ttl) return unknown("Last check is too old; refresh to check again");
+    const a = activity.agents && activity.agents[key];
+    if (!a || !LIVE_STATES.includes(a.state)) return unknown("No activity report for this AI");
+    const issue = typeof a.issue === "string" && ID_RE.test(a.issue) ? a.issue : null;
+    const at = Date.parse(a.at);
+    if (a.state === "working") {
+      if (!issue || !isFinite(at) || nowMs - at > ttl) return unknown("Last heartbeat is too old");
+      const step = Number.isInteger(a.step) && a.step > 0 ? " · step " + a.step : "";
+      return { state: "working", label: LIVE_LABEL.working, detail: issue + step + " · heartbeat " + ago(nowMs - at), issue };
+    }
+    if (a.state === "idle") return { state: "idle", label: LIVE_LABEL.idle, detail: "No engine run is working on its tasks" };
+    if (a.state === "unknown") return unknown(typeof a.reason === "string" ? a.reason.slice(0, 80) : "Activity can't be confirmed");
+    const when = isFinite(at) ? " · " + ago(nowMs - at) : "";
+    const label = a.state === "blocked" && a.stopped === true ? "Stopped" : LIVE_LABEL[a.state];
+    return { state: a.state, label, detail: (issue || "Task") + when, issue };
+  }
+
+  const api = { AGENTS, PILL, LIVE_STATES, liveView, agentStats, resultCredits, aisWithOpenTasks, totals, queue, activity, laneStatus, safeUrl, agentName, errorMessage, isIssueId: s => ID_RE.test(String(s)) };
   root.ACPCommandCore = api;
   if (typeof document === "undefined") return;
 
@@ -176,6 +218,16 @@
     const badge = el("span", "badge"); badge.appendChild(icon(a.glyph));
     const title = el("div");
     title.append(el("h3", null, a.name), pill(s.status));
+    const live = overview ? liveView(overview.activity, a.key, Date.now()) : null;
+    if (live) {
+      // The avatar itself carries the live state; only "working" animates, and only from a fresh heartbeat.
+      badge.classList.add("live", "live-" + live.state);
+      badge.dataset.live = live.state;
+      const line = el("p", "live-line live-" + live.state);
+      line.setAttribute("role", "status");
+      line.append(el("span", "live-dot"), el("b", null, live.label), el("span", "live-detail muted", live.detail));
+      title.append(line);
+    }
     head.append(badge, title);
     const prog = el("div", "prog");
     const bar = el("div", "bar"); const fill = el("i"); fill.style.width = s.percent + "%"; bar.appendChild(fill);
@@ -317,6 +369,12 @@
     tick(); setInterval(tick, 15000);
     render(); load();
     setInterval(() => { if (!document.hidden) load(); }, 60000);
+    // Hidden tabs don't refresh (the line above) and pause the avatar animation; coming back checks again at once,
+    // so a stale "Working now" is never left on screen.
+    document.addEventListener("visibilitychange", () => {
+      document.documentElement.toggleAttribute("data-hidden", document.hidden);
+      if (!document.hidden && !$("refresh").disabled) load();
+    });
   }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start); else start();
 })(typeof window !== "undefined" ? window : globalThis);

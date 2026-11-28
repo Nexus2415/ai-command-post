@@ -1,0 +1,33 @@
+/* Live worker activity on the Team map avatars (ARN-163). Adds to the existing badge; the card layout is unchanged.
+   Only "working" moves, and only while the server has a fresh heartbeat from the run that holds the task. */
+.badge.live{position:relative}
+.badge.live::after{content:"";position:absolute;inset:-5px;border-radius:50%;border:1.5px solid transparent;pointer-events:none}
+.badge.live-working{border-color:var(--run);box-shadow:0 0 16px rgba(46,230,166,.55),inset 0 0 10px rgba(46,230,166,.35)}
+.badge.live-working::after{border-color:var(--run) transparent var(--run) transparent;animation:live-orbit 1.6s linear infinite}
+.badge.live-working .glyph{stroke:#c9ffeb;animation:live-pulse 1.6s ease-in-out infinite}
+.badge.live-blocked{border-color:var(--block);box-shadow:0 0 12px rgba(255,122,69,.45),inset 0 0 8px rgba(255,122,69,.3)}
+.badge.live-blocked::after{border-color:rgba(255,122,69,.7)}
+.badge.live-completed{border-color:var(--done)}
+.badge.live-completed::after{border-color:rgba(63,224,138,.55)}
+.badge.live-idle{border-color:var(--idle);box-shadow:none;opacity:.8}
+.badge.live-unknown{border-style:dashed;border-color:var(--muted);box-shadow:none;background:radial-gradient(circle,rgba(127,155,184,.16),rgba(5,14,30,.9) 70%)}
+.badge.live-unknown .glyph{stroke:var(--muted)}
+.badge.live-unknown::after{content:"?";inset:auto -4px -4px auto;width:16px;height:16px;display:grid;place-items:center;border:1px solid var(--muted);background:#071426;color:var(--muted);font:700 10px/1 var(--mono)}
+
+.live-line{margin:6px 0 0;display:flex;flex-wrap:wrap;align-items:center;gap:0 6px;font:500 11.5px/1.45 var(--mono);min-width:0;overflow-wrap:anywhere}
+.live-line b{font-weight:700;color:var(--fg)}
+.live-detail{flex-basis:100%;min-width:0;font-size:11px;letter-spacing:0}
+.live-dot{width:7px;height:7px;border-radius:50%;flex:none;background:var(--muted)}
+.live-line.live-working .live-dot{background:var(--run);box-shadow:0 0 8px var(--run);animation:live-pulse 1.6s ease-in-out infinite}
+.live-line.live-working b{color:var(--run)}
+.live-line.live-blocked .live-dot{background:var(--block)} .live-line.live-blocked b{color:var(--block)}
+.live-line.live-completed .live-dot{background:var(--done)} .live-line.live-completed b{color:var(--done)}
+.live-line.live-idle .live-dot{background:var(--idle)}
+.live-line.live-unknown .live-dot{background:transparent;border:1px dashed var(--muted)}
+.live-line.live-unknown b{color:var(--muted)}
+
+@keyframes live-orbit{to{transform:rotate(360deg)}}
+@keyframes live-pulse{50%{opacity:.45}}
+/* A hidden tab pauses the motion; the page refreshes the moment it is visible again (command.js). */
+html[data-hidden] .badge.live::after,html[data-hidden] .badge.live .glyph,html[data-hidden] .live-dot{animation-play-state:paused}
+@media (prefers-reduced-motion:reduce){.badge.live::after,.badge.live .glyph,.live-dot{animation:none!important}}

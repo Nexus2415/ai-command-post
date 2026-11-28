@@ -186,3 +186,21 @@ create table if not exists acp_claims (
   claimed_at timestamptz not null default now()
 );
 alter table acp_claims enable row level security;
+
+-- Live worker activity (ARN-163, 2026-11-28): one row per lifecycle step of an engine run on a task (src/activity.ts).
+-- Only the engine writes, with the service key; the site reads it for the Team map (api/_lib/worker-activity.js).
+-- The unique key makes a retried write a no-op. Rows older than a day are never read; delete them any time.
+create table if not exists acp_activity (
+  run_id text not null check (char_length(run_id) between 1 and 60),
+  issue_id text not null check (char_length(issue_id) between 1 and 100),
+  seq integer not null check (seq between 1 and 100000),
+  identifier text not null check (char_length(identifier) between 1 and 40),
+  executor text not null check (char_length(executor) between 1 and 60),
+  kind text not null check (kind in ('started', 'step', 'done', 'blocked', 'stopped', 'released')),
+  step integer check (step between 1 and 1000),
+  at timestamptz not null,
+  primary key (run_id, issue_id, seq)
+);
+create index if not exists acp_activity_at_idx on acp_activity (at desc);
+alter table acp_activity enable row level security;
+revoke all on acp_activity from anon, authenticated;
