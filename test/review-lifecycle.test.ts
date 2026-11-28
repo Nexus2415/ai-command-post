@@ -10,11 +10,11 @@ const HEAD = "a".repeat(40), OLD = "b".repeat(40);
 const rv = (login: string, state: string, commitId = HEAD) => ({ login, state, commitId, submittedAt: "2026-11-28T12:00:00Z" });
 const input = (o: Partial<CardInput> = {}): CardInput => ({
   taskId: "ARN-900", repo: "o/r", pr: 1, headSha: HEAD, implementer: "claude", reviews: [], ci: { headSha: HEAD, status: "success" },
-  receipts: [], ownerHeld: false, closed: false, complete: true, ...o,
+  receipts: [], ownerHeld: false, closed: false, complete: true, nowMs:Date.parse("2026-11-28T12:01:00Z"), ...o,
 });
 const card = (o?: Partial<CardInput>) => projectCard(input(o), logins, eligible);
 const st = (o?: Partial<CardInput>) => card(o).state;
-const receipt: ReviewReceipt = { reviewer: "perplexity", taskId: "ARN-900", repo: "o/r", pr: 1, headSha: HEAD, authenticated: true, kind: "perplexity_receipt" };
+const receipt: ReviewReceipt = { reviewer: "perplexity", taskId: "ARN-900", repo: "o/r", pr: 1, headSha: HEAD, authenticated: true, kind: "perplexity_receipt", state:"running", observedAt:Date.parse("2026-11-28T12:00:00Z"),expiresAt:Date.parse("2026-11-28T12:04:00Z") };
 
 test("unassigned, queued and verified_reviewing; receipts must be authenticated and exactly bound", () => {
   assert.equal(st(), "unassigned");
@@ -85,7 +85,7 @@ test("planRequests is replay-safe per head, balances load and emits intents only
   assert.equal(p2.assign.length, 0);
   assert.equal(p2.skipped.length, 2);
   const NEW = "c".repeat(40);
-  const p3 = planRequests([card({ headSha: NEW, ci: { headSha: NEW, status: "pending" } })], ledger, eligible);
+  const p3 = planRequests([card({ headSha: NEW, ci: { headSha: NEW, status: "success" } })], ledger, eligible);
   assert.equal(p3.assign.length, 1);
   assert.equal(p3.assign[0]!.key, requestKey("o/r", 1, NEW, "chatgpt"));
   const q = card({ assigned: "perplexity" });
@@ -93,4 +93,13 @@ test("planRequests is replay-safe per head, balances load and emits intents only
   assert.equal(r1.request.length, 1);
   assert.equal(planRequests([q], new Set([r1.request[0]!.key]), eligible).request.length, 0);
   assert.equal(planRequests([card({ ownerHeld: true }), card({ implementer: undefined }), card({ complete: false })], new Set(), eligible).assign.length, 0);
+});
+
+test("ARN-176 never reports stale review receipts as working or dispatches while validation is pending",()=>{
+ const now=input().nowMs;
+ for(const bad of [{state:"finished" as const},{expiresAt:now},{observedAt:now+1},{expiresAt:now+500000},{kind:"codex_summary" as const}]) assert.equal(st({assigned:"perplexity",receipts:[{...receipt,...bad}]}),"queued");
+ assert.equal(planRequests([card({assigned:"perplexity",ci:{headSha:HEAD,status:"pending"}})],new Set(),eligible).request.length,0);
+ assert.equal(planRequests([card({assigned:"perplexity",reviews:[rv("arnexyia-perplexity[bot]","APPROVED")],ci:{headSha:HEAD,status:"pending"}})],new Set(),eligible).request.length,0);
+ assert.equal(chooseReviewer("claude",["gemini","grok"]),undefined);
+ assert.equal(st({headSha:"not-a-sha"}),"blocked_unknown");
 });

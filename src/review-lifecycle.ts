@@ -13,6 +13,7 @@ export type CiStatus = "success" | "failure" | "pending" | "unknown";
 export interface ReviewReceipt {
   reviewer: string; taskId: string; repo: string; pr: number; headSha: string; authenticated: boolean;
   kind: "codex_summary" | "claude_action_run" | "perplexity_receipt";
+  state: "running" | "finished"; observedAt: number; expiresAt: number;
 }
 export interface CardInput {
   taskId: string; repo: string; pr: number; headSha: string;
@@ -23,6 +24,7 @@ export interface CardInput {
   receipts: ReviewReceipt[];
   ownerHeld: boolean; closed: boolean;
   complete: boolean; // false when any read was partial or failed
+  nowMs: number; // trusted snapshot clock, never a provider or comment timestamp
 }
 export interface Card {
   state: ReviewState; taskId: string; repo: string; pr: number; headSha: string;
@@ -32,12 +34,15 @@ export interface Card {
 }
 
 /** Durable identity of one review request: a new head is a new request, the same head never repeats. */
+const ACTIVE = new Set(["claude","chatgpt","perplexity","codex"]);
+const SHA = /^[a-f0-9]{40}$/;
+const safeBinding = (c: {taskId:string;repo:string;pr:number;headSha:string}) => /^ARN-[1-9]\\d{0,8}$/.test(c.taskId) && /^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(c.repo) && Number.isSafeInteger(c.pr) && c.pr>0 && SHA.test(c.headSha);
 export const requestKey = (repo: string, pr: number, headSha: string, reviewer: string) => `acp-review:${repo}#${pr}@${headSha}:${reviewer}`;
 
 /** Deterministic: never the implementer, least load first, then the order of `eligible`. */
 export function chooseReviewer(implementer: string | undefined, eligible: readonly string[], load: Record<string, number> = {}): string | undefined {
-  if (!implementer) return undefined;
-  const pool = eligible.map((id, i) => ({ id, i })).filter((e) => e.id !== implementer);
+  if (!implementer || !ACTIVE.has(implementer)) return undefined;
+  const pool = [...new Set(eligible)].map((id, i) => ({ id, i })).filter((e) => ACTIVE.has(e.id) && e.id !== implementer);
   pool.sort((a, b) => (load[a.id] ?? 0) - (load[b.id] ?? 0) || a.i - b.i);
   return pool[0]?.id;
 }
@@ -50,12 +55,12 @@ export function projectCard(c: CardInput, logins: Map<string, AgentKey>, eligibl
   });
   if (c.ownerHeld) return out("owner_held", "Owner-held or deferred; not in the review queue");
   if (c.closed) return out("blocked_unknown", "PR is closed or merged; not an active review");
-  if (!c.complete || !c.headSha) return out("blocked_unknown", "Incomplete read; state unknown", "unknown");
-  if (!c.implementer) return out("blocked_unknown", "Implementer not bound to this task/PR; independence cannot be established", "unknown");
+  if (!c.complete || !safeBinding(c) || !Number.isSafeInteger(c.nowMs) || c.nowMs<=0) return out("blocked_unknown", "Incomplete or invalid read; state unknown", "unknown");
+  if (!c.implementer || !ACTIVE.has(c.implementer)) return out("blocked_unknown", "Implementer not bound to this task/PR; independence cannot be established", "unknown");
   if (c.assigned === c.implementer) return out("blocked_unknown", "Assigned reviewer is the implementer (self-review refused)");
-  if (c.assigned && !eligible.includes(c.assigned)) return out("blocked_unknown", `Assigned reviewer ${c.assigned} is not eligible`);
-  const author = [...logins].find(([, a]) => a === c.implementer)?.[0] ?? "unbound-implementer";
-  const v = independentReview({ author, headSha: c.headSha, reviews: c.reviews }, logins);
+  if (c.assigned && (!ACTIVE.has(c.assigned) || !eligible.includes(c.assigned))) return out("blocked_unknown", `Assigned reviewer ${c.assigned} is not eligible`);
+  const distinctLogins = new Map([...logins].filter(([,a]) => ACTIVE.has(a) && a!==c.implementer && eligible.includes(a)));
+  const v = independentReview({ author:"unbound-implementer", headSha: c.headSha, reviews: c.reviews.filter(r=>Number.isFinite(Date.parse(r.submittedAt)) && Date.parse(r.submittedAt)<=c.nowMs) }, distinctLogins);
   const ciOk = c.ci.headSha === c.headSha;
   if (v.status === "changes_requested") return out("changes_requested", `${v.by} requested changes on this head; route to ${c.implementer}`, "github_review", v.by ?? null);
   if (v.status === "approved") {
@@ -67,8 +72,11 @@ export function projectCard(c: CardInput, logins: Map<string, AgentKey>, eligibl
   }
   const staleChanges = c.reviews.some((r) => r.state === "CHANGES_REQUESTED" && r.commitId !== c.headSha && logins.has(r.login.toLowerCase()) && logins.get(r.login.toLowerCase()) !== c.implementer);
   if (staleChanges && !(ciOk && c.ci.status === "success")) return out("rework", "Changes were requested on an older head; new head not yet validated");
+  if (!ciOk || c.ci.status==="unknown") return out("blocked_unknown","Exact-head validation unavailable","unknown");
+  if (c.ci.status==="failure") return out("rework","Validation failed on this head");
+  if (c.ci.status==="pending") return out("queued","Waiting for exact-head validation");
   if (!c.assigned) return out("unassigned", "No independent reviewer recorded for this head");
-  const hit = c.receipts.find((r) => r.authenticated && r.reviewer === c.assigned && r.taskId === c.taskId && r.repo === c.repo && r.pr === c.pr && r.headSha === c.headSha);
+  const hit = c.receipts.find((r) => r.authenticated === true && r.state==="running" && Number.isSafeInteger(r.observedAt) && Number.isSafeInteger(r.expiresAt) && r.observedAt<=c.nowMs && c.nowMs<r.expiresAt && r.expiresAt-r.observedAt<=240000 && r.reviewer === c.assigned && r.taskId === c.taskId && r.repo === c.repo && r.pr === c.pr && r.headSha === c.headSha && ((r.reviewer==="codex" && r.kind==="codex_summary") || (r.reviewer==="claude" && r.kind==="claude_action_run") || (r.reviewer==="perplexity" && r.kind==="perplexity_receipt")));
   if (hit) return out("verified_reviewing", `${hit.kind} receipt bound to this exact head`, "verified_receipt", hit.reviewer);
   return out("queued", `Assigned to ${c.assigned}; no verified activity yet (the engine cannot see external ChatGPT/Claude/Perplexity sessions)`);
 }
@@ -83,6 +91,7 @@ export function planRequests(cards: readonly Card[], ledger: ReadonlySet<string>
   // One request per head, whoever was chosen: replay must not flip to another reviewer and ask again.
   const done = (c: Card) => { const p = `acp-review:${c.repo}#${c.pr}@${c.headSha}:`; return [...ledger, ...seen].some((k) => k.startsWith(p)); };
   for (const card of cards) {
+    if (!safeBinding(card)) continue;
     if (card.state === "unassigned") {
       const reviewer = chooseReviewer(card.implementer ?? undefined, eligible, work);
       if (!reviewer) { plan.skipped.push({ key: `${card.repo}#${card.pr}@${card.headSha}`, why: "no eligible distinct reviewer" }); continue; }
@@ -90,7 +99,7 @@ export function planRequests(cards: readonly Card[], ledger: ReadonlySet<string>
       if (done(card)) { plan.skipped.push({ key, why: "already requested for this head" }); continue; }
       seen.add(key); work[reviewer] = (work[reviewer] ?? 0) + 1;
       plan.assign.push({ card, reviewer, key });
-    } else if (card.state === "queued" && card.requestKey) {
+    } else if (card.state === "queued" && card.requestKey && card.activity.evidence==="none_observed" && card.reason.startsWith("Assigned to ") && card.assignedReviewer && ACTIVE.has(card.assignedReviewer) && eligible.includes(card.assignedReviewer) && card.assignedReviewer!==card.implementer && card.requestKey===requestKey(card.repo,card.pr,card.headSha,card.assignedReviewer)) {
       if (done(card)) { plan.skipped.push({ key: card.requestKey, why: "already requested for this head" }); continue; }
       seen.add(card.requestKey);
       plan.request.push({ card, key: card.requestKey });
