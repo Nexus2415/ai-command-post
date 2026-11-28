@@ -315,11 +315,26 @@ async function plan(d: Deps, cmd: Issue, lead: AgentKey, report: TickReport): Pr
   report.planned.push(`${cmd.identifier} → ${valid.length} sub-tasks`);
 }
 
+/**
+ * Posts a blocked result and closes the task. A blocked task is normally Canceled (move it back to Todo to retry), but
+ * if this run opened a real pull request the task stays In Progress: Linear's GitHub link closes a canceled task's
+ * pull request, which would throw away work the owner may still want to merge. In Progress also keeps the engine
+ * from picking the task up again; the owner marks it Done after merging, or moves it to Todo to retry.
+ */
+async function closeBlocked(d: Deps, task: Issue, env: ToolEnv, result: string): Promise<void> {
+  const prs = env.openedPullRequests ?? [];
+  const note = prs.length
+    ? `\n\nLeft In Progress, not Canceled, so its pull request stays open (canceling would make Linear close it): ${prs.join(", ")}. Review it and merge if it is good, then mark this task Done; or move it to Todo to retry.`
+    : "";
+  await d.store.comment(task.id, signed(d, "result", task.id, `${result}${note}`));
+  if (!prs.length) await d.store.setState(task.id, d.cfg.linearTeamKey, "canceled");
+}
+
 /** One agent works one task with tools until it reports a result. */
 export async function work(d: Deps, task: Issue, agent: AgentKey, report: TickReport): Promise<void> {
   const profile = AGENTS[agent];
   // Links the task names are fetchable; links in later tool results are added as they arrive (exact match only).
-  const env: ToolEnv = { ...d.toolEnv(task), allowedUrls: new Set(urlsIn(`${task.title}\n${task.description}`)), openedBranches: new Set() };
+  const env: ToolEnv = { ...d.toolEnv(task), allowedUrls: new Set(urlsIn(`${task.title}\n${task.description}`)), openedBranches: new Set(), openedPullRequests: [] };
   // Only offer tools whose credentials are configured, so a worker never plans around a tool that can't run.
   const tools = profile.tools.filter(
     (t) => TOOL_DOCS[t] && !(t.startsWith("firecrawl.") && !env.firecrawlKey) && !(t.startsWith("github.") && !env.githubToken && !env.githubAuth) && !(t.startsWith("vercel.") && !env.vercelToken),
@@ -330,7 +345,7 @@ export async function work(d: Deps, task: Issue, agent: AgentKey, report: TickRe
     ? "\n- To look around a repo, call github.list_tree once, then read several files per reply with github.read_files instead of one file at a time."
     : "";
   const codeRule = tools.includes("github.pr_checks")
-    ? "\n- If you open or update a pull request, call github.pr_checks before finishing. Report done only when it says ALL PASSED, and put the PR link and that result in your final report. If checks fail, read the failing lines, fix them with github.update_pull_request, and check again. If you run out of replies first, report blocked with what still fails."
+    ? "\n- If you open or update a pull request, call github.pr_checks before finishing. Report done only when it says ALL PASSED, and put the PR link and that result in your final report. If it says no checks (or no real checks) have run yet, or STILL RUNNING, call it again: that is not a result. If checks fail, read the failing lines, fix them with github.update_pull_request, and check again. If you run out of replies first, report blocked with what still fails."
     : "";
   const messages: ChatMessage[] = [
     {
@@ -393,8 +408,7 @@ export async function work(d: Deps, task: Issue, agent: AgentKey, report: TickRe
         return;
       }
       // A tool may already have created durable state. Fail closed rather than replaying it automatically.
-      await d.store.comment(task.id, signed(d, "result", task.id, `${RESULT_MARKER} (${profile.name}, blocked)\n\nModel/provider failure after a tool call; automatic replay was stopped to avoid duplicating side effects. Error: ${reason}`));
-      await d.store.setState(task.id, d.cfg.linearTeamKey, "canceled");
+      await closeBlocked(d, task, env, `${RESULT_MARKER} (${profile.name}, blocked)\n\nModel/provider failure after a tool call; automatic replay was stopped to avoid duplicating side effects. Error: ${reason}`);
       report.worked.push(`${task.identifier} blocked after tool call`);
       return;
     }
@@ -404,8 +418,7 @@ export async function work(d: Deps, task: Issue, agent: AgentKey, report: TickRe
         report.waiting.push(`${task.identifier}: ${out.blocked}`);
         return;
       }
-      await d.store.comment(task.id, signed(d, "result", task.id, `${RESULT_MARKER} (${profile.name}, blocked)\n\nExecution became blocked after a tool call; automatic replay was stopped to avoid duplicating side effects. Reason: ${out.blocked}`));
-      await d.store.setState(task.id, d.cfg.linearTeamKey, "canceled");
+      await closeBlocked(d, task, env, `${RESULT_MARKER} (${profile.name}, blocked)\n\nExecution became blocked after a tool call; automatic replay was stopped to avoid duplicating side effects. Reason: ${out.blocked}`);
       report.worked.push(`${task.identifier} blocked after tool call`);
       return;
     }
@@ -413,9 +426,11 @@ export async function work(d: Deps, task: Issue, agent: AgentKey, report: TickRe
     const j = extractJson(out);
     if (j && typeof j["final"] === "string") {
       const status = j["status"] === "blocked" ? "blocked" : "done";
-      await d.store.comment(task.id, signed(d, "result", task.id, `${RESULT_MARKER} (${profile.name}, ${status})\n\n${j["final"]}`));
-      // A blocked task is closed as canceled so its command can still be summarized; move it back to Todo to retry.
-      await d.store.setState(task.id, d.cfg.linearTeamKey, status === "done" ? "completed" : "canceled");
+      const result = `${RESULT_MARKER} (${profile.name}, ${status})\n\n${j["final"]}`;
+      if (status === "done") {
+        await d.store.comment(task.id, signed(d, "result", task.id, result));
+        await d.store.setState(task.id, d.cfg.linearTeamKey, "completed");
+      } else await closeBlocked(d, task, env, result);
       report.worked.push(`${task.identifier} ${status} by ${profile.name}`);
       return;
     }
@@ -429,8 +444,7 @@ export async function work(d: Deps, task: Issue, agent: AgentKey, report: TickRe
           report.waiting.push(`${task.identifier}: ${stop}`);
           return;
         }
-        await d.store.comment(task.id, signed(d, "result", task.id, `${RESULT_MARKER} (${profile.name}, blocked)\n\n${stop} Stopped before the next tool call; automatic replay is off to avoid duplicating side effects.`));
-        await d.store.setState(task.id, d.cfg.linearTeamKey, "canceled");
+        await closeBlocked(d, task, env, `${RESULT_MARKER} (${profile.name}, blocked)\n\n${stop} Stopped before the next tool call; automatic replay is off to avoid duplicating side effects.`);
         report.worked.push(`${task.identifier} stopped by Stop everything`);
         return;
       }
@@ -446,8 +460,7 @@ export async function work(d: Deps, task: Issue, agent: AgentKey, report: TickRe
       : "Your reply was not valid JSON in the required shape. Reply with JSON only.";
     messages.push({ role: "user", content: `${why}${repliesLeftNote(left)}` });
   }
-  await d.store.comment(task.id, signed(d, "result", task.id, `${RESULT_MARKER} (${profile.name}, blocked)\n\nStopped after ${d.cfg.maxStepsPerTask} steps without a final report. Raise ACP_MAX_STEPS or narrow the task.`));
-  await d.store.setState(task.id, d.cfg.linearTeamKey, "canceled");
+  await closeBlocked(d, task, env, `${RESULT_MARKER} (${profile.name}, blocked)\n\nStopped after ${d.cfg.maxStepsPerTask} steps without a final report. Raise ACP_MAX_STEPS or narrow the task.`);
   report.worked.push(`${task.identifier} hit step limit`);
 }
 

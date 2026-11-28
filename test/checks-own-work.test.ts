@@ -110,7 +110,8 @@ test("pr_checks waits for checks to finish, then reports ALL PASSED", async () =
   const res = await r.run("github.pr_checks", { pr: 7 });
   assert.equal(res.ok, true);
   assert.match(res.output, /ALL PASSED/);
-  assert.equal(r.sleeps.length, 2);
+  // Two polls while running, then one more to confirm no late check turned up.
+  assert.equal(r.sleeps.length, 3);
 });
 
 test("pr_checks shows the failing lines of a failed test job", async () => {
