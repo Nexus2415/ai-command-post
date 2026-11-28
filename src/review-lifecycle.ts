@@ -80,16 +80,18 @@ export function planRequests(cards: readonly Card[], ledger: ReadonlySet<string>
   const plan: Plan = { assign: [], request: [], skipped: [] };
   const seen = new Set<string>();
   const work = { ...load };
+  // One request per head, whoever was chosen: replay must not flip to another reviewer and ask again.
+  const done = (c: Card) => { const p = `acp-review:${c.repo}#${c.pr}@${c.headSha}:`; return [...ledger, ...seen].some((k) => k.startsWith(p)); };
   for (const card of cards) {
     if (card.state === "unassigned") {
       const reviewer = chooseReviewer(card.implementer ?? undefined, eligible, work);
       if (!reviewer) { plan.skipped.push({ key: `${card.repo}#${card.pr}@${card.headSha}`, why: "no eligible distinct reviewer" }); continue; }
       const key = requestKey(card.repo, card.pr, card.headSha, reviewer);
-      if (ledger.has(key) || seen.has(key)) { plan.skipped.push({ key, why: "already requested for this head" }); continue; }
+      if (done(card)) { plan.skipped.push({ key, why: "already requested for this head" }); continue; }
       seen.add(key); work[reviewer] = (work[reviewer] ?? 0) + 1;
       plan.assign.push({ card, reviewer, key });
     } else if (card.state === "queued" && card.requestKey) {
-      if (ledger.has(card.requestKey) || seen.has(card.requestKey)) { plan.skipped.push({ key: card.requestKey, why: "already requested for this head" }); continue; }
+      if (done(card)) { plan.skipped.push({ key: card.requestKey, why: "already requested for this head" }); continue; }
       seen.add(card.requestKey);
       plan.request.push({ card, key: card.requestKey });
     }
