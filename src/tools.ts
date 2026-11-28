@@ -1,4 +1,5 @@
 import { decide, type PolicyContext } from "./policy.ts";
+import type { DocumentCapability, DocumentReceipt } from "./document-deliverable.ts";
 
 type Fetch = typeof fetch;
 
@@ -19,6 +20,9 @@ export interface ToolEnv {
   firecrawlKey?: string;
   vercelToken?: string;
   dryRun: boolean;
+  /** ARN-169: explicitly bound synthetic capability; no production default. */
+  document?: DocumentCapability;
+  documentReceipt?: DocumentReceipt;
   policy: PolicyContext;
   /** Posts a comment on the task being worked (linear.comment). */
   comment: (body: string) => Promise<void>;
@@ -482,6 +486,14 @@ const HANDLERS: Record<string, (input: Record<string, unknown>, env: ToolEnv) =>
     const j = await firecrawl(env, "/v2/scrape", { url, formats: ["markdown"], onlyMainContent: true });
     return j.data?.markdown ?? "";
   },
+  async "document.create"(input, env) {
+    if (!env.document || env.dryRun) throw new Error("Private document capability unavailable");
+    env.documentReceipt = undefined;
+    const r = await env.document.create(input);
+    if (!await env.document.verify(r)) throw new Error("Private document bytes not independently confirmed by storage readback");
+    env.documentReceipt = r;
+    return JSON.stringify({artifactId:r.artifactId,filename:r.filename,mime:r.mime,bytes:r.bytes,sha256:r.sha256});
+  },
   async "linear.comment"(input, env) {
     const body = str(input, "body");
     await env.comment(body);
@@ -527,9 +539,12 @@ export const TOOL_DOCS: Record<string, string> = {
   "firecrawl.search": '{"query":"text","limit?":5} — web search',
   "firecrawl.scrape": '{"url":"https://..."} — fetch one page as markdown',
   "linear.comment": '{"body":"markdown"} — post a progress note on your task',
+  "document.create": '{"filename":"report.docx","title":"Report","sections":[{"heading":"Summary","paragraphs":["Text"]}]} — create one private DOCX deliverable and return its verified receipt; only when explicitly available',
   "vercel.list_deployments": '{"project?":"name or id","teamId?":"team_...","limit?":10} — list recent Vercel deployments (read-only)',
   "vercel.deployment_status": '{"id":"dpl_... or url","teamId?":"team_..."} — state and error of one deployment (read-only)',
 };
+
+export function currentDocumentReceipt(env: ToolEnv): DocumentReceipt | undefined { return env.documentReceipt; }
 
 export async function runTool(call: ToolCall, allowed: string[], env: ToolEnv): Promise<ToolResult> {
   if (!allowed.includes(call.tool)) return { ok: false, output: `Tool ${call.tool} is not available to this agent` };
