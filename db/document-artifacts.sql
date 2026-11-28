@@ -80,3 +80,21 @@ begin
   return jsonb_build_object('ok',true,'receipt',jsonb_build_object('artifactId',a.artifact_id,'taskId',a.task_id,'projectId',a.project_id,'threadId',a.thread_id,'filename',a.filename,'mime','application/vnd.openxmlformats-officedocument.wordprocessingml.document','bytes',a.bytes,'sha256',a.sha256),'data',encode(a.data,'base64'));
 end $$;
 revoke all on function public.ws_document_get(uuid,uuid,uuid,uuid,text,uuid,timestamptz) from public,anon,authenticated,service_role;
+
+
+-- Named owner retrieval is read-only and separate from an expired worker grant.
+-- An authenticated server adapter must derive p_principal; NEVER accept it from the browser.
+-- No EXECUTE grant until the authority/retention policy and deployed role mapping are reviewed.
+create or replace function public.ws_document_owner_get(p_artifact uuid,p_project uuid,p_thread uuid,p_principal text)
+returns jsonb language plpgsql security definer set search_path=pg_catalog as $$
+declare a public.ws_document_artifacts%rowtype;
+begin
+  perform 1 from public.ws_control where id=1 and stopped=false for share;
+  if not found then return jsonb_build_object('ok',false,'reason','stopped'); end if;
+  perform 1 from public.ws_threads where id=p_thread and project_id=p_project and private=true for share;
+  if not found then return jsonb_build_object('ok',false,'reason','scope'); end if;
+  select * into a from public.ws_document_artifacts where artifact_id=p_artifact and project_id=p_project and thread_id=p_thread and principal=p_principal and not revoked for share;
+  if not found then return jsonb_build_object('ok',false,'reason','scope'); end if;
+  return jsonb_build_object('ok',true,'receipt',jsonb_build_object('artifactId',a.artifact_id,'taskId',a.task_id,'projectId',a.project_id,'threadId',a.thread_id,'filename',a.filename,'mime','application/vnd.openxmlformats-officedocument.wordprocessingml.document','bytes',a.bytes,'sha256',a.sha256),'data',encode(a.data,'base64'));
+end $$;
+revoke all on function public.ws_document_owner_get(uuid,uuid,uuid,text) from public,anon,authenticated,service_role;
