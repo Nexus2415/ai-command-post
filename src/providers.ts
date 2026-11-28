@@ -5,7 +5,21 @@ export interface ChatMessage {
   content: string;
 }
 
+/** Provider-reported observations only, not an authenticated gateway usage receipt or settlement authority. */
+export interface ReportedUsage {
+  provider: string;
+  requestedModel: string;
+  reportedModel: string;
+  responseId: string;
+  totalInputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number | null;
+  cacheWriteTokens: number | null;
+  reasoningTokens: number | null;
+}
+
 export interface ChatResult {
+  reportedUsage?: ReportedUsage;
   text: string;
   inputTokens: number;
   outputTokens: number;
@@ -62,6 +76,35 @@ async function postJson(f: Fetch, provider: string, url: string, headers: Record
   }
 }
 
+// Never convert a malformed/missing metered response into zero usage. Reported counts are not proof of tariff, cost or authority.
+function usageCount(provider: string, value: unknown, field: string): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) throw new ProviderError(provider, 200, "Invalid reported usage: " + field);
+  return value;
+}
+function optionalCount(provider: string, value: unknown, field: string): number | null {
+  return value == null ? null : usageCount(provider, value, field);
+}
+function identity(provider: string, value: unknown, field: string): string {
+  if (typeof value !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/.test(value)) throw new ProviderError(provider, 200, "Invalid provider response " + field);
+  return value;
+}
+function observedUsage(provider: string, requestedModel: string, j: any, maxOutputTokens: number): ReportedUsage {
+  const u = j?.usage;
+  if (!u || typeof u !== "object" || Array.isArray(u)) throw new ProviderError(provider, 200, "Missing reported usage");
+  const responseId = identity(provider, j.id, "ID"), reportedModel = identity(provider, j.model, "model");
+  // Preserve both identities. Aliases are legitimate for legacy chat but cannot establish a paid pinned-tariff match.
+  const anthropic = provider === "anthropic";
+  const input = usageCount(provider, anthropic ? u.input_tokens : u.prompt_tokens, "input");
+  const outputTokens = usageCount(provider, anthropic ? u.output_tokens : u.completion_tokens, "output");
+  const cacheReadTokens = optionalCount(provider, anthropic ? u.cache_read_input_tokens : u.prompt_tokens_details?.cached_tokens, "cache read");
+  const cacheWriteTokens = optionalCount(provider, anthropic ? u.cache_creation_input_tokens : u.prompt_tokens_details?.cache_write_tokens, "cache write");
+  const reasoningTokens = optionalCount(provider, anthropic ? null : u.completion_tokens_details?.reasoning_tokens, "reasoning");
+  const totalInputTokens = anthropic ? input + (cacheReadTokens ?? 0) + (cacheWriteTokens ?? 0) : input;
+  if (!Number.isSafeInteger(totalInputTokens + outputTokens) || outputTokens > maxOutputTokens || (cacheReadTokens ?? 0) + (cacheWriteTokens ?? 0) > totalInputTokens || (reasoningTokens ?? 0) > outputTokens) throw new ProviderError(provider, 200, "Reported usage exceeds bounds");
+  if (!anthropic && usageCount(provider, u.total_tokens, "total") !== totalInputTokens + outputTokens) throw new ProviderError(provider, 200, "Inconsistent reported token total");
+  return { provider, requestedModel, reportedModel, responseId, totalInputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, reasoningTokens };
+}
+
 function splitSystem(messages: ChatMessage[]): { system: string; rest: ChatMessage[] } {
   const system = messages.filter((m) => m.role === "system").map((m) => m.content).join("\n\n");
   return { system, rest: messages.filter((m) => m.role !== "system") };
@@ -79,7 +122,8 @@ export function anthropicClient(apiKey: string, model: string, f: Fetch = fetch)
         { model, max_tokens: maxOutputTokens, system, messages: rest },
       );
       const text = (j.content ?? []).filter((b: any) => b.type === "text").map((b: any) => b.text).join("");
-      return { text, inputTokens: j.usage?.input_tokens ?? 0, outputTokens: j.usage?.output_tokens ?? 0, truncated: j.stop_reason === "max_tokens" };
+      const reportedUsage = observedUsage("anthropic", model, j, maxOutputTokens);
+      return { text, inputTokens: reportedUsage.totalInputTokens, outputTokens: reportedUsage.outputTokens, reportedUsage, truncated: j.stop_reason === "max_tokens" };
     },
   };
 }
@@ -92,12 +136,15 @@ export function chatCompletionsClient(provider: string, baseUrl: string, apiKey:
       body[provider === "openai" ? "max_completion_tokens" : "max_tokens"] = maxOutputTokens;
       const j = await postJson(f, provider, `${baseUrl}/chat/completions`, { authorization: `Bearer ${apiKey}` }, body);
       const text = j.choices?.[0]?.message?.content ?? "";
+      if (typeof text !== "string") throw new ProviderError(provider, 200, "Invalid response text");
+      const reportedUsage = observedUsage(provider, model, j, maxOutputTokens);
       const citations: string[] = Array.isArray(j.citations) ? j.citations : [];
       const withCites = citations.length ? `${text}\n\nSources:\n${citations.map((c) => `- ${c}`).join("\n")}` : text;
       return {
         text: withCites,
-        inputTokens: j.usage?.prompt_tokens ?? 0,
-        outputTokens: j.usage?.completion_tokens ?? 0,
+        inputTokens: reportedUsage.totalInputTokens,
+        outputTokens: reportedUsage.outputTokens,
+        reportedUsage,
         truncated: j.choices?.[0]?.finish_reason === "length",
       };
     },
