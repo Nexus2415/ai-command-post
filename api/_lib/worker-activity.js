@@ -23,8 +23,8 @@ export const KINDS = Object.freeze(["started", "step", "done", "blocked", "stopp
 const TERMINAL = { done: "completed", blocked: "blocked", stopped: "blocked", released: "idle" };
 /** Longest gap between two heartbeats of a live run: a 120 s model reply plus a 90 s tool call, plus slack. */
 export const HEARTBEAT_TTL_MS = 4 * 60_000;
-/** The engine job is killed after 12 minutes; a claim older than this belongs to a run that has ended (src/claims.ts). */
-export const LEASE_MS = 13 * 60_000;
+/** The engine job is killed after 25 minutes; a claim older than this belongs to a run that has ended. Same value as src/claims.ts. */
+export const LEASE_MS = 30 * 60_000;
 /** How long a finished run still shows as completed or blocked before the AI reads idle again. */
 export const RECENT_MS = 2 * 60 * 60_000;
 /** Rows older than this are not read at all. */
