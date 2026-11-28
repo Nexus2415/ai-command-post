@@ -19,7 +19,8 @@
       const list = $("hWork"); list.replaceChildren();
       const items = W.activeWork(o, 4);
       if (!items.length) list.append(W.el("li", "ax-empty", "Nothing open right now."));
-      for (const it of items) list.append(W.row(it));
+      for (const it of items) list.append(W.row(it, o.activity));
+      W.watchActivity(o);
     } catch (e) {
       $("hWork").replaceChildren(W.el("li", "ax-empty", "Work couldn't be loaded."));
       const m = $("hMsg"); m.hidden = false; m.className = "ax-msg err"; m.textContent = e.message;
