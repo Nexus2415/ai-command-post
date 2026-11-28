@@ -11,6 +11,7 @@ export type Tier = "green" | "yellow" | "red";
 export const TOOL_TIERS: Record<string, Tier> = {
   "github.read_file": "green",
   "github.list_tree": "green",
+  "github.read_files": "green",
   "github.search_issues": "green",
   "firecrawl.search": "green",
   "firecrawl.scrape": "green",

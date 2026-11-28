@@ -233,7 +233,7 @@ test("Anthropic client sends system separately and reads usage", async () => {
   const seen: Captured[] = [];
   const c = anthropicClient("k", "m", fakeFetch({ content: [{ type: "text", text: "hi" }], usage: { input_tokens: 7, output_tokens: 3 } }, 200, seen));
   const r = await c.chat([{ role: "system", content: "S" }, { role: "user", content: "U" }], { maxOutputTokens: 10 });
-  assert.deepEqual(r, { text: "hi", inputTokens: 7, outputTokens: 3 });
+  assert.deepEqual(r, { text: "hi", inputTokens: 7, outputTokens: 3, truncated: false });
   const body = JSON.parse(String(seen[0]!.init.body));
   assert.equal(body.system, "S");
   assert.deepEqual(body.messages, [{ role: "user", content: "U" }]);

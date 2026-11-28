@@ -46,6 +46,7 @@ export function urlsIn(text: string): string[] {
 }
 
 const MAX_OUTPUT = 12_000;
+const MAX_FILES_PER_READ = 5;
 const clip = (s: string) => (s.length > MAX_OUTPUT ? `${s.slice(0, MAX_OUTPUT)}\n…[truncated ${s.length - MAX_OUTPUT} chars]` : s);
 
 function str(input: Record<string, unknown>, key: string): string {
@@ -326,6 +327,28 @@ const HANDLERS: Record<string, (input: Record<string, unknown>, env: ToolEnv) =>
     }
     return text;
   },
+  async "github.read_files"(input, env) {
+    const paths = input["paths"];
+    if (!Array.isArray(paths) || paths.length === 0 || paths.length > MAX_FILES_PER_READ || !paths.every((p) => typeof p === "string")) {
+      throw new Error(`"paths" must list 1 to ${MAX_FILES_PER_READ} file paths`);
+    }
+    // Each file gets an even share of the output, so one big file can't hide the others; a cut file says how to page.
+    const share = Math.floor(MAX_OUTPUT / paths.length) - 200;
+    const parts: string[] = [];
+    for (const path of paths as string[]) {
+      let text: string;
+      try {
+        text = await HANDLERS["github.read_file"]!({ repo: input["repo"], path, ...(input["ref"] === undefined ? {} : { ref: input["ref"] }) }, env);
+      } catch (e) {
+        text = `ERROR: ${(e as Error).message}`;
+      }
+      if (text.length > share) {
+        text = `${text.slice(0, share)}\n…[cut here; read the rest with github.read_file and "from"/"to" line numbers]`;
+      }
+      parts.push(`=== ${path} ===\n${text}`);
+    }
+    return parts.join("\n\n");
+  },
   async "github.list_tree"(input, env) {
     const repo = str(input, "repo");
     const ref = gitRef(input["ref"], "HEAD");
@@ -477,6 +500,7 @@ HANDLERS["vercel.deployment_status"] = async (input, env) => {
 export const TOOL_DOCS: Record<string, string> = {
   "github.read_file": '{"repo":"owner/name","path":"src/x.ts","ref?":"branch","from?":1,"to?":400} — read a file (or lines from-to of a long one, up to 400 per read) or list a directory',
   "github.list_tree": '{"repo":"owner/name","ref?":"branch"} — list every file path',
+  "github.read_files": '{"repo":"owner/name","paths":["a.ts","b.html"],"ref?":"branch"} — read up to 5 files in one call (each shares the output limit; page long ones with github.read_file)',
   "github.search_issues": '{"repo":"owner/name","query":"text"} — search issues and PRs',
   "github.open_pull_request":
     '{"repo":"owner/name","branch":"acp/short-name","title":"...","body":"...","files":[{"path":"new/or/small.ts","content":"full file content"},{"path":"existing/big.ts","edits":[{"find":"exact existing text, unique in the file","replace":"new text"}]}]} — open a DRAFT pull request; never merges. Prefer edits for existing files: each find must match the current file exactly once',
