@@ -36,6 +36,11 @@ export interface ToolEnv {
    * can fix its own PR but never push onto another AI's or a person's branch.
    */
   openedBranches?: Set<string>;
+  /**
+   * Links of real (not dry-run) pull requests this task opened in this run. A task that ends blocked with one of these
+   * is left In Progress instead of Canceled, because Linear's GitHub link closes a canceled task's pull request.
+   */
+  openedPullRequests?: string[];
   /** Waits between check polls; tests pass a fake so nothing sleeps. */
   sleep?: (ms: number) => Promise<void>;
 }
@@ -290,6 +295,8 @@ async function writeFiles(env: ToolEnv, repo: string, branch: string, files: { p
 
 export const CHECK_WAIT_MS = 240_000;
 const CHECK_POLL_MS = 15_000;
+/** A check that actually ran: still going, or finished as anything but skipped/neutral. */
+const isRealCheck = (r: any) => r.status !== "completed" || (r.conclusion !== "skipped" && r.conclusion !== "neutral");
 const FAIL_LINE = /not ok|error|fail|✖|assert/i;
 
 /** The lines of a failed job's log that say what broke, plus its tail; logs are untrusted text like any tool output. */
@@ -392,6 +399,7 @@ const HANDLERS: Record<string, (input: Record<string, unknown>, env: ToolEnv) =>
     await writeFiles(env, repo, branch, files, `${title}\n\nOpened by AI Command Post`);
     const pr = await gh(env, `/repos/${repo}/pulls`, { method: "POST", body: JSON.stringify({ title, head: branch, base, body, draft: true }) });
     env.openedBranches?.add(`${repo}#${branch}`);
+    env.openedPullRequests?.push(String(pr.html_url ?? `${repo}#${pr.number}`));
     return `Opened draft PR #${pr.number}: ${pr.html_url}\nNext: call github.pr_checks with {"repo":"${repo}","pr":${pr.number}} and fix any failure with github.update_pull_request before reporting done.`;
   },
   async "github.update_pull_request"(input, env) {
@@ -417,15 +425,24 @@ const HANDLERS: Record<string, (input: Record<string, unknown>, env: ToolEnv) =>
     const pr = await gh(env, `/repos/${repo}/pulls/${n}`);
     const sha = String(pr.head?.sha ?? "");
     if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error("Pull request head commit unknown");
-    // Waiting costs no model tokens: the tool polls until every check finishes or the wait runs out.
+    // Waiting costs no model tokens: the tool polls until the checks have settled or the wait runs out.
+    // Checks register one by one, and an app check can finish as "skipped" before the test run even appears, so a
+    // result counts only when at least one real (not skipped) check has finished, nothing is still running, and the
+    // same checks were there on the poll before (nothing new turned up in between).
     let runs: any[] = [];
+    let before = "";
     for (let waited = 0; ; waited += CHECK_POLL_MS) {
       runs = (await gh(env, `/repos/${repo}/commits/${sha}/check-runs?per_page=50`)).check_runs ?? [];
-      const pending = runs.filter((r) => r.status !== "completed");
-      if ((runs.length && !pending.length) || waited >= CHECK_WAIT_MS) break;
+      const names = runs.map((r) => `${r.id}:${r.status}`).sort().join(",");
+      const settled = runs.some(isRealCheck) && runs.every((r) => r.status === "completed") && names === before;
+      if (settled || waited >= CHECK_WAIT_MS) break;
+      before = names;
       await sleep(CHECK_POLL_MS);
     }
-    if (!runs.length) return `PR #${n} (${sha.slice(0, 7)}): no checks have started yet. Try again later; do not report done without checks.`;
+    if (!runs.length) return `PR #${n} (${sha.slice(0, 7)}): no checks have started yet. Call github.pr_checks again; do not report done or blocked on this.`;
+    if (!runs.some(isRealCheck)) {
+      return `PR #${n} (${sha.slice(0, 7)}): no real checks have run yet (only skipped: ${runs.map((r) => r.name).join(", ")}). Call github.pr_checks again; do not report done or blocked on this.`;
+    }
     const bad = new Set(["failure", "timed_out", "cancelled", "action_required", "startup_failure"]);
     const out: string[] = [];
     for (const r of runs) {
