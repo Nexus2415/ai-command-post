@@ -65,18 +65,60 @@
     gemini: "M12 3l2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5z", codex: "M5 5h14v14H5zM9 9h6M9 13h6M9 17h3", none: "M12 4v8M12 16v.01M4 20h16L12 4z",
     shared: "M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM12 3v6M12 15v6M3 12h6M15 12h6",
   };
+  // Original compact pixel character. No images, extra network requests, or model calls.
+  // Motion is opt-in for a known pending request, never inferred from a Linear lane.
+  function workerAvatar(typing = false) {
+    const s = document.createElementNS(SVG, "svg");
+    s.setAttribute("viewBox", "0 0 34 32");
+    s.setAttribute("aria-hidden", "true");
+    s.setAttribute("class", "ax-worker" + (typing === true ? " ax-typing" : ""));
+    s.setAttribute("shape-rendering", "crispEdges");
+    const path = (d, fill, parent = s) => {
+      const p = document.createElementNS(SVG, "path");
+      p.setAttribute("d", d); p.setAttribute("fill", fill); parent.append(p);
+    };
+    const group = cls => { const g = document.createElementNS(SVG, "g"); g.setAttribute("class", cls); s.append(g); return g; };
+    path("M3 29H31V31H3Z", "#153847");
+    path("M5 16H19V27H5Z", "#777b52");
+    path("M5 17H9V20H5ZM12 20H16V23H12ZM7 24H11V27H7Z", "#a69872");
+    path("M10 16H14V19H10ZM16 17H19V21H16ZM5 21H8V24H5Z", "#434b35");
+    path("M6 3H19V15H6Z", "#cca17e");
+    path("M5 2H17V5H21V8H7V12H5Z", "#40332c");
+    path("M5 1H16V4H20V6H7V9H5Z", "#685c43");
+    path("M11 9H13V11H11ZM17 9H19V11H17Z", "#272528");
+    path("M14 13H17V14H14Z", "#754c3c");
+    path("M4 6H7V13H4Z", "#279fb5");
+    const left = group("ax-worker-left");
+    path("M7 18H11V24H17V27H8Z", "#a69872", left);
+    path("M15 24H19V27H15Z", "#d9b18c", left);
+    const right = group("ax-worker-right");
+    path("M17 18H20V24H24V26H18Z", "#505b40", right);
+    path("M22 23H26V26H22Z", "#d9b18c", right);
+    path("M20 17H33L30 27H17Z", "#65e2f1");
+    path("M21 18H31L29 26H19Z", "#247a90");
+    path("M15 27H30V29H15Z", "#69d9e7");
+    path("M23 20H28V21H23ZM22 23H26V24H22Z", "#91f3ff");
+    path("M27 23H29V24H27Z", "#d1fbff", group("ax-worker-cursor"));
+    return s;
+  }
   const CHEV = "M9 6l6 6-6 6";
   // Open the task locally. External navigation is an explicit, separate action.
   function row(it) {
     const a = el("button", "ax-row");
     a.type = "button";
     a.setAttribute("aria-expanded", "false");
-    const ico = el("span", "ax-ico"); ico.append(icon(GLYPH[it.owner] || GLYPH.none));
+    const ico = el("span", "ax-ico");
+    const assignedActive = it.lane === "active" && ["claude", "chatgpt", "perplexity", "codex"].includes(it.owner);
+    if (assignedActive) {
+      ico.append(workerAvatar(false));
+      ico.title = "Assigned work in progress; live execution not verified";
+    } else ico.append(icon(GLYPH[it.owner] || GLYPH.none));
     const main = el("span", "ax-main");
     main.append(el("strong", null, it.title || "Untitled task"));
     const sub = el("small");
     const by = resultBy(it);
     sub.append(el("span", null, (it.id ? it.id + " · " : "") + ownerName(it.owner) + (by ? " · " + by : "")), el("span", "ax-pill " + (it.lane || ""), label(it.lane)));
+    if (assignedActive) sub.append(el("span", "ax-live-unknown", "Live activity unverified"));
     main.append(sub);
     a.append(ico, main);
     a.append(icon(CHEV, "ax-chev"));
@@ -152,5 +194,5 @@
     if (!r.ok) throw new Error(typeof j.error === "string" ? j.error : "Couldn't load tasks (" + r.status + ").");
     return j;
   }
-  Object.assign(api, { el, icon, row, load, showTask });
+  Object.assign(api, { el, icon, row, load, showTask, workerAvatar });
 })(typeof window !== "undefined" ? window : globalThis);
