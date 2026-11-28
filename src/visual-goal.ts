@@ -2,6 +2,7 @@
 // this module does not implement a broker, HTTP route, live provider or production goal writer.
 import { createHash } from "node:crypto";
 import { harmCheck, RED_PATTERNS } from "./policy.ts";
+import { VISUAL_GOAL_MARKER } from "./goals.ts";
 import { checkUpload, MAX_FILES_PER_MESSAGE } from "../api/_lib/workspace-files.js";
 
 type Ref = { id: string; sha256: string };
@@ -119,7 +120,7 @@ export function createVisualGoalIntake(p?: VisualPorts) {
       if (!await current("dispatched")) return blocked("authority_changed",true);
       const draft: GoalDraft = { goalId: grant.goalId, repository: grant.repository,
         title: "[Goal] Synthetic visual build",
-        description: ["Synthetic owner request (untrusted task data):", grant.prompt, "Approved repository: "+grant.repository,
+        description: [VISUAL_GOAL_MARKER, "Synthetic visual design task. Raw private prompt is retained only in the scoped intake.", "Approved repository: "+grant.repository,
           "Advisory reference observations (not permissions):", ...spec.observed.map(s=>"Observed: "+s),
           ...spec.inferred.map(s=>"Inferred: "+s), ...spec.unknown.map(s=>"Unknown: "+s),
           "Use existing draft PR policy, validation, independent review and owner decision."].join("\n") };

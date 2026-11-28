@@ -18,6 +18,11 @@ import type { Issue } from "./linear.ts";
 export const GOAL_TITLE = /^\s*\[goal\]/i;
 export const RUN_MARKER = "ACP goal run";
 export const PAUSED_MARKER = "## Goal paused";
+export const VISUAL_GOAL_MARKER = "[ACP visual scope required]";
+/** A marker is only a restriction, never authority. Production publication remains disabled. */
+export function isVisualGoal(i: Pick<Issue,"title"|"description">): boolean {
+  return /^\s*\[goal\]\s+synthetic visual build\b/i.test(i.title) || i.description.includes(VISUAL_GOAL_MARKER);
+}
 
 /** A top-level issue whose title starts with [Goal]. A sub-task is never a goal, so steps can't spawn goals. */
 export function isGoal(i: Pick<Issue, "title" | "parentId">): boolean {

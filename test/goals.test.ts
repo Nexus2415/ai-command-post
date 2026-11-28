@@ -305,6 +305,7 @@ test("authorized synthetic image goal opens a draft PR, checks it, and waits for
   const f = (async (url: string, init: RequestInit = {}) => {
     const u = new URL(url);
     if (init.method === "PUT" && u.pathname.includes("/merge")) throw new Error("the engine must never merge");
+    assert.ok(!u.pathname.includes("/repos/acme/other"), "out-of-scope repository is never fetched");
     if (u.pathname === "/repos/acme/app/pulls" && init.method === "POST") drafts.push(JSON.parse(String(init.body)).draft);
     if (u.pathname === "/repos/acme/app/pulls/7") return Response.json({ head: { sha: "a".repeat(40) }, state: "open", draft: true });
     if (u.pathname.includes("/check-runs")) { checked = true; return Response.json({ check_runs: [{ id: 1, name: "Validate", status: "completed", conclusion: "success", app: { slug: "github-actions" } }] }); }
@@ -316,13 +317,20 @@ test("authorized synthetic image goal opens a draft PR, checks it, and waits for
   const seen: ChatMessage[][] = [];
   const claude = scripted([
     planReply(2, "claude"),
+    JSON.stringify({ tool: "github.read_file", input: { repo: "acme/other", path: "secret.txt" } }),
     JSON.stringify({ tool: "github.open_pull_request", input: { repo: "acme/app", title: "Step 1", branch: "acp/step-1", files: [{ path: "a.ts", content: "a" }] } }),
     JSON.stringify({ tool: "github.pr_checks", input: { repo: "acme/app", pr: 7 } }),
     done("Opened https://github.com/acme/app/pull/7, ALL PASSED."),
   ], seen);
   const d = deps(store, { claude });
   const base = d.toolEnv;
-  d.toolEnv = (i) => ({ ...base(i), githubToken: "t", f, sleep: async () => {}, policy: { allowPullRequests: true, allowedRepos: [draft.repository] } });
+  // The engine, not a model-selected repository, narrows the existing broad tool policy.
+  d.toolEnv = (i) => ({ ...base(i), githubToken: "t", f, sleep: async () => {}, policy: { allowPullRequests: true, allowedRepos: [draft.repository,"acme/other"] } });
+  d.visualScope = async id => id===goal.id ? {goalId:id,repository:draft.repository,syntheticOnly:true,expiresAt:Date.now()+60000} : null;
+  const lookup=d.visualScope; d.visualScope=undefined;
+  assert.ok((await tick(d)).waiting.some(w=>w.includes("verified visual scope unavailable")));
+  assert.equal(seen.length,0,"no planning without trusted scope");
+  d.visualScope=lookup;
   await tick(d);
   const [s1, s2] = store.kids(goal.id);
   await tick(d);

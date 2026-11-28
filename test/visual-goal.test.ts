@@ -8,7 +8,7 @@ test("synthetic visual binding consumes one broker attempt and records only advi
   assert.equal([a,b].filter(x=>x.status==="recorded").length,1);
   assert.equal(f.calls(),1);assert.equal(f.commits(),1);
   assert.match(f.draft()!.title,/^\[Goal\]/);assert.match(f.draft()!.description,/Observed: Blue square/);
-  assert.doesNotMatch(f.draft()!.description,/base64|aaaaaaaa|data:/);
+  assert.doesNotMatch(f.draft()!.description,/base64|aaaaaaaa|data:|Build a synthetic status card/);
   assert.equal((await f.run()).status,"blocked");
 });
 test("missing or altered authority, stale fence, cross-thread reference and unavailable vision refuse before any call",async()=>{
