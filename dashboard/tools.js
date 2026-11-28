@@ -236,5 +236,5 @@
   const sw = window.ACPStopSwitch.mount($("stopSwitch"), { post });
   sw.refresh();
   // One after the other, so the password is asked for once.
-  load().then(loadCatalog).catch((e) => say(e.message, "err"));
+  load().then(loadCatalog).catch((e) => { $("catList").replaceChildren(el("p", "msg err", "Plugin directory unavailable. Connection status unknown.")); say(e.message, "err"); });
 })();
