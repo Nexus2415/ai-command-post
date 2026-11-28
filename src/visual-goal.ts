@@ -1,7 +1,6 @@
 // ARN-164: inert visual-goal admission seam. The existing broker owns claim/fence/replay;
 // this module does not implement a broker, HTTP route, live provider or production goal writer.
 import { createHash } from "node:crypto";
-import type { AdmissionBroker } from "./manager.ts";
 import { harmCheck, RED_PATTERNS } from "./policy.ts";
 import { checkUpload, MAX_FILES_PER_MESSAGE } from "../api/_lib/workspace-files.js";
 
@@ -25,7 +24,10 @@ export interface VisualPorts {
   // Trusted authority lookup, never a browser-supplied grant or Linear text.
   grant(id: string): Promise<VisualGrant | null>;
   repositories(): readonly string[];
-  broker: Pick<AdmissionBroker, "claimStatus" | "markDispatched">;
+  broker: {
+    claimStatus(claimId: string): Promise<{ ok: true; attemptId: string; fence: number; state: "claimed" | "dispatched" | "unknown" | "settled" | "released" | "failed" } | { ok: false; reason: string }>;
+    markDispatched(attemptId: string, fence: number): Promise<{ ok: true } | { ok: false; reason: string }>;
+  };
   store: {
     getThread(id: string): Promise<Thread | null>;
     getFiles(threadId: string, ids: string[]): Promise<FileRow[]>;
