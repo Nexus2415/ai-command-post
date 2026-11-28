@@ -18,9 +18,8 @@
     $("tList").setAttribute("aria-labelledby", "tab-" + current);
     if (!overview) return;
     const items = W.tab(overview, current);
-    const list = $("tList"); list.replaceChildren();
-    if (!items.length) list.append(W.el("li", "ax-empty", current === "review" ? "Nothing is waiting for your review." : current === "done" ? "Nothing completed yet." : "No active tasks."));
-    for (const it of items) list.append(W.row(it));
+    const list = $("tList");
+    W.renderRows(list,items,overview.activity,current === "review" ? "Nothing is waiting for review." : current === "done" ? "Nothing completed yet." : "No active tasks.");
   }
   const tabs = [...document.querySelectorAll(".ax-seg [role=tab]")];
   for (const b of tabs) {
@@ -35,14 +34,18 @@
   (async () => {
     try {
       await S.current();
-      overview = await W.load();
+      const apply = o => {
+      overview = o;
+      $("tMsg").hidden=true;
       const c = W.counts(overview);
       $("cTotal").textContent = c.total; $("cProg").textContent = c.active; $("cReview").textContent = c.review; $("cDone").textContent = c.done;
       const when = Date.parse(overview.fetchedAt);
       $("tFresh").textContent = "From Linear" + (isFinite(when) ? ", " + new Date(when).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "") +
         (overview.hasNextPage ? ". Only the first page of tasks is shown." : ".");
       show();
-      W.watchActivity(overview);
+      };
+      apply(await W.load());
+      W.watchActivity(overview,apply,() => { const m=$("tMsg"); m.hidden=false; m.className="ax-msg err"; if (overview) overview = {...overview, activity:null}; m.textContent="Refresh unavailable. Showing last known tasks; activity unverified."; });
     } catch (e) {
       $("tList").replaceChildren(W.el("li", "ax-empty", "Tasks couldn't be loaded."));
       const m = $("tMsg"); m.hidden = false; m.className = "ax-msg err"; m.textContent = e.message;

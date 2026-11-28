@@ -13,14 +13,14 @@
   (async () => {
     try {
       await S.current();
-      const o = await W.load();
-      const c = W.counts(o);
+      const apply=o=>{
+      $("hMsg").hidden=true;
+      const c=W.counts(o);
       $("sOpen").textContent = c.open; $("sReview").textContent = c.review; $("sBlocked").textContent = c.blocked; $("sDone").textContent = c.done;
-      const list = $("hWork"); list.replaceChildren();
-      const items = W.activeWork(o, 4);
-      if (!items.length) list.append(W.el("li", "ax-empty", "Nothing open right now."));
-      for (const it of items) list.append(W.row(it, o.activity));
-      W.watchActivity(o);
+      W.renderRows($("hWork"),W.activeWork(o,4),o.activity,"Nothing open right now.");
+      };
+      const o=await W.load(); apply(o);
+      W.watchActivity(o,apply,()=>{const m=$("hMsg");m.hidden=false;m.className="ax-msg err";m.textContent="Refresh unavailable. Showing last known work; activity unverified.";});
     } catch (e) {
       $("hWork").replaceChildren(W.el("li", "ax-empty", "Work couldn't be loaded."));
       const m = $("hMsg"); m.hidden = false; m.className = "ax-msg err"; m.textContent = e.message;
