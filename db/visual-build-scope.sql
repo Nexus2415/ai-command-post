@@ -2,17 +2,47 @@
 -- Apply after workspace.sql in an isolated test database first. No clients or provider credentials.
 create table if not exists public.ws_visual_scopes (
   scope_id uuid primary key,
+  thread_id uuid not null references public.ws_threads(id) on delete cascade,
   principal text not null check (principal ~ '^[a-f0-9]{64}$'),
-  manifest jsonb not null check (octet_length(manifest::text) <= 24000),
+  manifest jsonb check (octet_length(manifest::text) <= 24000),
   fingerprint text not null check (fingerprint ~ '^[a-f0-9]{64}$'),
   expires_at timestamptz not null,
   saved_at timestamptz not null default clock_timestamp(),
-  state text not null default 'scope_saved' check (state = 'scope_saved'),
+  state text not null default 'scope_saved' check (state in ('scope_saved','invalidated')),
+  check ((state='scope_saved' and manifest is not null) or (state='invalidated' and manifest is null)),
+  check (manifest is null or (manifest->>'threadId')::uuid=thread_id),
   max_budget_micros bigint not null default 0 check (max_budget_micros = 0),
   synthetic_only boolean not null default true check (synthetic_only)
 );
 alter table public.ws_visual_scopes enable row level security;
 revoke all on public.ws_visual_scopes from public, anon, authenticated, service_role;
+create index if not exists ws_visual_scopes_thread_idx on public.ws_visual_scopes(thread_id);
+
+-- Revocation leaves only a tombstone, not the private prompt or image manifest. Never allow the same
+-- preview ticket to re-create a scope after a privacy or reference change. Deleting the thread cascades.
+create or replace function public.ws_invalidate_visual_scopes() returns trigger
+language plpgsql security definer set search_path=pg_catalog as $$
+begin
+  if TG_TABLE_NAME='ws_threads' then
+    if new.private is distinct from old.private or new.project_id is distinct from old.project_id then
+      update public.ws_visual_scopes set state='invalidated',manifest=null where thread_id=old.id and state='scope_saved';
+    end if;
+    return new;
+  end if;
+  -- Any changed/deleted reference invalidates scopes containing it; unreferenced files do not.
+  update public.ws_visual_scopes s set state='invalidated',manifest=null
+    where s.thread_id=old.thread_id and s.state='scope_saved'
+      and (s.manifest->'files') @> jsonb_build_array(jsonb_build_object('id',old.id::text));
+  if TG_OP='DELETE' then return old; end if;
+  return new;
+end $$;
+revoke all on function public.ws_invalidate_visual_scopes() from public,anon,authenticated,service_role;
+drop trigger if exists ws_visual_thread_revoke on public.ws_threads;
+create trigger ws_visual_thread_revoke after update of private,project_id on public.ws_threads
+  for each row execute function public.ws_invalidate_visual_scopes();
+drop trigger if exists ws_visual_file_revoke on public.ws_files;
+create trigger ws_visual_file_revoke after update of thread_id,name,mime,bytes,data or delete on public.ws_files
+  for each row execute function public.ws_invalidate_visual_scopes();
 
 -- Trusted server only, SECURITY DEFINER with fixed search path. No action/claim/dispatch or outbox.
 create or replace function public.ws_save_visual_scope(p_id uuid, p_principal text, p_manifest jsonb, p_expires_at timestamptz, p_fingerprint text)
@@ -72,12 +102,12 @@ begin
     end if;
   end loop;
   if p_expires_at <= clock_timestamp() then return query select null::uuid, 'expired'::text; return; end if;
-  insert into public.ws_visual_scopes(scope_id,principal,manifest,fingerprint,expires_at)
-    values(p_id,p_principal,p_manifest,p_fingerprint,p_expires_at)
+  insert into public.ws_visual_scopes(scope_id,thread_id,principal,manifest,fingerprint,expires_at)
+    values(p_id,t,p_principal,p_manifest,p_fingerprint,p_expires_at)
     on conflict on constraint ws_visual_scopes_pkey do nothing;
   if found then return query select p_id,'saved'::text; return; end if;
   select * into existing from public.ws_visual_scopes s where s.scope_id=p_id;
-  if found and existing.principal=p_principal and existing.manifest=p_manifest and existing.fingerprint=p_fingerprint
+  if found and existing.state='scope_saved' and existing.thread_id=t and existing.principal=p_principal and existing.manifest=p_manifest and existing.fingerprint=p_fingerprint
     and existing.expires_at=p_expires_at and p_expires_at > clock_timestamp() then
     return query select p_id,'already_saved'::text; return;
   end if;

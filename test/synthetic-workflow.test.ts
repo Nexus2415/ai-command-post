@@ -234,7 +234,19 @@ SELECT jsonb_build_object('tenant',:'t','tariff',:'tariff','action',:'action','a
     await q("UPDATE public.ws_control SET stopped=false;");
     await q("UPDATE public.ws_files SET data='AAAAAAAAAAA=';");
     assert.equal(await call(),"reference_changed");
-    assert.equal(await q("SELECT count(*) FROM public.ws_visual_scopes;"),"1");
+    assert.equal(await q("SELECT count(*) FROM public.ws_visual_scopes WHERE state='invalidated' AND manifest IS NULL;"),"1");
+    await q("UPDATE public.ws_files SET data='iVBORw0KGgo=';");
+    assert.equal(await call(),"conflict","a restored image cannot revive the old ticket");
+    const fresh={...vars,id:await q("SELECT gen_random_uuid();")};
+    assert.equal(await call(fresh),"saved");
+    await q("UPDATE public.ws_threads SET private=false;");
+    assert.equal(await q("SELECT count(*) FROM public.ws_visual_scopes WHERE state='invalidated' AND manifest IS NULL;"),"2");
+    await q("UPDATE public.ws_threads SET private=true;");
+    assert.equal(await call(fresh),"conflict","re-privatizing does not revive the old ticket");
+    const next={...vars,id:await q("SELECT gen_random_uuid();")};
+    assert.equal(await call(next),"saved");
+    await q("DELETE FROM public.ws_threads;");
+    assert.equal(await q("SELECT count(*) FROM public.ws_visual_scopes;"),"0");
   });
   test("actual database restart preserves terminal evidence without repeating work", async () => {
     const w = await world("arn94-reboot"), { manager: m } = w.make(), e = w.event("reboot");
