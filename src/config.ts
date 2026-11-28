@@ -18,6 +18,9 @@ export interface Config {
   pollSeconds: number;
   /** Max model turns a worker may take on one task before it must stop and report. */
   maxStepsPerTask: number;
+  /** Goal caps (src/goals.ts): most steps one [Goal] issue may ever create, and most engine runs it may use. */
+  goalMaxTasks: number;
+  goalMaxRuns: number;
   /** Allow agents to open pull requests (never merge). */
   allowPullRequests: boolean;
   ledgerPath: string;
@@ -55,6 +58,15 @@ function num(v: string | undefined, dflt: number): number {
   return n;
 }
 
+/** Cheap defaults for one goal: at most 6 steps and 10 engine runs (each run is one step attempt or one planning call). */
+export const GOAL_DEFAULTS = Object.freeze({ tasks: 6, runs: 10 });
+/** Hard ceilings in code: a variable set higher is cut back to these, so a typo can't let one goal fan out. */
+export const GOAL_CEILINGS = Object.freeze({ tasks: 25, runs: 50 });
+
+function capped(n: number, ceiling: number): number {
+  return Math.min(Math.floor(n), ceiling);
+}
+
 const AGENT_KEYS: AgentKey[] = ["claude", "chatgpt", "gemini", "perplexity"];
 
 export function isAgentKey(v: string): v is AgentKey {
@@ -88,6 +100,8 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     linearTeamKey: env["ACP_LINEAR_TEAM_KEY"] ?? "ARN",
     pollSeconds: num(env["ACP_POLL_SECONDS"], 120),
     maxStepsPerTask: num(env["ACP_MAX_STEPS"], 6),
+    goalMaxTasks: capped(num(env["ACP_GOAL_MAX_TASKS"], GOAL_DEFAULTS.tasks), GOAL_CEILINGS.tasks),
+    goalMaxRuns: capped(num(env["ACP_GOAL_MAX_RUNS"], GOAL_DEFAULTS.runs), GOAL_CEILINGS.runs),
     allowPullRequests: bool(env["ACP_ALLOW_PULL_REQUESTS"], false),
     ledgerPath: env["ACP_LEDGER_PATH"] ?? ".acp/ledger.json",
     ledgerResetMonth: opt("ACP_LEDGER_RESET"),

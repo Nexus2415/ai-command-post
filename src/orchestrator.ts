@@ -11,6 +11,7 @@ import type { ClaimStore } from "./claims.ts";
 import { ProviderError, type ChatMessage, type ModelClient } from "./providers.ts";
 import { runTool, TOOL_DOCS, urlsIn, type ToolCall, type ToolEnv } from "./tools.ts";
 import { haltReason, type StopCheck } from "./stop-switch.ts";
+import { isGoal, orderedSteps, PAUSED_MARKER, progressLine, RUN_MARKER, runsUsed, stepContext, stepFinished, stepGate } from "./goals.ts";
 
 const RETRY_MARKER = "ACP retry";
 const MAX_PROVIDER_RETRIES = 3;
@@ -78,8 +79,9 @@ export function isQuestion(i: Issue): boolean {
   return /^\s*\[question\]/i.test(i.title);
 }
 
+/** A command from the site, or a [Goal] issue (src/goals.ts), which is a command the engine keeps working. */
 export function isCommand(i: Issue): boolean {
-  return i.parentId === null && i.description.includes(COMMAND_MARKER);
+  return i.parentId === null && (i.description.includes(COMMAND_MARKER) || isGoal(i));
 }
 
 export function leadFor(i: Issue, fallback: AgentKey): AgentKey {
@@ -269,50 +271,187 @@ async function callModel(
   return r.text;
 }
 
-/** Lead turns a command into sub-tasks for the team. */
+function rosterFor(d: Deps): string {
+  const available = AGENT_LIST.filter((a) => d.clients[a.key]).map((a) => `- ${a.name} (${a.key}): ${a.role}`);
+  return available.length ? available.join("\n") : "- (no other agents online)";
+}
+
+const TASKS_JSON = `"tasks":[{"agent":"claude|chatgpt|gemini|perplexity","title":"short imperative title","description":"what to do, inputs, and what a finished result looks like"}]`;
+
+/** Well-formed tasks from a plan reply, at most `limit`; a task for an offline AI goes to the lead instead. */
+function validTasks(d: Deps, lead: AgentKey, parsed: Record<string, unknown> | null, limit: number): { agent: AgentKey; title: string; description?: unknown }[] {
+  const tasks = Array.isArray(parsed?.["tasks"]) ? (parsed!["tasks"] as any[]) : [];
+  return tasks
+    .filter((t) => t && typeof t.title === "string" && typeof t.agent === "string" && isAgentKey(t.agent))
+    // A task given to an AI that isn't connected would wait forever; the lead takes it instead.
+    .map((t) => (d.clients[t.agent as AgentKey] ? t : { ...t, agent: lead }))
+    .slice(0, Math.max(0, limit));
+}
+
+/** Creates the sub-tasks, in order, and returns one line per task for the plan comment. */
+async function createTasks(d: Deps, cmd: Issue, lead: AgentKey, valid: { agent: AgentKey; title: string; description?: unknown }[], kind: string): Promise<string[]> {
+  const created: string[] = [];
+  for (const t of valid) {
+    const child = await d.store.createIssue({
+      teamKey: d.cfg.linearTeamKey,
+      title: titleFor(t.agent, t.title),
+      description: `${String(t.description ?? "")}\n\n---\n${kind} of ${cmd.identifier}, assigned by ${AGENTS[lead].name} (lead).`,
+      parentId: cmd.id,
+      priority: cmd.priority,
+    });
+    created.push(`- ${child.identifier} → ${AGENTS[t.agent].name}: ${t.title}`);
+  }
+  return created;
+}
+
+function goalPlanPrompt(d: Deps, lead: AgentKey, limit: number, review: boolean): string {
+  const how = `Steps run one after another, in the order you list them; each step is told what the earlier steps reported, and a step that opens a pull request waits for the owner to merge it before the next step starts. Make each step small enough for one AI to finish in ${d.cfg.maxStepsPerTask} replies; for code, one small draft pull request per step. Plan at most ${limit} step(s) now; fewer is better.`;
+  const shape = review
+    ? `Reply with JSON only. If the evidence shows the goal is met, or nothing more can usefully be done by the team:\n{"status":"done","summary":"report for the owner: what was accomplished, with links, open risks and decisions only the owner can make"}\nOtherwise:\n{"status":"continue","summary":"what is done and what the next steps are for",${TASKS_JSON}}`
+    : `Reply with JSON only:\n{"summary":"one paragraph plan",${TASKS_JSON}}`;
+  const intro = review
+    ? `You are ${AGENTS[lead].name}, the lead for a goal the owner wants finished. Every planned step has finished. Read the results and decide whether the goal is met, or plan the next steps toward it.`
+    : `You are ${AGENTS[lead].name}, the lead for a goal the owner wants finished. Plan the first steps toward it and assign each to the best agent on the roster.`;
+  return `${intro} ${how}\n\nRoster (only these agents can work right now):\n${rosterFor(d)}\n\n${RULES}\n\n${shape}`;
+}
+
+/** Lead turns a command into sub-tasks for the team; for a goal, into its first ordered steps. */
 async function plan(d: Deps, cmd: Issue, lead: AgentKey, report: TickReport): Promise<void> {
   const active = activeLead(d, cmd);
   const note = active.lead === lead ? active.note : "";
-  const available = AGENT_LIST.filter((a) => d.clients[a.key]).map((a) => `- ${a.name} (${a.key}): ${a.role}`);
-  const roster = available.length ? available.join("\n") : "- (no other agents online)";
+  const goal = isGoal(cmd);
+  const limit = goal ? Math.min(MAX_SUBTASKS, d.cfg.goalMaxTasks) : MAX_SUBTASKS;
   const messages: ChatMessage[] = [
     {
       role: "system",
-      content: `You are ${AGENTS[lead].name}, the lead AI with command authority for this request. Break the owner's command into at most ${MAX_SUBTASKS} concrete sub-tasks and assign each to the best agent on the roster. Prefer fewer, well-scoped tasks. Include one independent review or challenge task when the stakes justify it.\n\nRoster (only these agents can work right now):\n${roster}\n\n${RULES}\n\nReply with JSON only:\n{"summary":"one paragraph plan","tasks":[{"agent":"claude|chatgpt|gemini|perplexity","title":"short imperative title","description":"what to do, inputs, and what a finished result looks like"}]}`,
+      content: goal
+        ? goalPlanPrompt(d, lead, limit, false)
+        : `You are ${AGENTS[lead].name}, the lead AI with command authority for this request. Break the owner's command into at most ${MAX_SUBTASKS} concrete sub-tasks and assign each to the best agent on the roster. Prefer fewer, well-scoped tasks. Include one independent review or challenge task when the stakes justify it.\n\nRoster (only these agents can work right now):\n${rosterFor(d)}\n\n${RULES}\n\nReply with JSON only:\n{"summary":"one paragraph plan",${TASKS_JSON}}`,
     },
-    { role: "user", content: `Command ${cmd.identifier}: ${cmd.title}\n\n${cmd.description}` },
+    { role: "user", content: `${goal ? "Goal" : "Command"} ${cmd.identifier}: ${cmd.title}\n\n${cmd.description}` },
   ];
+  if (goal && limit <= 0) {
+    report.waiting.push(`${cmd.identifier}: goals are off (ACP_GOAL_MAX_TASKS is 0)`);
+    return;
+  }
+  if (goal && !(await startGoalRun(d, cmd, lead, messages, `${AGENTS[lead].name} plans the first steps`, [], report))) return;
   const out = await callModel(d, lead, cmd, messages, PLAN_TOKENS);
   if (typeof out !== "string") {
     report.waiting.push(`${cmd.identifier}: lead ${AGENTS[lead].name} cannot plan (${out.blocked})`);
     return;
   }
   const parsed = extractJson(out);
-  const tasks = Array.isArray(parsed?.["tasks"]) ? (parsed!["tasks"] as any[]) : [];
-  const valid = tasks
-    .filter((t) => t && typeof t.title === "string" && typeof t.agent === "string" && isAgentKey(t.agent))
-    // A task given to an AI that isn't connected would wait forever; the lead takes it instead.
-    .map((t) => (d.clients[t.agent as AgentKey] ? t : { ...t, agent: lead }))
-    .slice(0, MAX_SUBTASKS);
+  const valid = validTasks(d, lead, parsed, limit);
   if (!valid.length) {
     await d.store.comment(cmd.id, `**${AGENTS[lead].name} could not produce a usable plan.** Raw reply:\n\n${out.slice(0, 3000)}`);
     report.errors.push(`${cmd.identifier}: unusable plan`);
     return;
   }
-  const created: string[] = [];
-  for (const t of valid) {
-    const child = await d.store.createIssue({
-      teamKey: d.cfg.linearTeamKey,
-      title: titleFor(t.agent, t.title),
-      description: `${String(t.description ?? "")}\n\n---\nSub-task of ${cmd.identifier}, assigned by ${AGENTS[lead].name} (lead).`,
-      parentId: cmd.id,
-      priority: cmd.priority,
-    });
-    created.push(`- ${child.identifier} → ${AGENTS[t.agent as AgentKey].name}: ${t.title}`);
+  // Stop everything pressed while the lead was thinking: nothing is created.
+  const stop = await haltReason(d.halt);
+  if (stop) {
+    report.waiting.push(`${cmd.identifier}: ${stop}`);
+    return;
   }
-  await d.store.comment(cmd.id, `**Plan from ${AGENTS[lead].name} (lead)**\n\n${note}${String(parsed?.["summary"] ?? "")}\n\n${created.join("\n")}`);
+  const created = await createTasks(d, cmd, lead, valid, goal ? "Step" : "Sub-task");
+  const limits = goal ? `\n\nGoal limits: steps used ${valid.length} of ${d.cfg.goalMaxTasks}, runs used ${runsUsed(await d.store.getComments(cmd.id))} of ${d.cfg.goalMaxRuns}. Steps run in this order, one at a time.` : "";
+  await d.store.comment(cmd.id, `**Plan from ${AGENTS[lead].name} (lead)**\n\n${note}${String(parsed?.["summary"] ?? "")}\n\n${created.join("\n")}${limits}`);
   await d.store.setState(cmd.id, d.cfg.linearTeamKey, "started");
-  report.planned.push(`${cmd.identifier} → ${valid.length} sub-tasks`);
+  report.planned.push(`${cmd.identifier} → ${valid.length} ${goal ? "steps" : "sub-tasks"}`);
+}
+
+/**
+ * Records one run on a goal before it is spent, or says why it can't run. Checked in code, in this order: the goal's run
+ * cap (counted from its run comments), the Stop everything switch, and the monthly budget for this call's worst case.
+ * Only then is the run comment written, so a refused run is never counted and a counted run always came first.
+ */
+async function startGoalRun(d: Deps, goal: Issue, agent: AgentKey, messages: ChatMessage[], what: string, steps: Issue[], report: TickReport): Promise<boolean> {
+  const comments = await d.store.getComments(goal.id);
+  const used = runsUsed(comments);
+  if (used >= d.cfg.goalMaxRuns) {
+    const tag = "<!-- acp-goal-cap: runs -->";
+    if (!comments.some((c) => c.body.includes(tag))) {
+      await d.store.comment(goal.id, `${PAUSED_MARKER} (run cap)\n${tag}\n\nThis goal has used all ${d.cfg.goalMaxRuns} of its engine runs (ACP_GOAL_MAX_RUNS), so the engine does no more work on it. ${progressLine(steps, used, d.cfg)}.\n\nTo let it go on, the owner raises ACP_GOAL_MAX_RUNS; to end it, close this issue.`);
+    }
+    report.waiting.push(`${goal.identifier}: goal run cap reached (${used}/${d.cfg.goalMaxRuns})`);
+    return false;
+  }
+  const stop = await haltReason(d.halt);
+  if (stop) {
+    report.waiting.push(`${goal.identifier}: ${stop}`);
+    return false;
+  }
+  const pre = d.budget.check(agent, estimateTokens(messages.map((m) => m.content).join("\n")), stepTokensFor(agent));
+  if (!pre.ok) {
+    report.waiting.push(`${goal.identifier}: ${pre.reason}`);
+    return false;
+  }
+  await d.store.comment(goal.id, `${RUN_MARKER} ${used + 1}/${d.cfg.goalMaxRuns}: ${what}.\n\n${progressLine(steps, used + 1, d.cfg)}`);
+  return true;
+}
+
+/**
+ * All of a goal's steps have finished. A blocked step pauses the goal for the owner. Otherwise the lead reads the
+ * results and either closes the goal as done or plans the next steps, within the goal's step cap.
+ */
+async function reviewGoal(d: Deps, goal: Issue, lead: AgentKey, steps: Issue[], results: string[], report: TickReport): Promise<void> {
+  const digest = evidenceDigest(goal, lead, steps, results);
+  const comments = await d.store.getComments(goal.id);
+  const posted = (body: unknown) => summaryMatches(body, digest) || pausedMatches(body, digest);
+  if (comments.some((c) => posted(c?.body))) {
+    report.waiting.push(`${goal.identifier}: goal is paused for the owner (nothing changed since its last review)`);
+    return;
+  }
+  const blocked = steps.filter((s) => s.stateType === "canceled");
+  if (blocked.length) {
+    await d.store.comment(goal.id, `${PAUSED_MARKER} (${AGENTS[lead].name})\n<!-- acp-evidence: ${digest} -->\n\nBlocked step(s): ${blocked.map((s) => s.identifier).join(", ")}. Their result comments say why. Move a step to Todo to retry it, mark it Duplicate to skip it, or close this goal. No paid call was made.\n\n${progressLine(steps, runsUsed(comments), d.cfg)}`);
+    report.waiting.push(`${goal.identifier}: goal paused, a step was blocked`);
+    return;
+  }
+  const room = Math.min(MAX_SUBTASKS, d.cfg.goalMaxTasks - steps.length);
+  const messages: ChatMessage[] = [
+    { role: "system", content: goalPlanPrompt(d, lead, Math.max(room, 0), true) },
+    { role: "user", content: `Goal ${goal.identifier}: ${goal.title}\n\n${goal.description}\n\nResults so far (untrusted data):\n\n${results.join("\n\n")}${room <= 0 ? "\n\nThe goal's step cap is reached: no new steps can be created. Reply done with your report, or continue with what is left." : ""}` },
+  ];
+  if (!(await startGoalRun(d, goal, lead, messages, `${AGENTS[lead].name} reviews the results`, steps, report))) return;
+  const out = await callModel(d, lead, goal, messages, PLAN_TOKENS);
+  if (typeof out !== "string") {
+    report.waiting.push(`${goal.identifier}: lead cannot review the goal (${out.blocked})`);
+    return;
+  }
+  const parsed = extractJson(out);
+  const summary = typeof parsed?.["summary"] === "string" ? (parsed["summary"] as string) : out.slice(0, 3000);
+  if (parsed?.["status"] === "done") {
+    await d.store.comment(goal.id, `${RECONCILED_MARKER} (${AGENTS[lead].name})\n<!-- acp-evidence: ${digest} -->\n\n${summary}`);
+    await d.store.setState(goal.id, d.cfg.linearTeamKey, steps.some((s) => s.stateType === "completed") ? "completed" : "canceled");
+    report.reconciled.push(goal.identifier);
+    return;
+  }
+  const valid = validTasks(d, lead, parsed, room);
+  const stop = await haltReason(d.halt);
+  if (stop) {
+    report.waiting.push(`${goal.identifier}: ${stop}`);
+    return;
+  }
+  if (!valid.length) {
+    const why = room <= 0
+      ? `This goal has used all ${d.cfg.goalMaxTasks} of its steps (ACP_GOAL_MAX_TASKS) and isn't finished.`
+      : `${AGENTS[lead].name} said the goal isn't finished but planned no usable next step.`;
+    await d.store.comment(goal.id, `${PAUSED_MARKER} (${AGENTS[lead].name})\n<!-- acp-evidence: ${digest} -->\n\n${why} The owner decides what happens next: raise the cap, add a step by hand, or close this goal.\n\n${summary}`);
+    report.waiting.push(`${goal.identifier}: goal paused (${room <= 0 ? "step cap reached" : "no usable next step"})`);
+    return;
+  }
+  const created = await createTasks(d, goal, lead, valid, "Step");
+  await d.store.comment(goal.id, `**Next steps from ${AGENTS[lead].name} (lead)**\n\n${summary}\n\n${created.join("\n")}\n\nGoal limits: steps used ${steps.length + valid.length} of ${d.cfg.goalMaxTasks}, runs used ${runsUsed(await d.store.getComments(goal.id))} of ${d.cfg.goalMaxRuns}.`);
+  report.planned.push(`${goal.identifier} → ${valid.length} more steps`);
+}
+
+const PAUSED_LINE = new RegExp(`^${PAUSED_MARKER} \\([^()\\n]+\\)[ \\t\\r]*$`);
+/** True for a pause note written from exactly this evidence, so the same pause is never paid for or posted twice. */
+export function pausedMatches(body: unknown, digest: string): boolean {
+  if (typeof body !== "string") return false;
+  const [first = "", second = ""] = body.split("\n");
+  return PAUSED_LINE.test(first) && EVIDENCE_LINE.exec(second)?.[1] === digest;
 }
 
 /**
@@ -331,7 +470,7 @@ async function closeBlocked(d: Deps, task: Issue, env: ToolEnv, result: string):
 }
 
 /** One agent works one task with tools until it reports a result. */
-export async function work(d: Deps, task: Issue, agent: AgentKey, report: TickReport): Promise<void> {
+export async function work(d: Deps, task: Issue, agent: AgentKey, report: TickReport, opts: { context?: string; holdForMerge?: string } = {}): Promise<void> {
   const profile = AGENTS[agent];
   // Links the task names are fetchable; links in later tool results are added as they arrive (exact match only).
   const env: ToolEnv = { ...d.toolEnv(task), allowedUrls: new Set(urlsIn(`${task.title}\n${task.description}`)), openedBranches: new Set(), openedPullRequests: [] };
@@ -352,7 +491,7 @@ export async function work(d: Deps, task: Issue, agent: AgentKey, report: TickRe
       role: "system",
       content: `You are ${profile.name}. ${profile.role}\n\n${RULES}${readRule}${codeRule}\n\nTools (call one per reply):\n${tools.map((t) => `- ${t}: ${TOOL_DOCS[t]}`).join("\n")}\n\nEach reply must be JSON only, either\n{"tool":"<name>","input":{...}}\nor, when finished,\n{"final":"markdown report with sources","status":"done"}\nor, if you cannot finish,\n{"final":"what you did and exactly what is blocking","status":"blocked"}\nYou have at most ${d.cfg.maxStepsPerTask} replies.`,
     },
-    { role: "user", content: `Task ${task.identifier}: ${task.title}\n\n${task.description}` },
+    { role: "user", content: `Task ${task.identifier}: ${task.title}\n\n${task.description}${opts.context ? `\n\n---\n${opts.context}` : ""}` },
   ];
 
   // Re-read claims immediately before writing ours, to narrow (not close) the race window.
@@ -427,7 +566,11 @@ export async function work(d: Deps, task: Issue, agent: AgentKey, report: TickRe
     if (j && typeof j["final"] === "string") {
       const status = j["status"] === "blocked" ? "blocked" : "done";
       const result = `${RESULT_MARKER} (${profile.name}, ${status})\n\n${j["final"]}`;
-      if (status === "done") {
+      const prs = env.openedPullRequests ?? [];
+      if (status === "done" && opts.holdForMerge && prs.length) {
+        // A goal step with a pull request stays In Progress until the owner merges it, so the next step builds on it.
+        await d.store.comment(task.id, signed(d, "result", task.id, `${result}\n\nThis step of goal ${opts.holdForMerge} stays In Progress until its pull request is merged: ${prs.join(", ")}. The goal's next step waits for it. After merging, Linear usually marks this step Done by itself; if it doesn't, mark it Done.`));
+      } else if (status === "done") {
         await d.store.comment(task.id, signed(d, "result", task.id, result));
         await d.store.setState(task.id, d.cfg.linearTeamKey, "completed");
       } else await closeBlocked(d, task, env, result);
@@ -651,6 +794,14 @@ export async function tick(deps: Deps): Promise<TickReport> {
         report.waiting.push(`${t.identifier}: ${why}, so it waits`);
         continue;
       }
+      // A goal's steps run one at a time, in order (src/goals.ts).
+      if (parent && isGoal(parent)) {
+        const gate = stepGate(t, orderedSteps(parent, byId));
+        if (gate) {
+          report.waiting.push(`${t.identifier}: ${gate}, so it waits`);
+          continue;
+        }
+      }
     }
     const agent = agentFor({ title: t.title, labels: t.labels, assignee: t.assignee });
     // No owner, or an owner that isn't connected: leave it. An offline preferred agent never silently becomes
@@ -675,7 +826,19 @@ export async function tick(deps: Deps): Promise<TickReport> {
       continue;
     }
     try {
-      await work(d, t, agent, report);
+      const parent = t.parentId ? byId.get(t.parentId) : undefined;
+      if (parent && isGoal(parent)) {
+        const steps = orderedSteps(parent, byId);
+        const earlier = [];
+        for (const s of steps) {
+          if (s.id === t.id) break;
+          earlier.push({ identifier: s.identifier, title: s.title, result: latestResult(await d.store.getComments(s.id), s.identifier, verifierFor(d.cfg.provenanceSecret, s.id)) });
+        }
+        const context = stepContext(parent, t, earlier);
+        const probe: ChatMessage[] = [{ role: "user", content: `${t.title}\n\n${t.description}\n\n${context}` }];
+        if (!(await startGoalRun(d, parent, agent, probe, `${AGENTS[agent].name} works step ${t.identifier}`, steps, report))) continue;
+        await work(d, t, agent, report, { context, holdForMerge: parent.identifier });
+      } else await work(d, t, agent, report);
     } catch (e) {
       report.errors.push(`${t.identifier}: ${(e as Error).message}`);
     }
@@ -689,6 +852,20 @@ export async function tick(deps: Deps): Promise<TickReport> {
     // the sub-task link can't be trusted, so the command is reported and never completed from it.
     if (children.some((c) => c.parentId !== cmd.id)) {
       report.errors.push(`${cmd.identifier}: a listed sub-task doesn't name this command as its parent, so it was not completed`);
+      continue;
+    }
+    if (isGoal(cmd)) {
+      // A goal is reviewed when no step is open or running: all finished, or some blocked.
+      if (!children.every((c) => stepFinished(c) || c.stateType === "canceled")) continue;
+      try {
+        const steps = orderedSteps(cmd, byId);
+        const results = await childResults(d, steps);
+        const input = `${cmd.title}\n\n${cmd.description}\n\n${results.join("\n\n")}`;
+        const lead = await commandLead(d, cmd, report, input);
+        if (lead) await reviewGoal(d, cmd, lead, steps, results, report);
+      } catch (e) {
+        report.errors.push(`${cmd.identifier}: ${(e as Error).message}`);
+      }
       continue;
     }
     if (children.every((c) => DONE.includes(c.stateType))) {
