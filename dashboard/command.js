@@ -364,17 +364,17 @@
     const f = $("aFilter");
     AGENTS.forEach(a => { const o = el("option", null, a.name); o.value = a.key; f.appendChild(o); });
     f.onchange = renderActivity;
+    // Hidden tabs don't refresh (the minute timer skips them) and pause the avatar animation; coming back checks
+    // again at once, so a stale "Working now" is never left on screen.
+    document.addEventListener("visibilitychange", () => {
+      document.documentElement.toggleAttribute("data-hidden", document.hidden);
+      if (!document.hidden && !$("refresh").disabled) load();
+    });
     $("refresh").onclick = load;
     window.addEventListener("resize", () => requestAnimationFrame(drawLinks));
     tick(); setInterval(tick, 15000);
     render(); load();
     setInterval(() => { if (!document.hidden) load(); }, 60000);
-    // Hidden tabs don't refresh (the line above) and pause the avatar animation; coming back checks again at once,
-    // so a stale "Working now" is never left on screen.
-    document.addEventListener("visibilitychange", () => {
-      document.documentElement.toggleAttribute("data-hidden", document.hidden);
-      if (!document.hidden && !$("refresh").disabled) load();
-    });
   }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start); else start();
 })(typeof window !== "undefined" ? window : globalThis);
