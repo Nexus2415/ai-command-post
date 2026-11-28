@@ -132,10 +132,18 @@
   }
   function pill(status) { const p = el("span", "pill s-" + status); p.append(el("span", "dot"), document.createTextNode(PILL[status])); return p; }
   function taskLink(it, cls) {
-    const href = safeUrl(it.url);
-    const a = el(href ? "a" : "span", cls, it.title || it.id);
-    if (href) { a.href = href; a.target = "_blank"; a.rel = "noopener noreferrer"; }
-    return a;
+    const wrap = el("div", "ax-task-inline");
+    const a = el("button", "ax-task-toggle" + (cls ? " " + cls : ""), it.title || it.id);
+    a.type = "button"; a.setAttribute("aria-expanded", "false");
+    const detail = el("div", "ax-task-detail"); detail.hidden = true;
+    a.addEventListener("click", () => {
+      detail.hidden = !detail.hidden;
+      a.setAttribute("aria-expanded", String(!detail.hidden));
+      if (!detail.hidden) window.ACPWork.showTask(detail, it);
+      requestAnimationFrame(drawLinks);
+    });
+    wrap.append(a, detail);
+    return wrap;
   }
   function ring(node, pct, label) {
     node.replaceChildren();
@@ -148,7 +156,7 @@
 
   function renderStatus() {
     const t = totals(overview);
-    ring($("gRing"), overview ? (t.counted ? ((t.active + t.review) / t.counted) * 100 : 0) : 0, "Share of open work being worked now");
+    ring($("gRing"), overview ? (t.counted ? ((t.active + t.review) / t.counted) * 100 : 0) : 0, "Share of tasks marked in progress or in review");
     $("gAgents").textContent = overview ? aisWithOpenTasks(overview) : "—";
     const rows = $("gRows"); rows.replaceChildren();
     [["running", "In progress", t.active], ["review", "In review", t.review], ["queued", "Queued", t.queued], ["blocked", "Blocked", t.blocked], ["complete", "Complete", t.done]]
@@ -302,7 +310,10 @@
   function render() { renderStatus(); renderTree(); renderQueue(); renderActivity(); renderPerf(); }
 
   async function load() {
+    if ($("refresh").disabled) return;
     $("refresh").disabled = true;
+    $("orb").dataset.reading = "true";
+    $("orbActivity").textContent = "Checking task updates…";
     try {
       overview = await post({ action: "overview" });
       $("msg").hidden = !overview.hasNextPage;
@@ -314,7 +325,11 @@
       $("msg").textContent = e.message + (overview ? " Showing the last data received." : "");
       $("fresh").textContent = overview ? "Stale · " + fmtTime(overview.fetchedAt, true) : "Not loaded";
       $("fresh").className = "fresh warn";
-    } finally { $("refresh").disabled = false; }
+    } finally {
+      $("refresh").disabled = false;
+      delete $("orb").dataset.reading;
+      $("orbActivity").textContent = "Execution activity unverified";
+    }
     render();
   }
 
@@ -337,7 +352,7 @@
     window.addEventListener("resize", () => requestAnimationFrame(drawLinks));
     tick(); setInterval(tick, 15000);
     render(); load();
-    setInterval(() => { if (!document.hidden) load(); }, 60000);
+    setInterval(() => { if (!document.hidden && !document.querySelector(".ax-task-inline button[aria-expanded=true]")) load(); }, 60000);
   }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start); else start();
 })(typeof window !== "undefined" ? window : globalThis);

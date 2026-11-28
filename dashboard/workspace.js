@@ -632,7 +632,7 @@
   function thinkingRow(label) {
     const row = el("div", "m assistant thinking");
     row.setAttribute("role", "status");
-    row.append(el("span", "dots"), el("span", null, label));
+    row.append(window.ACPWork?.workerAvatar ? window.ACPWork.workerAvatar(true) : el("span", "dots"), el("span", null, label));
     return row;
   }
   function showPending(text, names) {

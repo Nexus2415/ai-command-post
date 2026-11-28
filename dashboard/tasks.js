@@ -42,6 +42,7 @@
       $("tFresh").textContent = "From Linear" + (isFinite(when) ? ", " + new Date(when).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "") +
         (overview.hasNextPage ? ". Only the first page of tasks is shown." : ".");
       show();
+      W.watchActivity(overview);
     } catch (e) {
       $("tList").replaceChildren(W.el("li", "ax-empty", "Tasks couldn't be loaded."));
       const m = $("tMsg"); m.hidden = false; m.className = "ax-msg err"; m.textContent = e.message;
