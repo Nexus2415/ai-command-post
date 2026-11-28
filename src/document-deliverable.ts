@@ -39,7 +39,7 @@ export function renderDocx(input:unknown):{filename:string;mime:typeof DOCX_MIME
   ]);
   return {filename:x["filename"],mime:DOCX_MIME,data,sha256:digest(data)};
 }
-export type DocumentGrant = {artifactId:string;taskId:string;projectId:string;threadId:string;principal:string;expiresAt:number;syntheticOnly:true;maxBudgetMicros:0};
+export type DocumentGrant = {artifactId:string;taskId:string;projectId:string;threadId:string;principal:string;runId:string;expiresAt:number;syntheticOnly:true;maxBudgetMicros:0};
 export type DocumentReceipt = {artifactId:string;taskId:string;projectId:string;threadId:string;filename:string;mime:typeof DOCX_MIME;bytes:number;sha256:string};
 export type DocumentRow = {receipt:DocumentReceipt;data:Buffer};
 export interface DocumentPorts {
@@ -58,7 +58,7 @@ export interface DocumentCapability {
   retrieve(principal:string):Promise<DocumentRow>;
   verify(receipt:DocumentReceipt):Promise<boolean>;
 }
-const keys=(g:DocumentGrant)=>JSON.stringify([g.artifactId,g.taskId,g.projectId,g.threadId,g.principal,g.expiresAt,g.syntheticOnly,g.maxBudgetMicros]);
+const keys=(g:DocumentGrant)=>JSON.stringify([g.artifactId,g.taskId,g.projectId,g.threadId,g.principal,g.runId,g.expiresAt,g.syntheticOnly,g.maxBudgetMicros]);
 function match(a:DocumentReceipt,b:DocumentReceipt){
   return a.artifactId===b.artifactId&&a.taskId===b.taskId&&a.projectId===b.projectId&&a.threadId===b.threadId&&a.filename===b.filename&&a.mime===b.mime&&a.bytes===b.bytes&&a.sha256===b.sha256;
 }
@@ -66,7 +66,7 @@ export function documentCapability(taskId:string,p:DocumentPorts):DocumentCapabi
   async function current(){
     if(p.mode!=="synthetic"||!uuid(taskId)||await p.stop()!=="off")throw new Error("Document scope unavailable");
     const g=await p.grant(taskId),now=p.now();
-    if(!g||g.taskId!==taskId||!uuid(g.artifactId)||!uuid(g.projectId)||!uuid(g.threadId)||!text(g.principal,200)||g.syntheticOnly!==true||g.maxBudgetMicros!==0||!Number.isSafeInteger(now)||!Number.isSafeInteger(g.expiresAt)||g.expiresAt<=now||g.expiresAt-now>86400000||await p.privateThread(g.projectId,g.threadId,g.principal)!==true||await p.stop()!=="off")throw new Error("Document scope unavailable");
+    if(!g||g.taskId!==taskId||!uuid(g.artifactId)||!uuid(g.projectId)||!uuid(g.threadId)||!uuid(g.runId)||!text(g.principal,200)||g.syntheticOnly!==true||g.maxBudgetMicros!==0||!Number.isSafeInteger(now)||!Number.isSafeInteger(g.expiresAt)||g.expiresAt<=now||g.expiresAt-now>86400000||await p.privateThread(g.projectId,g.threadId,g.principal)!==true||await p.stop()!=="off")throw new Error("Document scope unavailable");
     return structuredClone(g);
   }
   const capability: DocumentCapability = {taskId,async create(input:unknown){

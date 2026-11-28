@@ -17,7 +17,7 @@ const spec={filename:"summary.docx",title:"Synthetic & report",sections:[{headin
 function fixture(){
   const root=mkdtempSync(join(tmpdir(),"arn169-"));
   let stopped:"off"|"on"|"error"="off",now=1000,priv=true;
-  const grant:DocumentGrant={artifactId:id(1),taskId:id(2),projectId:id(3),threadId:id(4),principal:"owner-fixture",expiresAt:10000,syntheticOnly:true,maxBudgetMicros:0};
+  const grant:DocumentGrant={artifactId:id(1),taskId:id(2),projectId:id(3),threadId:id(4),principal:"owner-fixture",runId:id(5),expiresAt:10000,syntheticOnly:true,maxBudgetMicros:0};
   const p:DocumentPorts={mode:"synthetic",now:()=>now,stop:async()=>stopped,grant:async t=>t===grant.taskId?structuredClone(grant):null,privateThread:async(a,b,c)=>priv&&a===grant.projectId&&b===grant.threadId&&c===grant.principal,
     async put(g,row){
       if(stopped!=="off"||!priv||now>=g.expiresAt||JSON.stringify(g)!==JSON.stringify(grant))throw Error("scope");

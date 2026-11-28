@@ -10,6 +10,8 @@ import { createAuthenticatedIntake, type IntakeCommand, type IntakeEvent } from 
 import { BROKER_SIGNATURES, MANAGER_EVENT_SIGNATURE, createManagerEventBrokerAdapter, type ManagerBrokerFunction, type RpcArgs } from "../src/broker-adapter.ts";
 import { createManagerPersistencePorts, type ManagerPersistenceOperation } from "../src/manager-persistence.ts";
 import { Manager, type Job, type Ports, type WorkerResult } from "../src/manager.ts";
+import { documentCapability, type DocumentGrant, type DocumentPorts } from "../src/document-deliverable.ts";
+import { documentSqlStorage } from "../src/document-storage.ts";
 
 const enabled = process.env["ARN94_DISPOSABLE"] === "1";
 const bin = process.env["ARN94_PGBIN"] ?? "/usr/lib/postgresql/16/bin";
@@ -44,7 +46,7 @@ test("disposable harness refuses inherited libpq hostaddr before starting a serv
 let dir = "", source = "";
 let pgEnv: NodeJS.ProcessEnv = {};
 function pg(sql: string, vars: Record<string, string> = {}, db = "arn94"): Promise<string> {
-  assert.ok(dir && pgEnv["PGHOST"] === dir && ["arn94", "postgres"].includes(db));
+  assert.ok(dir && pgEnv["PGHOST"] === dir && ["arn94", "postgres","arn169_workspace"].includes(db));
   return new Promise((done, fail) => {
     const p = spawn(join(bin, "psql"), ["-X", "-qAt", "-v", "ON_ERROR_STOP=1", "-d", db,
       ...Object.entries(vars).flatMap(([k, v]) => ["-v", `${k}=${v}`])], { env: pgEnv, stdio: ["pipe", "pipe", "pipe"] });
@@ -95,6 +97,9 @@ describe("ARN-94 native synthetic workflow", { skip: !enabled }, () => {
       await file(`drizzle/migrations/${tag}.sql`);
     }
     await file("tests/sql/arn-88-fixtures.sql");
+    await pg("CREATE DATABASE arn169_workspace;",{},"postgres");
+    await pg("\\i "+resolve("db/workspace.sql"),{},"arn169_workspace");
+    await pg("\\i "+resolve("db/document-artifacts.sql"),{},"arn169_workspace");
   });
   after(() => {
     if (!dir) return;
@@ -182,6 +187,41 @@ SELECT jsonb_build_object('tenant',:'t','tariff',:'tariff','action',:'action','a
         if (v.killed !== undefined) kill = v.killed;
       } };
   }
+
+
+  test("ARN-169 actual private DOCX storage survives database restart; exact replay and scope revocation",async()=>{
+    const q=(sql:string,vars:Record<string,string>={})=>pg(sql,vars,"arn169_workspace");
+    const ids=JSON.parse(await q("SELECT jsonb_agg(gen_random_uuid()) FROM generate_series(1,6);")) as string[];
+    const g:DocumentGrant={artifactId:ids[0]!,taskId:ids[1]!,projectId:ids[2]!,threadId:ids[3]!,principal:"synthetic-owner",runId:ids[4]!,expiresAt:Date.now()+600000,syntheticOnly:true,maxBudgetMicros:0};
+    const vars={p:g.projectId,t:g.threadId,task:g.taskId,run:g.runId};
+    await q("INSERT INTO public.ws_projects(id,name) VALUES(:'p'::uuid,'Synthetic'); INSERT INTO public.ws_threads(id,project_id,title,model,private) VALUES(:'t'::uuid,:'p'::uuid,'Synthetic','chatgpt',true); INSERT INTO public.acp_claims(issue_id,executor,run_id) VALUES(:'task','acp:chatgpt',:'run');",vars);
+    const rpc=async(fn:"ws_document_put"|"ws_document_get",a:Record<string,string>)=>{
+      const names=Object.keys(a);const values=Object.fromEntries(names.map((k,i)=>["v"+i,a[k]!]));
+      const params=names.map((k,i)=>k+" => :'v"+i+"'::"+(["p_artifact","p_task","p_project","p_thread","p_run"].includes(k)?"uuid":k==="p_expiry"?"timestamptz":"text")).join(",");
+      return JSON.parse(await q("SELECT public."+fn+"("+params+");",values));
+    };
+    const p:DocumentPorts={mode:"synthetic",now:Date.now,stop:async()=>await q("SELECT stopped FROM public.ws_control WHERE id=1;")==="f"?"off":"on",grant:async id=>id===g.taskId?structuredClone(g):null,privateThread:async(a,b,c)=>c===g.principal&&await q("SELECT count(*) FROM public.ws_threads WHERE project_id=:'p'::uuid AND id=:'t'::uuid AND private;",{p:a,t:b})==="1",...documentSqlStorage(rpc)};
+    const spec={filename:"native.docx",title:"Native synthetic report",sections:[{heading:"Summary",paragraphs:["Verified database artifact."]}]};
+    const capability=documentCapability(g.taskId,p);
+    const [a,b]=await Promise.all([capability.create(spec),capability.create(spec)]);
+    assert.deepEqual(a,b);assert.equal(await q("SELECT count(*) FROM public.ws_document_artifacts;"),"1");
+    await assert.rejects(capability.create({...spec,title:"Changed"}));
+    await assert.rejects(documentCapability(g.taskId,{...p,grant:async()=>({...g,runId:ids[5]!})}).create(spec));
+    await assert.rejects(q("SET ROLE service_role; SELECT * FROM public.ws_document_artifacts;"),/permission denied/);
+    execFileSync(join(bin,"pg_ctl"),["-D",join(dir,"data"),"-m","fast","-w","restart"],{stdio:"ignore"});
+    const recovered=await documentCapability(g.taskId,p).retrieve(g.principal);
+    assert.equal(hash(recovered.data),a.sha256);assert.equal(recovered.receipt.filename,"native.docx");
+    assert.equal(execFileSync("python3",["-c","import sys,io,zipfile,xml.etree.ElementTree as E; z=zipfile.ZipFile(io.BytesIO(sys.stdin.buffer.read())); assert z.testzip() is None; E.fromstring(z.read('word/document.xml')); print('valid')"],{input:recovered.data,encoding:"utf8"}).trim(),"valid");
+    await assert.rejects(capability.retrieve("wrong-principal"));
+    await q("UPDATE public.ws_control SET stopped=true;");
+    await assert.rejects(capability.retrieve(g.principal));await q("UPDATE public.ws_control SET stopped=false;");
+    await q("UPDATE public.ws_threads SET private=false WHERE id=:'t'::uuid;",vars);
+    assert.equal(await q("SELECT count(*) FROM public.ws_document_artifacts WHERE revoked AND data IS NULL;"),"1");
+    await q("UPDATE public.ws_threads SET private=true WHERE id=:'t'::uuid;",vars);
+    await assert.rejects(capability.retrieve(g.principal));await assert.rejects(capability.create(spec));
+    await q("DELETE FROM public.ws_threads WHERE id=:'t'::uuid;",vars);
+    assert.equal(await q("SELECT count(*) FROM public.ws_document_artifacts;"),"0");
+  });
 
   test("signed intake -> durable receipt -> native claim -> mock worker -> distinct verifier -> $0 terminal -> next eligible", async () => {
     const w = await world("arn94-happy"), { manager: m } = w.make(), e = w.event("happy");
