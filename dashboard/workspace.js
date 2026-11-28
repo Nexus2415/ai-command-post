@@ -9,6 +9,7 @@
   // Images and PDFs uploaded to the open thread for the next message (ids from upload_file), up to 3.
   let uploads = [];
   let buildMode = false, buildEpoch = 0, buildModeEpoch = 0, buildTicket = null;
+  let rec = null; // Speech session identity; initialized before any thread/stop callback.
   // While an answer is on its way: the label of the working indicator under your message (null when idle), and the
   // newest message of yours the server has saved, so a failed send knows whether your text still needs restoring.
   let working = null, lastUserSaved = "";
@@ -651,6 +652,7 @@
   // Build preview is a distinct composer mode; it never falls through to ordinary chat.
   function invalidateBuild() { buildEpoch++; buildTicket = null; $("cBuildSave").disabled = true; $("cBuildResult").textContent = ""; }
   function resetBuild(leavingThread = false) {
+    abortRecognition();
     const wasBuild=buildMode;
     buildMode = false; buildModeEpoch++; invalidateBuild();
     if (wasBuild) { $("cText").value = ""; files = []; uploads = []; showFiles(); }
@@ -661,6 +663,7 @@
   $("cBuild").addEventListener("click", guard(async () => {
     if (buildMode) { resetBuild(); showMode(); syncMic(); return; }
     if (!threadId || threadPrivate !== true) throw new Error("Make this thread private before preparing a visual build.");
+    abortRecognition(); // Never leave a hidden microphone session active in private Build mode.
     buildMode = true; buildModeEpoch++; invalidateBuild();
     $("cBuildPanel").hidden = false; $("cBuild").setAttribute("aria-expanded", "true");
     $("cSend").setAttribute("aria-label", "Preview build (does not start)");
@@ -900,7 +903,7 @@
   // and disables sending; the server refuses all AI work until it is turned back on.
   function setHalted(s) {
     halted = Boolean(s.stopped);
-    if (halted) invalidateBuild();
+    if (halted) { abortRecognition(); invalidateBuild(); }
     // Runs before the stop request is sent, so only the page's earlier requests are cancelled.
     if (halted && s.local) for (const c of [...inflight]) c.abort();
     $("cSend").disabled = halted;
@@ -948,7 +951,6 @@
   // service, Safari to Apple's); you still check it and press send. Listen: an answer is read aloud by the device's
   // own voice. Both are free, nothing is recorded or stored here, and neither sends anything to the AIs by itself.
   const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  let rec = null;
   // The microphone takes the send button's place while the box is empty, as in other chat apps.
   function syncMic() {
     const mic = $("cMic");
@@ -957,22 +959,37 @@
     mic.hidden = !(empty || rec);
     $("cSend").hidden = !mic.hidden;
   }
+  function abortRecognition() {
+    const session=rec;
+    if (!session) return;
+    rec=null; // Fence callbacks BEFORE asking the browser to cancel its session.
+    session.onresult=null; session.onerror=null; session.onend=null;
+    try { session.abort(); } catch { try { session.stop(); } catch { /* Browser already ended it. */ } }
+    $("cMic").classList.remove("on"); $("cMic").setAttribute("aria-pressed", "false");
+    if ($("pageMsg").textContent.startsWith("Listening")) say("");
+    syncMic();
+  }
   $("cMic").addEventListener("click", () => {
+    if (buildMode || halted || !threadId || !Recognition) return;
     if (rec) { rec.stop(); return; }
     const before = $("cText").value.trim() ? $("cText").value.replace(/\s*$/, " ") : "";
-    rec = new Recognition();
-    rec.lang = navigator.language || "en-US"; rec.interimResults = true; rec.continuous = true;
-    rec.onresult = (e) => { let t = ""; for (const r of e.results) t += r[0].transcript; $("cText").value = before + t.trimStart(); grow(); };
-    rec.onerror = (e) => {
+    const scope=attachmentScope(), session=new Recognition();
+    rec=session;
+    const current=()=>rec===session && scope.threadId===threadId && scope.projectId===projectId && scope.epoch===buildModeEpoch && !buildMode && !halted;
+    session.lang = navigator.language || "en-US"; session.interimResults = true; session.continuous = true;
+    session.onresult = (e) => { if (!current()) return; let t = ""; for (const r of e.results) t += r[0].transcript; $("cText").value = before + t.trimStart(); grow(); };
+    session.onerror = (e) => {
+      if (!current()) return;
       if (e.error === "not-allowed" || e.error === "service-not-allowed") say("The microphone is blocked. Allow it for this site in the browser's settings, then tap the microphone again.", "err");
       else if (e.error !== "aborted" && e.error !== "no-speech") say("Talking didn't work this time (" + e.error + "). Try again, or type.", "err");
     };
-    rec.onend = () => {
+    session.onend = () => {
+      if (!current()) return;
       rec = null; $("cMic").classList.remove("on"); $("cMic").setAttribute("aria-pressed", "false");
       if ($("pageMsg").textContent.startsWith("Listening")) say("");
       syncMic(); $("cText").focus();
     };
-    try { rec.start(); } catch (e) { rec = null; say("Talking isn't available right now. Type instead.", "err"); return; }
+    try { session.start(); } catch (e) { if (rec===session) rec = null; say("Talking isn't available right now. Type instead.", "err"); return; }
     $("cMic").classList.add("on"); $("cMic").setAttribute("aria-pressed", "true");
     say("Listening… tap the microphone again when you're done. Check the text, then send.", "warn");
   });

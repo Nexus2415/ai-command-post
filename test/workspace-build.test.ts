@@ -114,3 +114,33 @@ test("private Build composer clears draft on exit and binds async uploads to ori
   assert.match(js,/mime, data \}\);\s*assertAttachmentScope\(scope\);\s*uploads\.push\(saved\)/);
   assert.match(js,/if\(scope\.buildMode && !\/\^image/);
 });
+
+
+test("Build mode aborts ordinary speech recognition and stale callbacks cannot repopulate another draft", async()=>{
+  const {runInNewContext}=await import("node:vm");
+  const js=readFileSync(new URL("../dashboard/workspace.js",import.meta.url),"utf8");
+  assert.match(js,/abortRecognition\(\);[^\n]*\n\s*buildMode = true/);
+  assert.match(js,/function resetBuild[^\n]*\{\s*abortRecognition\(\)/);
+  assert.match(js,/if \(halted\) \{ abortRecognition\(\); invalidateBuild\(\); \}/);
+  const start=js.indexOf("  const Recognition = window.SpeechRecognition");
+  const end=js.indexOf("  // Read aloud:",start);
+  assert.ok(start>=0 && end>start);
+  const fake=runInNewContext(
+    "let rec=null, buildMode=false, halted=false, threadId='a',projectId='p',buildModeEpoch=1,files=[],uploads=[];"+
+    "let sessions=[], handlers={}, nodes={}; const $=id=>nodes[id]??=( {value:'',textContent:'',hidden:false,classList:{add(){},remove(){}},setAttribute(){},focus(){},addEventListener(e,f){handlers[id]=f}} );"+
+    "const say=t=>{$('pageMsg').textContent=t},grow=()=>{},attachmentScope=()=>({threadId,projectId,epoch:buildModeEpoch});"+
+    "const navigator={language:'en-US'},window={SpeechRecognition:class{constructor(){sessions.push(this)}start(){}stop(){}abort(){this.aborted=true}}};"+
+    js.slice(start,end)+
+    "({sessions,nodes,click:()=>handlers.cMic(),result:(f,t)=>f({results:[[{transcript:t}]]}),abort:abortRecognition,enter:()=>{abortRecognition();buildMode=true;buildModeEpoch++;$('cText').value='private draft'},exit:()=>{abortRecognition();buildMode=false;buildModeEpoch++;$('cText').value=''},switchThread:()=>{abortRecognition();threadId='b';buildModeEpoch++;$('cText').value='new thread'},active:()=>rec})"
+  );
+  fake.click();
+  const first=fake.sessions[0],late=first.onresult,lateEnd=first.onend;
+  fake.result(late,"ordinary");assert.equal(fake.nodes.cText.value,"ordinary");
+  fake.enter();assert.equal(first.aborted,true);
+  fake.result(late,"must not leak");lateEnd();assert.equal(fake.nodes.cText.value,"private draft");
+  fake.click();assert.equal(fake.sessions.length,1);
+  fake.exit();fake.click();const second=fake.sessions[1];
+  lateEnd();assert.equal(fake.active(),second);
+  const stale=second.onresult;fake.switchThread();assert.equal(second.aborted,true);
+  fake.result(stale,"must not repopulate");assert.equal(fake.nodes.cText.value,"new thread");
+});
