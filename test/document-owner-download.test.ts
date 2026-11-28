@@ -15,6 +15,7 @@ test("candidate named-owner download returns only exact scoped verified bytes, n
     return {ok:true,receipt,data:file.data.toString("base64")};
   },now);
   assert.equal(r.status,200);assert.deepEqual(r.body,file.data);assert.equal(r.headers["Cache-Control"],"no-store");
+  assert.ok("Content-Disposition" in r.headers);
   assert.equal(r.headers["Content-Disposition"],'attachment; filename="verified.docx"');
 });
 test("candidate owner download rejects anonymous, password-only, other owner, cross-site, expired and forged scopes before any read",async()=>{
